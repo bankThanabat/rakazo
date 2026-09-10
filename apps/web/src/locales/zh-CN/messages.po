@@ -3735,3 +3735,103 @@ msgstr "正在打开聊天…"
 
 msgid "Try again"
 msgstr "重试"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "智能体"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "渠道"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "连接渠道"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "无法加载会话"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "无法保存渠道设置"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "无法更新会话"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "客户"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "客户渠道"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "客户服务指令"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "暂无客户对话"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "重新连接"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "回复失败"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "回复客户"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "恢复机器人"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "设置指南"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "员工"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "接管"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "Webhook 网址"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "应用"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "无法加载渠道"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "智能体不可用"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "尚未连接渠道"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "创建智能体以连接渠道"

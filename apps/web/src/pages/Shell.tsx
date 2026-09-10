@@ -76,6 +76,10 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@rakazo/ui-web";
 import {
   ArrowDown,
@@ -90,6 +94,7 @@ import {
   LogOut,
   Maximize2,
   Menu,
+  MessagesSquare,
   Mic,
   Monitor,
   MoreHorizontal,
@@ -104,6 +109,7 @@ import {
   Smile,
   Square,
   Trash2,
+  UsersRound,
   X,
 } from "lucide-react";
 import {
@@ -192,6 +198,7 @@ import {
 import { speaker } from "../lib/tts";
 import { ActivityList } from "./ActivityList";
 import type { ContextMenuPosition } from "./BotContextMenu";
+import { CustomerSidebar, CustomerThread, useCustomerInbox } from "./CustomerInbox";
 import { CreateGroupForm, GroupSettings, memberName } from "./GroupPanel";
 import { HostComputerPrompt } from "./HostComputerPrompt";
 import {
@@ -341,6 +348,7 @@ export function ShellPage() {
     setBotsSidebarCollapsed(readBotsSidebarCollapsed(userId));
   }, [userId]);
   const [query, setQuery] = useState("");
+  const [inboxTab, setInboxTab] = useState<"staff" | "customer">("staff");
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [snapshot, setSnapshot] = useState<ThreadSnapshot | null>(null);
@@ -462,6 +470,8 @@ export function ShellPage() {
   }, []);
   const [activityMode, setActivityMode] = useState(readActivityMode);
   const toggleActivityMode = useCallback(() => {
+    setInboxTab("staff");
+    setQuery("");
     setActivityMode((on) => {
       const next = !on;
       writeActivityMode(next);
@@ -504,6 +514,7 @@ export function ShellPage() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [initialBotsLoaded, setInitialBotsLoaded] = useState(false);
   const [bootstrapMe, setBootstrapMe] = useState<Me | null>();
+  const customerInbox = useCustomerInbox(inboxTab === "customer", bootstrapMe?.spaceId);
   const [routineDraft, setRoutineDraft] = useState<RoutineDraftState>(emptyRoutineDraft());
   const [routineWebhookSecret, setRoutineWebhookSecret] = useState<string | null>(null);
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
@@ -1452,7 +1463,7 @@ export function ShellPage() {
     [userId],
   );
   const spaceQuery = query.trim();
-  const showSpaceSearch = spaceQuery.length > 0;
+  const showSpaceSearch = inboxTab === "staff" && spaceQuery.length > 0;
 
   useEffect(() => {
     if (!showSpaceSearch) {
@@ -2459,11 +2470,19 @@ export function ShellPage() {
           className="absolute inset-y-0 end-0 start-[min(calc(100%-48px),316px)] z-30 bg-overlay md:hidden"
         />
       ) : null}
-      <aside
+      <Tabs
+        render={<aside />}
+        value={inboxTab}
+        onValueChange={(value) => {
+          if (value !== "staff" && value !== "customer") return;
+          setInboxTab(value);
+          setQuery("");
+          setPanel(null);
+        }}
         data-testid="bots-sidebar"
         data-collapsed={botsSidebarCollapsed ? "true" : "false"}
         inert={botsSidebarCollapsed && !mobileSidebarOpen ? true : undefined}
-        className={`absolute inset-y-0 start-0 z-40 flex w-[calc(100%-48px)] max-w-[316px] shrink-0 flex-col border-e border-sidebar-border bg-sidebar transition-[transform,width,opacity] md:static md:z-auto md:translate-x-0 ${
+        className={`absolute inset-y-0 start-0 z-40 flex w-[calc(100%-48px)] max-w-[316px] shrink-0 flex-col gap-0 border-e border-sidebar-border bg-sidebar transition-[transform,width,opacity] md:static md:z-auto md:translate-x-0 ${
           mobileSidebarOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full"
         } ${
           botsSidebarCollapsed
@@ -2504,7 +2523,16 @@ export function ShellPage() {
             >
               <PanelLeftClose size={15} strokeWidth={1.8} aria-hidden="true" />
             </button>
-            <Popover open={createMenuOpen} onOpenChange={setCreateMenuOpen}>
+            <Popover
+              open={createMenuOpen}
+              onOpenChange={(open) => {
+                setCreateMenuOpen(open);
+                if (open) {
+                  setInboxTab("staff");
+                  setQuery("");
+                }
+              }}
+            >
               <PopoverTrigger
                 className="app-no-drag text-[21px] text-muted-foreground/70 hover:text-foreground/75"
                 title={t`Create`}
@@ -2556,6 +2584,16 @@ export function ShellPage() {
             </Popover>
           </div>
         </div>
+        <TabsList className="mx-2.5 mb-3 w-auto shrink-0 rounded-xl group-data-horizontal/tabs:h-10">
+          <TabsTrigger value="staff" className="rounded-lg">
+            <UsersRound strokeWidth={1.8} aria-hidden="true" />
+            <Trans>Staff</Trans>
+          </TabsTrigger>
+          <TabsTrigger value="customer" className="rounded-lg">
+            <MessagesSquare strokeWidth={1.8} aria-hidden="true" />
+            <Trans>Customer</Trans>
+          </TabsTrigger>
+        </TabsList>
         <InputGroup
           data-testid="sidebar-search"
           className="mx-2.5 mb-3 w-auto rounded-xl bg-card dark:bg-input"
@@ -2571,7 +2609,10 @@ export function ShellPage() {
             name="sidebar-search"
           />
         </InputGroup>
-        <div className="rk-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2.5">
+        <TabsContent
+          value="staff"
+          className="rk-scroll flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2.5 pb-2.5"
+        >
           {showSpaceSearch ? (
             <SpaceSearchResults
               hits={searchHits}
@@ -2917,7 +2958,14 @@ export function ShellPage() {
               ) : null}
             </div>
           ) : null}
-        </div>
+        </TabsContent>
+        <TabsContent value="customer" className="rk-scroll min-h-0 overflow-y-auto px-2.5 pb-2.5">
+          <CustomerSidebar
+            inbox={customerInbox}
+            query={query}
+            onSelect={() => setMobileSidebarOpen(false)}
+          />
+        </TabsContent>
         <button
           type="button"
           onClick={() => setPluginsOpen(true)}
@@ -2990,7 +3038,7 @@ export function ShellPage() {
             </PopoverContent>
           ) : null}
         </Popover>
-      </aside>
+      </Tabs>
 
       <button
         type="button"
@@ -3040,176 +3088,191 @@ export function ShellPage() {
         inert={mobileSidebarOpen}
         className="flex min-w-0 flex-1 flex-col bg-background"
       >
-        <div className="app-drag flex items-center justify-between border-b border-sidebar-border px-3 py-[17px] md:px-[22px]">
-          <div className="flex min-w-0 items-center gap-2">
-            {/* Collapsed bots sidebar: this header is the leading edge for window chrome. */}
-            {botsSidebarCollapsed && desktopBridge() ? <WindowChrome /> : null}
-            <button
-              type="button"
-              aria-label={t`Open navigation`}
-              onClick={() => setMobileSidebarOpen(true)}
-              className="app-no-drag grid h-8 w-8 shrink-0 place-items-center rounded-lg text-foreground/75 hover:bg-accent md:hidden"
-            >
-              <Menu size={19} strokeWidth={1.7} />
-            </button>
-            {botsSidebarCollapsed ? (
-              <button
-                type="button"
-                data-testid="restore-bots-sidebar"
-                aria-label={t`Show bots`}
-                title={t`Show bots`}
-                onClick={() => setBotsSidebarCollapsedPref(false)}
-                className="app-no-drag hidden h-8 w-8 shrink-0 place-items-center rounded-lg text-foreground/75 hover:bg-accent md:grid"
-              >
-                <PanelLeftOpen size={19} strokeWidth={1.7} aria-hidden="true" />
-              </button>
+        {inboxTab === "customer" ? (
+          <CustomerThread
+            id={customerInbox.id}
+            refresh={customerInbox.refresh}
+            onOpenNavigation={() => setMobileSidebarOpen(true)}
+          />
+        ) : (
+          <>
+            <div className="app-drag flex items-center justify-between border-b border-sidebar-border px-3 py-[17px] md:px-[22px]">
+              <div className="flex min-w-0 items-center gap-2">
+                {/* Collapsed bots sidebar: this header is the leading edge for window chrome. */}
+                {botsSidebarCollapsed && desktopBridge() ? <WindowChrome /> : null}
+                <button
+                  type="button"
+                  aria-label={t`Open navigation`}
+                  onClick={() => setMobileSidebarOpen(true)}
+                  className="app-no-drag grid h-8 w-8 shrink-0 place-items-center rounded-lg text-foreground/75 hover:bg-accent md:hidden"
+                >
+                  <Menu size={19} strokeWidth={1.7} />
+                </button>
+                {botsSidebarCollapsed ? (
+                  <button
+                    type="button"
+                    data-testid="restore-bots-sidebar"
+                    aria-label={t`Show bots`}
+                    title={t`Show bots`}
+                    onClick={() => setBotsSidebarCollapsedPref(false)}
+                    className="app-no-drag hidden h-8 w-8 shrink-0 place-items-center rounded-lg text-foreground/75 hover:bg-accent md:grid"
+                  >
+                    <PanelLeftOpen size={19} strokeWidth={1.7} aria-hidden="true" />
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  data-testid="bot-settings-trigger"
+                  onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
+                  className="app-no-drag flex min-w-0 items-center gap-3"
+                >
+                  {inGroup ? (
+                    <GroupAvatar
+                      members={activeSnapshot?.members ?? activeGroup?.members ?? []}
+                      size={26}
+                    />
+                  ) : active ? (
+                    <BotAvatar
+                      color={active.color}
+                      identity={active.id}
+                      size={26}
+                      status={active.status}
+                    />
+                  ) : null}
+                  <span className="min-w-0">
+                    <span
+                      className="block truncate text-[16px] font-medium text-foreground"
+                      dir="auto"
+                    >
+                      {inGroup
+                        ? (activeGroup?.name ?? activeSnapshot?.groupName ?? t`Group`)
+                        : (active?.name ?? t`Select a bot`)}
+                    </span>
+                  </span>
+                </button>
+              </div>
+              <div className="flex items-center gap-1">
+                {!inGroup && active ? (
+                  <button
+                    type="button"
+                    title={t`Agent computer`}
+                    onClick={() => {
+                      const next = panel === "computer" ? null : "computer";
+                      setPanel(next);
+                      if (next === "computer" && active) {
+                        // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
+                        void refreshThread(active.id).catch(() => undefined);
+                      }
+                    }}
+                    data-active={panel ? "" : undefined}
+                    className="app-no-drag grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-accent data-active:bg-accent"
+                  >
+                    <Monitor size={18} strokeWidth={1.6} className="text-foreground/75" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {!active && !activeGroup && initialBotsLoaded ? (
+              <div className="grid flex-1 place-items-center">
+                <Button onClick={() => setPanel("create")}>
+                  <Plus size={16} aria-hidden="true" />
+                  <Trans>Create new Bot</Trans>
+                </Button>
+              </div>
+            ) : (
+              <Transcript
+                key={activeSnapshot?.threadId}
+                scrollRef={messageScroll}
+                artifactTarget={transcriptArtifactTarget}
+                messages={transcriptMessages}
+                olderCursor={activeSnapshot?.olderCursor ?? null}
+                loadingOlder={loadingOlder}
+                answerableAskMessageId={answerableAskMessageId}
+                running={transcriptRunning}
+                workingBots={workingBots}
+                onLoadOlder={loadOlder}
+                onOpenBot={openBot}
+                onAnswer={answerMessage}
+                onReply={setReplyTarget}
+                onReact={reactToMessage}
+                onJumpToMessage={jumpToReplyMessage}
+                onOpenPeerMessages={(peer) => {
+                  setPeerConversation(peer);
+                }}
+                memberName={resolveTranscriptMemberName}
+                peerBot={resolveTranscriptBot}
+                onRefresh={refreshActiveThread}
+                onBotChanged={refreshBots}
+                onAddRoutine={addSkillRoutine}
+                voiceReady={Boolean(voiceStatus?.ready)}
+                speakingMessageId={speakingMessageId}
+                onSpeak={speakMessage}
+              />
+            )}
+            {recordingSkill ? (
+              <div className="px-6 pb-2 text-center text-[13px] text-destructive">
+                <Trans>Teaching in progress. Stop teaching before sending a new message.</Trans>
+              </div>
             ) : null}
-            <button
-              type="button"
-              data-testid="bot-settings-trigger"
-              onClick={() => setPanel(inGroup ? "group-settings" : "settings")}
-              className="app-no-drag flex min-w-0 items-center gap-3"
-            >
-              {inGroup ? (
-                <GroupAvatar
-                  members={activeSnapshot?.members ?? activeGroup?.members ?? []}
-                  size={26}
-                />
-              ) : active ? (
-                <BotAvatar
-                  color={active.color}
-                  identity={active.id}
-                  size={26}
-                  status={active.status}
-                />
-              ) : null}
-              <span className="min-w-0">
-                <span className="block truncate text-[16px] font-medium text-foreground" dir="auto">
-                  {inGroup
-                    ? (activeGroup?.name ?? activeSnapshot?.groupName ?? t`Group`)
-                    : (active?.name ?? t`Select a bot`)}
-                </span>
-              </span>
-            </button>
-          </div>
-          <div className="flex items-center gap-1">
-            {!inGroup && active ? (
-              <button
-                type="button"
-                title={t`Agent computer`}
-                onClick={() => {
-                  const next = panel === "computer" ? null : "computer";
-                  setPanel(next);
-                  if (next === "computer" && active) {
-                    // Refresh run/computer so Take control isn't stuck on a stale busyBotName.
-                    void refreshThread(active.id).catch(() => undefined);
+            {active || activeGroup ? (
+              <Composer
+                key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
+                activeName={
+                  inGroup ? (activeGroup?.name ?? activeSnapshot?.groupName) : active?.name
+                }
+                running={composerRunning}
+                disabled={Boolean(recordingSkill)}
+                pendingAttachments={activePendingAttachments}
+                attachmentNotice={attachmentNotice}
+                sendError={sendError}
+                runError={displayedRunError}
+                runErrorId={displayedRunErrorId}
+                onRunErrorPresented={handleRunErrorPresented}
+                onDismissError={dismissComposerError}
+                sending={sending}
+                fileInputRef={fileInputRef}
+                onAttachmentPick={onAttachmentPick}
+                onRemoveAttachment={removeAttachment}
+                onSend={sendMessage}
+                onStop={stopRun}
+                onVoice={
+                  !inGroup && active
+                    ? () => {
+                        if (!voiceStatus?.ready) {
+                          openSettings("voice");
+                          return;
+                        }
+                        setCallOpen(true);
+                      }
+                    : undefined
+                }
+                replyTarget={activeReplyTarget}
+                replyTargetName={replyTargetName}
+                onClearReply={() => setReplyTarget(null)}
+                mentionTargets={composerMentionTargets}
+                agentSkills={agentSkills}
+                onSlashOpen={refreshAgentSkills}
+                onSlashAction={(action) => {
+                  if (action === "chat-settings") {
+                    setPanel(inGroup ? "group-settings" : "settings");
+                    return;
+                  }
+                  if (action === "settings-general") {
+                    openSettings("general");
+                    return;
+                  }
+                  if (action === "settings-usage") {
+                    void rpc.usage
+                      .summary()
+                      .then(setUsage)
+                      .catch(() => undefined);
+                    openSettings("usage");
                   }
                 }}
-                data-active={panel ? "" : undefined}
-                className="app-no-drag grid h-[30px] w-[34px] place-items-center rounded-[9px] hover:bg-accent data-active:bg-accent"
-              >
-                <Monitor size={18} strokeWidth={1.6} className="text-foreground/75" />
-              </button>
+              />
             ) : null}
-          </div>
-        </div>
-        {!active && !activeGroup && initialBotsLoaded ? (
-          <div className="grid flex-1 place-items-center">
-            <Button onClick={() => setPanel("create")}>
-              <Plus size={16} aria-hidden="true" />
-              <Trans>Create new Bot</Trans>
-            </Button>
-          </div>
-        ) : (
-          <Transcript
-            key={activeSnapshot?.threadId}
-            scrollRef={messageScroll}
-            artifactTarget={transcriptArtifactTarget}
-            messages={transcriptMessages}
-            olderCursor={activeSnapshot?.olderCursor ?? null}
-            loadingOlder={loadingOlder}
-            answerableAskMessageId={answerableAskMessageId}
-            running={transcriptRunning}
-            workingBots={workingBots}
-            onLoadOlder={loadOlder}
-            onOpenBot={openBot}
-            onAnswer={answerMessage}
-            onReply={setReplyTarget}
-            onReact={reactToMessage}
-            onJumpToMessage={jumpToReplyMessage}
-            onOpenPeerMessages={(peer) => {
-              setPeerConversation(peer);
-            }}
-            memberName={resolveTranscriptMemberName}
-            peerBot={resolveTranscriptBot}
-            onRefresh={refreshActiveThread}
-            onBotChanged={refreshBots}
-            onAddRoutine={addSkillRoutine}
-            voiceReady={Boolean(voiceStatus?.ready)}
-            speakingMessageId={speakingMessageId}
-            onSpeak={speakMessage}
-          />
+          </>
         )}
-        {recordingSkill ? (
-          <div className="px-6 pb-2 text-center text-[13px] text-destructive">
-            <Trans>Teaching in progress. Stop teaching before sending a new message.</Trans>
-          </div>
-        ) : null}
-        {active || activeGroup ? (
-          <Composer
-            key={inGroup ? `group:${groupId}` : `bot:${active?.id}`}
-            activeName={inGroup ? (activeGroup?.name ?? activeSnapshot?.groupName) : active?.name}
-            running={composerRunning}
-            disabled={Boolean(recordingSkill)}
-            pendingAttachments={activePendingAttachments}
-            attachmentNotice={attachmentNotice}
-            sendError={sendError}
-            runError={displayedRunError}
-            runErrorId={displayedRunErrorId}
-            onRunErrorPresented={handleRunErrorPresented}
-            onDismissError={dismissComposerError}
-            sending={sending}
-            fileInputRef={fileInputRef}
-            onAttachmentPick={onAttachmentPick}
-            onRemoveAttachment={removeAttachment}
-            onSend={sendMessage}
-            onStop={stopRun}
-            onVoice={
-              !inGroup && active
-                ? () => {
-                    if (!voiceStatus?.ready) {
-                      openSettings("voice");
-                      return;
-                    }
-                    setCallOpen(true);
-                  }
-                : undefined
-            }
-            replyTarget={activeReplyTarget}
-            replyTargetName={replyTargetName}
-            onClearReply={() => setReplyTarget(null)}
-            mentionTargets={composerMentionTargets}
-            agentSkills={agentSkills}
-            onSlashOpen={refreshAgentSkills}
-            onSlashAction={(action) => {
-              if (action === "chat-settings") {
-                setPanel(inGroup ? "group-settings" : "settings");
-                return;
-              }
-              if (action === "settings-general") {
-                openSettings("general");
-                return;
-              }
-              if (action === "settings-usage") {
-                void rpc.usage
-                  .summary()
-                  .then(setUsage)
-                  .catch(() => undefined);
-                openSettings("usage");
-              }
-            }}
-          />
-        ) : null}
       </main>
 
       <aside

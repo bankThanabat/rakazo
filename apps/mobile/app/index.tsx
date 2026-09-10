@@ -23,6 +23,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BotAvatar } from "../components/bot-avatar";
 import { BotOrganizeModal } from "../components/bot-organize-modal";
+import { CustomerInbox } from "../components/customer-inbox";
 import { GroupAvatar } from "../components/group-avatar";
 import { NativeSymbol } from "../components/native-symbol";
 import {
@@ -92,6 +93,7 @@ export default function Home() {
   const [hasSession, setHasSession] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
+  const [inboxTab, setInboxTab] = useState<"staff" | "customer">("staff");
   const [searching, setSearching] = useState(false);
   const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -119,6 +121,9 @@ export default function Home() {
   }, []);
 
   const toggleActivityMode = useCallback(() => {
+    setInboxTab("staff");
+    setQuery("");
+    setSearching(false);
     setActivityMode((on) => {
       const next = !on;
       void saveActivityMode(next);
@@ -191,7 +196,7 @@ export default function Home() {
 
   const loadActivity = useCallback(async () => {
     if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
-    if (!hasSession || !activityMode || searching || query.trim()) {
+    if (inboxTab !== "staff" || !hasSession || !activityMode || searching || query.trim()) {
       activityRequestId.current += 1;
       setActivity({ active: [], recent: [] });
       return;
@@ -205,11 +210,11 @@ export default function Home() {
       // Keep the last good snapshot on transient RPC failures; only drop stale responses.
       if (requestId !== activityRequestId.current) return;
     }
-  }, [activityMode, hasSession, query, searching]);
+  }, [activityMode, hasSession, inboxTab, query, searching]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!hasSession || !activityMode || searching || query.trim()) return;
+      if (inboxTab !== "staff" || !hasSession || !activityMode || searching || query.trim()) return;
       let cancelled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -226,12 +231,12 @@ export default function Home() {
         activityRequestId.current += 1;
         if (timer !== undefined) clearTimeout(timer);
       };
-    }, [activityMode, hasSession, loadActivity, query, searching]),
+    }, [activityMode, hasSession, inboxTab, loadActivity, query, searching]),
   );
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (!searching || !trimmed) {
+    if (inboxTab !== "staff" || !searching || !trimmed) {
       setSearchHits([]);
       setSearchLoading(false);
       return;
@@ -254,7 +259,7 @@ export default function Home() {
       abort.abort();
       clearTimeout(timer);
     };
-  }, [query, searching]);
+  }, [inboxTab, query, searching]);
 
   const visible = useMemo(() => filterBots(bots, query), [bots, query]);
   const visibleGroups = useMemo(() => {
@@ -265,6 +270,7 @@ export default function Home() {
     );
   }, [groups, query]);
   const listData = useMemo((): InboxItem[] => {
+    if (inboxTab === "customer") return [];
     if (query.trim() && searching) {
       return searchHits.map((hit) => ({ type: "search", hit }));
     }
@@ -297,7 +303,18 @@ export default function Home() {
             ]
           : [];
     return spaceInboxItems(sidebarSpaces);
-  }, [botSections, locale, me, spaces, query, searching, searchHits, visible, visibleGroups]);
+  }, [
+    botSections,
+    inboxTab,
+    locale,
+    me,
+    spaces,
+    query,
+    searching,
+    searchHits,
+    visible,
+    visibleGroups,
+  ]);
   const initials = userInitials(me?.name ?? "");
   const organizeChat = organizeTarget
     ? organizeTarget.kind === "bot"
@@ -476,6 +493,8 @@ export default function Home() {
             accessibilityLabel={t("Create")}
             onPress={() => {
               if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
+              setInboxTab("staff");
+              setQuery("");
               Alert.alert(t("Create"), undefined, [
                 { text: t("New bot"), onPress: () => void createQuickBot() },
                 { text: t("New group"), onPress: () => router.push("/new-group") },
@@ -487,6 +506,35 @@ export default function Home() {
             <NativeSymbol ios="plus" android="add" size={18} />
           </CircleButton>
         </View>
+      </View>
+
+      <View accessibilityRole="tablist" style={styles.inboxTabs}>
+        {(["staff", "customer"] as const).map((tab) => (
+          <Pressable
+            key={tab}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: inboxTab === tab }}
+            onPress={() => {
+              setInboxTab(tab);
+              setQuery("");
+            }}
+            style={({ pressed }) => [
+              styles.inboxTab,
+              inboxTab === tab && styles.inboxTabSelected,
+              pressed && styles.circlePressed,
+            ]}
+          >
+            <NativeSymbol
+              ios={tab === "staff" ? "person.2" : "bubble.left.and.bubble.right"}
+              android={tab === "staff" ? "people-outline" : "chatbubbles-outline"}
+              size={17}
+              color={inboxTab === tab ? native.label : native.secondaryLabel}
+            />
+            <Text style={[styles.inboxTabLabel, inboxTab === tab && styles.inboxTabLabelSelected]}>
+              {tab === "staff" ? t("Staff") : t("Customer")}
+            </Text>
+          </Pressable>
+        ))}
       </View>
 
       {searching ? (
@@ -505,8 +553,8 @@ export default function Home() {
         />
       ) : null}
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
-      {spaceRecoveryId ? (
+      {inboxTab === "staff" && error ? <Text style={styles.error}>{error}</Text> : null}
+      {inboxTab === "staff" && spaceRecoveryId ? (
         <Pressable
           accessibilityRole="button"
           disabled={spaceBusy}
@@ -517,136 +565,143 @@ export default function Home() {
         </Pressable>
       ) : null}
 
-      <FlatList<InboxItem>
-        data={listData}
-        keyExtractor={(item) => {
-          if (item.type === "heading") return `heading-${item.key}`;
-          if (item.type === "bot") return item.bot.id;
-          if (item.type === "group") return `group-${item.group.id}`;
-          const hit = item.hit;
-          return `${hit.kind}-${hit.botId ?? hit.groupId}-${hit.messageId ?? hit.artifactId ?? hit.routineId ?? hit.url}`;
-        }}
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
-        indicatorStyle={appearance === "dark" ? "white" : "black"}
-        contentContainerStyle={styles.list}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              void refreshBots();
-              void loadActivity();
-            }}
-            tintColor={native.secondaryLabel}
-            colors={[tokens.mutedForeground]}
-            progressBackgroundColor={tokens.muted}
-          />
-        }
-        ListHeaderComponent={
-          activityMode &&
-          !searching &&
-          !query.trim() &&
-          (activity.active.length > 0 || activity.recent.length > 0) ? (
-            <ActivitySection activity={activity} bots={bots} />
-          ) : null
-        }
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            {query.trim() && searching
-              ? searchLoading
-                ? t("Searching…")
-                : t("No results")
-              : query.trim()
-                ? t("No matching bots")
-                : searching
-                  ? t("Search conversations, files, and routines")
-                  : t("Tap + to create a bot")}
-          </Text>
-        }
-        renderItem={({ item }) =>
-          item.type === "search" ? (
-            <SearchRow
-              hit={item.hit}
-              onPress={() => {
-                setQuery("");
-                setSearchHits([]);
-                router.push(mobileSearchDestination(item.hit));
-              }}
-            />
-          ) : item.type === "heading" ? (
-            item.space ? (
-              <View style={styles.spaceHeading}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={item.title}
-                  accessibilityState={{
-                    selected: item.space.id === me?.spaceId,
-                    disabled: spaceBusy,
-                  }}
-                  disabled={spaceBusy}
-                  onPress={() => {
-                    if (item.space) void chooseInboxSpace(item.space.id);
-                  }}
-                  style={({ pressed }) => [styles.spaceSelect, pressed && styles.rowPressed]}
-                >
-                  <Text style={styles.spaceTitle}>{item.title}</Text>
-                </Pressable>
-                {canDeleteInboxSpace(item.space) ? (
+      {inboxTab === "customer" ? (
+        <CustomerInbox query={query} />
+      ) : (
+        <FlatList<InboxItem>
+          data={listData}
+          keyExtractor={(item) => {
+            if (item.type === "heading") return `heading-${item.key}`;
+            if (item.type === "bot") return item.bot.id;
+            if (item.type === "group") return `group-${item.group.id}`;
+            const hit = item.hit;
+            return `${hit.kind}-${hit.botId ?? hit.groupId}-${hit.messageId ?? hit.artifactId ?? hit.routineId ?? hit.url}`;
+          }}
+          keyboardDismissMode="interactive"
+          keyboardShouldPersistTaps="handled"
+          indicatorStyle={appearance === "dark" ? "white" : "black"}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            inboxTab === "staff" ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => {
+                  void refreshBots();
+                  void loadActivity();
+                }}
+                tintColor={native.secondaryLabel}
+                colors={[tokens.mutedForeground]}
+                progressBackgroundColor={tokens.muted}
+              />
+            ) : undefined
+          }
+          ListHeaderComponent={
+            inboxTab === "staff" &&
+            activityMode &&
+            !searching &&
+            !query.trim() &&
+            (activity.active.length > 0 || activity.recent.length > 0) ? (
+              <ActivitySection activity={activity} bots={bots} />
+            ) : null
+          }
+          ListEmptyComponent={
+            <Text style={styles.empty}>
+              {query.trim() && searching
+                ? searchLoading
+                  ? t("Searching…")
+                  : t("No results")
+                : query.trim()
+                  ? t("No matching bots")
+                  : searching
+                    ? t("Search conversations, files, and routines")
+                    : t("Tap + to create a bot")}
+            </Text>
+          }
+          renderItem={({ item }) =>
+            item.type === "search" ? (
+              <SearchRow
+                hit={item.hit}
+                onPress={() => {
+                  setQuery("");
+                  setSearchHits([]);
+                  router.push(mobileSearchDestination(item.hit));
+                }}
+              />
+            ) : item.type === "heading" ? (
+              item.space ? (
+                <View style={styles.spaceHeading}>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={t("Space actions for {name}", { name: item.title })}
-                    disabled={spaceBusy || !!spaceRecoveryId}
-                    onPress={() => {
-                      if (item.space) showSpaceActions(item.space);
+                    accessibilityLabel={item.title}
+                    accessibilityState={{
+                      selected: item.space.id === me?.spaceId,
+                      disabled: spaceBusy,
                     }}
-                    style={({ pressed }) => [styles.spaceActions, pressed && styles.rowPressed]}
+                    disabled={spaceBusy}
+                    onPress={() => {
+                      if (item.space) void chooseInboxSpace(item.space.id);
+                    }}
+                    style={({ pressed }) => [styles.spaceSelect, pressed && styles.rowPressed]}
                   >
-                    <NativeSymbol ios="ellipsis" android="ellipsis-horizontal" size={20} />
+                    <Text style={styles.spaceTitle}>{item.title}</Text>
                   </Pressable>
-                ) : null}
-              </View>
+                  {canDeleteInboxSpace(item.space) ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t("Space actions for {name}", { name: item.title })}
+                      disabled={spaceBusy || !!spaceRecoveryId}
+                      onPress={() => {
+                        if (item.space) showSpaceActions(item.space);
+                      }}
+                      style={({ pressed }) => [styles.spaceActions, pressed && styles.rowPressed]}
+                    >
+                      <NativeSymbol ios="ellipsis" android="ellipsis-horizontal" size={20} />
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : (
+                <Text style={styles.sectionHeading}>{item.title}</Text>
+              )
+            ) : item.type === "group" ? (
+              <GroupRow
+                group={item.group}
+                onPress={() => {
+                  if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
+                  void openMobileSpace(item.group.spaceId, () =>
+                    router.push({
+                      pathname: "/group-thread",
+                      params: { groupId: item.group.id, name: item.group.name },
+                    }),
+                  );
+                }}
+                onLongPress={
+                  item.group.spaceId === me?.spaceId
+                    ? () => setOrganizeTarget({ kind: "group", id: item.group.id })
+                    : undefined
+                }
+              />
             ) : (
-              <Text style={styles.sectionHeading}>{item.title}</Text>
+              <BotRow
+                bot={item.bot}
+                onPress={() => {
+                  if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
+                  void openMobileSpace(item.bot.spaceId, () =>
+                    router.push({
+                      pathname: "/thread",
+                      params: { botId: item.bot.id, name: item.bot.name },
+                    }),
+                  );
+                }}
+                onLongPress={
+                  item.bot.spaceId === me?.spaceId
+                    ? () => setOrganizeTarget({ kind: "bot", id: item.bot.id })
+                    : undefined
+                }
+              />
             )
-          ) : item.type === "group" ? (
-            <GroupRow
-              group={item.group}
-              onPress={() => {
-                if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
-                void openMobileSpace(item.group.spaceId, () =>
-                  router.push({
-                    pathname: "/group-thread",
-                    params: { groupId: item.group.id, name: item.group.name },
-                  }),
-                );
-              }}
-              onLongPress={
-                item.group.spaceId === me?.spaceId
-                  ? () => setOrganizeTarget({ kind: "group", id: item.group.id })
-                  : undefined
-              }
-            />
-          ) : (
-            <BotRow
-              bot={item.bot}
-              onPress={() => {
-                if (spaceActionRef.current.busy || spaceActionRef.current.recoveryId) return;
-                void openMobileSpace(item.bot.spaceId, () =>
-                  router.push({
-                    pathname: "/thread",
-                    params: { botId: item.bot.id, name: item.bot.name },
-                  }),
-                );
-              }}
-              onLongPress={
-                item.bot.spaceId === me?.spaceId
-                  ? () => setOrganizeTarget({ kind: "bot", id: item.bot.id })
-                  : undefined
-              }
-            />
-          )
-        }
-      />
+          }
+        />
+      )}
       {organizeChat && organizeTarget ? (
         <BotOrganizeModal
           bot={organizeChat}
@@ -1002,6 +1057,37 @@ function createHomeStyles() {
       color: native.label,
       fontSize: 15,
       fontWeight: "600",
+    },
+    inboxTabs: {
+      flexDirection: "row",
+      marginHorizontal: 16,
+      marginBottom: 8,
+      padding: 3,
+      borderRadius: 12,
+      backgroundColor: native.fill,
+    },
+    inboxTab: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      minHeight: 44,
+      paddingHorizontal: 8,
+      paddingVertical: 8,
+      borderRadius: 9,
+    },
+    inboxTabSelected: {
+      backgroundColor: tokens.card,
+    },
+    inboxTabLabel: {
+      color: native.secondaryLabel,
+      fontSize: 15,
+      fontWeight: "600",
+      flexShrink: 1,
+    },
+    inboxTabLabelSelected: {
+      color: native.label,
     },
     searchField: {
       marginHorizontal: 16,

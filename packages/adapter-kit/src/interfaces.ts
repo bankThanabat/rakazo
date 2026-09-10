@@ -324,6 +324,11 @@ export interface MessagingSurface {
   describe(): AdapterDescriptor<{ providers: string[] }>;
   /** Enabled platforms and what each supports. */
   platforms(): MessagingPlatformDescriptor[];
+  /** Optional public customer identity; null when the provider cannot supply a profile. */
+  getUserProfile?(
+    provider: string,
+    userId: string,
+  ): Promise<{ name: string; avatarUrl: string | null } | null>;
   /**
    * Verify and process one platform webhook request. Parsed events reach the
    * sink registered via onInbound before the returned response resolves.

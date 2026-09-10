@@ -1,4 +1,7 @@
 export const RU_MESSAGES: Record<string, string> = {
+  Staff: "Сотрудники",
+  Customer: "Клиент",
+  "No customer conversations yet": "Переписок с клиентами пока нет",
   "Ask the server owner to configure this provider.":
     "Попросите владельца сервера настроить этого провайдера.",
   "Client ID": "ID клиента",
@@ -583,4 +586,18 @@ export const RU_MESSAGES: Record<string, string> = {
   "{name} (permission denied)": "{name} (в разрешении отказано)",
   "{name} (unsupported type)": "{name} (неподдерживаемый тип)",
   "Saved {name} locally": "{name} сохранен локально.",
+  Channel: "Канал",
+  "Connect channel": "Подключить канал",
+  "Could not load conversations": "Не удалось загрузить переписку",
+  "Could not save channel settings": "Не удалось сохранить настройки канала",
+  "Could not update conversation": "Не удалось обновить переписку",
+  "Customer channels": "Каналы клиентов",
+  "Customer instructions": "Инструкции для общения с клиентами",
+  Reconnect: "Подключить снова",
+  "Reply failed": "Не удалось отправить ответ",
+  "Reply to customer": "Ответить клиенту",
+  "Resume bot": "Возобновить бота",
+  "Setup guide": "Руководство по настройке",
+  "Take over": "Взять на себя",
+  "Webhook URL": "URL вебхука",
 };

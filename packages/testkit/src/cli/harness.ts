@@ -15,7 +15,7 @@ const specArg = process.argv.find((arg) => arg.startsWith("--spec="));
 const grepArg = process.argv.find((arg) => arg.startsWith("--grep="));
 const runtimeArg = process.argv.find((arg) => arg.startsWith("--runtime="));
 const sandboxProvider = sandboxArg?.slice("--sandbox=".length) ?? "fake";
-const e2eSpec = specArg?.slice("--spec=".length);
+const specFilter = specArg?.slice("--spec=".length);
 const e2eGrep = grepArg?.slice("--grep=".length);
 const agentRuntime = runtimeArg?.slice("--runtime=".length) ?? "scripted";
 
@@ -86,27 +86,30 @@ async function main() {
     });
 
     if (integration) {
-      const suites = [
-        "packages/testkit/src/pi-offline.postgres.test.ts",
-        "packages/testkit/src/computer-approval.postgres.test.ts",
-        "packages/testkit/src/eval-history.postgres.test.ts",
-        "packages/testkit/src/eval-customer-support.postgres.test.ts",
-        "packages/testkit/src/journeys.test.ts",
-        "packages/testkit/src/authorization.test.ts",
-        "packages/testkit/src/attachments.test.ts",
-        "packages/testkit/src/voice.test.ts",
-        "packages/testkit/src/search.test.ts",
-        "packages/testkit/src/executor-lifecycle.test.ts",
-        "packages/testkit/src/connections.test.ts",
-        "packages/testkit/src/bot-secrets.test.ts",
-        "packages/db/src/space-membership.postgres.test.ts",
-        "packages/db/src/messaging.postgres.test.ts",
-        "packages/memory/src/commit.postgres.test.ts",
-        "packages/adapters/src/wakeup.postgres.test.ts",
-        "packages/adapters/src/realtime.postgres.test.ts",
-        "packages/adapters/src/job-reconciler.postgres.test.ts",
-        "packages/adapters/src/cloud-agent.postgres.test.ts",
-      ];
+      const suites = specFilter
+        ? [specFilter]
+        : [
+            "packages/testkit/src/pi-offline.postgres.test.ts",
+            "packages/testkit/src/computer-approval.postgres.test.ts",
+            "packages/testkit/src/eval-history.postgres.test.ts",
+            "packages/testkit/src/eval-customer-support.postgres.test.ts",
+            "packages/testkit/src/customer-support.postgres.test.ts",
+            "packages/testkit/src/journeys.test.ts",
+            "packages/testkit/src/authorization.test.ts",
+            "packages/testkit/src/attachments.test.ts",
+            "packages/testkit/src/voice.test.ts",
+            "packages/testkit/src/search.test.ts",
+            "packages/testkit/src/executor-lifecycle.test.ts",
+            "packages/testkit/src/connections.test.ts",
+            "packages/testkit/src/bot-secrets.test.ts",
+            "packages/db/src/space-membership.postgres.test.ts",
+            "packages/db/src/messaging.postgres.test.ts",
+            "packages/memory/src/commit.postgres.test.ts",
+            "packages/adapters/src/wakeup.postgres.test.ts",
+            "packages/adapters/src/realtime.postgres.test.ts",
+            "packages/adapters/src/job-reconciler.postgres.test.ts",
+            "packages/adapters/src/cloud-agent.postgres.test.ts",
+          ];
       // Each app reconciles all durable work in its database, including intentionally
       // unfinished fixture runs. Clone the pristine migrated schema so one suite
       // cannot execute another suite's backlog or wait for it during shutdown.
@@ -153,7 +156,13 @@ async function main() {
     }
 
     const [
-      { ComposioEmulator, EmailEmulator, PipedreamConnector, ThirdPartyConnectorEmulator },
+      {
+        ComposioEmulator,
+        CustomerChannelEmulator,
+        EmailEmulator,
+        PipedreamConnector,
+        ThirdPartyConnectorEmulator,
+      },
       { createApp },
     ] = await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
     const { serve } = await import("@hono/node-server");
@@ -169,7 +178,13 @@ async function main() {
       { fetch: thirdParties.fetch, resolveHostname: thirdParties.resolveHostname },
     );
     const email = new EmailEmulator();
+    const customerChannels = new CustomerChannelEmulator();
+    customerChannels.profiles.set("Customer", {
+      displayName: "Alex Customer",
+      pictureUrl: "https://images.example.test/customer.png",
+    });
     const handles = await createApp({
+      customerChannelFetch: customerChannels.fetch,
       databaseUrl,
       prisma: undefined,
       composio: new ComposioEmulator(),
@@ -214,7 +229,7 @@ async function main() {
             "exec",
             "playwright",
             "test",
-            ...(e2eSpec ? [e2eSpec] : []),
+            ...(specFilter ? [specFilter] : []),
             ...(e2eGrep ? ["--grep", e2eGrep] : []),
           ],
           {

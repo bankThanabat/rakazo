@@ -3726,3 +3726,131 @@ msgstr "Ваше имя"
 #: src/pages/Welcome.tsx:21
 msgid "Your team of always-on agents<0/>that you can give real work to."
 msgstr "Ваша команда постоянно работающих агентов<0/>, которым вы можете дать настоящую работу."
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "Агент"
+
+#: src/pages/shell/message-cards.tsx:350
+msgid "Authorize this server so agents can use its tools. A popup opens."
+msgstr ""
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "Канал"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "Подключить канал"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "Не удалось загрузить переписку"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "Не удалось сохранить настройки канала"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "Не удалось обновить переписку"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "Клиент"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "Каналы клиентов"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "Инструкции для общения с клиентами"
+
+#: src/components/ComputerUpdateProgress.tsx:228
+msgid "Make sure nothing is still running on this computer."
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "Переписок с клиентами пока нет"
+
+#: src/components/ComputerUpdateProgress.tsx:251
+msgid "Nothing is still running"
+msgstr ""
+
+#: src/pages/Onboarding.tsx:615
+msgid "Opening chat…"
+msgstr ""
+
+#: src/pages/Shell.tsx:5243
+msgid "React"
+msgstr ""
+
+#: src/pages/Shell.tsx:5254
+msgid "Reactions"
+msgstr ""
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "Подключить снова"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "Не удалось отправить ответ"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "Ответить клиенту"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "Возобновить бота"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "Руководство по настройке"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "Сотрудники"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "Взять на себя"
+
+#: src/pages/Onboarding.tsx:610
+msgid "Try again"
+msgstr ""
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "URL вебхука"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "Приложения"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "Не удалось загрузить каналы"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "Агент недоступен"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "Нет подключённых каналов"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "Создайте агента, чтобы подключить канал"

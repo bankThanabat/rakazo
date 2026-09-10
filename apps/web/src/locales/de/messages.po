@@ -586,7 +586,7 @@ msgstr "Bot"
 #: src/pages/IntegrationSetup.tsx:51
 #: src/pages/Shell.tsx:1627
 msgid "Bot"
-msgstr "Bot"
+msgstr ""
 
 #. js-lingui-explicit-id
 #: src/lib/browser-notifications.ts:71
@@ -3735,3 +3735,103 @@ msgstr "Chat wird geöffnet…"
 
 msgid "Try again"
 msgstr "Erneut versuchen"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "Agent"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "Kanal"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "Kanal verbinden"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "Unterhaltungen konnten nicht geladen werden"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "Kanaleinstellungen konnten nicht gespeichert werden"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "Unterhaltung konnte nicht aktualisiert werden"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "Kunde"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "Kundenkanäle"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "Anweisungen für Kundengespräche"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "Noch keine Kundengespräche"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "Erneut verbinden"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "Antwort fehlgeschlagen"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "Dem Kunden antworten"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "Bot fortsetzen"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "Einrichtungsanleitung"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "Mitarbeiter"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "Übernehmen"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "Webhook-URL"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "Apps"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "Kanäle konnten nicht geladen werden"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "Agent nicht verfügbar"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "Keine Kanäle verbunden"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "Erstelle einen Agenten, um einen Kanal zu verbinden"

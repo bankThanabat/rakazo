@@ -3735,3 +3735,103 @@ msgstr "Abriendo el chat…"
 
 msgid "Try again"
 msgstr "Intentarlo de nuevo"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "Agente"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "Canal"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "Conectar canal"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "No se pudieron cargar las conversaciones"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "No se pudo guardar la configuración del canal"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "No se pudo actualizar la conversación"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "Cliente"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "Canales de clientes"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "Instrucciones para clientes"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "Aún no hay conversaciones con clientes"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "Volver a conectar"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "Error al responder"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "Responder al cliente"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "Reanudar bot"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "Guía de configuración"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "Personal"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "Tomar el control"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "URL del webhook"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "Aplicaciones"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "No se pudieron cargar los canales"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "Agente no disponible"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "No hay canales conectados"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "Crea un agente para conectar un canal"

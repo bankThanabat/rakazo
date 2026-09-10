@@ -3735,3 +3735,103 @@ msgstr "चैट खुल रही है…"
 
 msgid "Try again"
 msgstr "फिर से कोशिश करें"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "एजेंट"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "चैनल"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "चैनल जोड़ें"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "बातचीत लोड नहीं हो सकी"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "चैनल सेटिंग सेव नहीं हो सकी"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "बातचीत अपडेट नहीं हो सकी"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "ग्राहक"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "ग्राहक चैनल"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "ग्राहक सेवा निर्देश"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "अभी तक कोई ग्राहक बातचीत नहीं है"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "फिर से जोड़ें"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "जवाब भेजना विफल हुआ"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "ग्राहक को जवाब दें"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "बॉट फिर शुरू करें"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "सेटअप गाइड"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "कर्मचारी"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "बातचीत संभालें"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "वेबहुक URL"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "ऐप्स"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "चैनल लोड नहीं हो सके"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "एजेंट उपलब्ध नहीं है"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "कोई चैनल कनेक्ट नहीं है"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "चैनल कनेक्ट करने के लिए एक एजेंट बनाएँ"

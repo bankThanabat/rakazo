@@ -586,7 +586,7 @@ msgstr "Bot"
 #: src/pages/IntegrationSetup.tsx:51
 #: src/pages/Shell.tsx:1627
 msgid "Bot"
-msgstr "봇"
+msgstr "Bot"
 
 #. js-lingui-explicit-id
 #: src/lib/browser-notifications.ts:71
@@ -3735,3 +3735,103 @@ msgstr "채팅 여는 중…"
 
 msgid "Try again"
 msgstr "다시 시도"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "에이전트"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "채널"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "채널 연결"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "대화를 불러오지 못했습니다"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "채널 설정을 저장하지 못했습니다"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "대화를 업데이트하지 못했습니다"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "고객"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "고객 채널"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "고객 응대 지침"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "아직 고객 대화가 없습니다"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "다시 연결"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "답변 전송 실패"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "고객에게 답변"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "봇 재개"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "설정 가이드"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "직원"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "대화 인계받기"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "웹훅 URL"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "앱"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "채널을 불러오지 못했습니다"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "에이전트를 사용할 수 없음"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "연결된 채널 없음"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "채널을 연결하려면 에이전트를 만드세요"

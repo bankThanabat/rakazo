@@ -164,7 +164,7 @@ export class PiAgentRuntime implements AgentRuntime {
           return;
         }
         const { models, model, apiKey } = selectedModel;
-        const toolDefs = request.tools.length ? request.tools : builtinAgentTools;
+        const toolDefs = runtimeToolDefinitions(request);
         const nestedAgents = new Set<Agent>();
         const host: ToolHost = {
           queue,
@@ -593,6 +593,12 @@ export function describeToolActivity(toolName: string, args: unknown): string {
   return `Using ${toolName}`;
 }
 
+function runtimeToolDefinitions(request: AgentRunRequest): ConnectorTool[] {
+  return request.tools.length || request.allowBuiltinTools === false
+    ? request.tools
+    : builtinAgentTools;
+}
+
 export function normalizeAgentToolNames(tools: readonly ConnectorTool[]): string[] {
   const reservedValidNames = new Set(
     tools.filter((tool) => isProviderSafeAgentToolName(tool.name)).map((tool) => tool.name),
@@ -970,7 +976,7 @@ async function executeSubagent(host: ToolHost, executionId: string, args: Record
   }
   const subagentModel = selectedModel.model;
 
-  const childDefs = (host.request.tools.length ? host.request.tools : builtinAgentTools).filter(
+  const childDefs = runtimeToolDefinitions(host.request).filter(
     (tool) => !DELEGATION_TOOL_NAMES.has(tool.name),
   );
   const nestedHost: ToolHost = {

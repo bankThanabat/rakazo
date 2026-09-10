@@ -189,6 +189,7 @@ model Space {
   chatGroups                  ChatGroup[]
   botSecrets BotSecret[]
   externalConversations       ExternalConversation[]
+  customerChannels            CustomerChannel[]
   agentSecrets                AgentSecret[]
 
   @@unique([id, organizationId])
@@ -368,6 +369,7 @@ model Bot {
   botSecrets BotSecret[]
 
   externalConversations ExternalConversation[]
+  customerChannels      CustomerChannel[]
 
   @@unique([spaceId, spawnKey])
   @@index([spaceId, userId, archivedAt, pinned, updatedAt])
@@ -1297,4 +1299,73 @@ model IntegrationProviderConfig {
   updatedAt  DateTime @updatedAt
 
   @@map("integration_provider_configs")
+}
+
+model CustomerChannel {
+  id            String                 @id @default(cuid())
+  spaceId       String
+  space         Space                  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId        String
+  botId         String
+  bot           Bot                    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  provider      String
+  accountId     String
+  name          String
+  instructions  String                 @default("") @db.Text
+  ciphertext    String
+  enabled       Boolean                @default(true)
+  conversations CustomerConversation[]
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  @@unique([provider, accountId])
+  @@index([spaceId, userId])
+  @@map("customer_channels")
+}
+
+model CustomerConversation {
+  id               String            @id @default(cuid())
+  channelId        String
+  channel          CustomerChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  customerId       String
+  externalThreadId String
+  name             String
+  avatarUrl        String?
+  profileRefreshAt DateTime          @default(now())
+  owner            String            @default("bot")
+  needsHuman       Boolean           @default(false)
+  generation       Int               @default(0)
+  nextSeq          Int               @default(0)
+  leaseUntil       DateTime?
+  leaseToken       String?
+  messages         CustomerMessage[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@unique([channelId, externalThreadId])
+  @@index([profileRefreshAt])
+  @@index([channelId, updatedAt])
+  @@map("customer_conversations")
+}
+
+model CustomerMessage {
+  id             String               @id @default(cuid())
+  conversationId String
+  conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  seq            Int
+  externalId     String?
+  role           String
+  body           String               @db.Text
+  mediaUrl       String?
+  status         String               @default("received")
+  generation     Int                  @default(0)
+  providerHandle String?
+  sendAttempts   Int                  @default(0)
+  nextAttemptAt  DateTime?
+  createdAt      DateTime             @default(now())
+
+  @@unique([conversationId, externalId])
+  @@unique([conversationId, seq])
+  @@index([status, createdAt])
+  @@map("customer_messages")
 }

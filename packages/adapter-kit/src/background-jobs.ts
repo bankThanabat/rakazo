@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 
 const payloadSchemas = {
+  "customer.process": z.object({}),
   "run.continue": z.object({ runId: z.string().min(1) }),
   "routine.wakeup": z.object({
     routineId: z.string().min(1),
@@ -144,6 +145,15 @@ export function cloudAgentPollJob(
     name: "cloud_agent.poll",
     payload,
     replaceKey: cloudAgentPollJobKey(payload.agentId),
+    ...(availableAt ? { availableAt } : {}),
+  };
+}
+
+export function customerProcessJob(availableAt?: Date): BackgroundJob {
+  return {
+    name: "customer.process",
+    payload: {},
+    replaceKey: "customer.process",
     ...(availableAt ? { availableAt } : {}),
   };
 }

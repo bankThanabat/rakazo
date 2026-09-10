@@ -50,6 +50,34 @@ function latestToolResult(request: ModelEmulatorRequest) {
 }
 
 describe("real Pi against an offline model HTTP endpoint", () => {
+  it("does not advertise staff tools when the caller disables the builtin fallback", async () => {
+    const server = await startModelEmulator({
+      steps: [
+        {
+          expect(request) {
+            expect(request.tools ?? []).toEqual([]);
+          },
+          response: { type: "text", text: "How can I help?" },
+        },
+      ],
+    });
+    cleanups.push(() => server.close());
+    const events = await collect(
+      new PiAgentRuntime().run(
+        runRequest(server.model, {
+          tools: [],
+          allowBuiltinTools: false,
+          instructions: "Answer customer questions using this conversation only.",
+          prompt: "Hello",
+          history: [],
+        }),
+      ),
+    );
+    server.assertComplete();
+    expect(events.at(-1)).toEqual({ type: "done", text: "How can I help?" });
+    expect(events.some((event) => event.type === "tool" || event.type === "subagent")).toBe(false);
+  });
+
   it("assembles fragmented tool arguments, executes the write, and sends its result back", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "rakazo-pi-offline-"));
     cleanups.push(() => rm(dir, { recursive: true, force: true }));

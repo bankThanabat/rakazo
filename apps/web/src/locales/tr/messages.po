@@ -3735,3 +3735,103 @@ msgstr "Sohbet açılıyor…"
 
 msgid "Try again"
 msgstr "Tekrar dene"
+
+#: src/pages/CustomerChannelsDialog.tsx:170
+#: src/pages/CustomerChannelsDialog.tsx:173
+msgid "Agent"
+msgstr "Ajan"
+
+#: src/pages/CustomerChannelsDialog.tsx:129
+#: src/pages/CustomerChannelsDialog.tsx:132
+msgid "Channel"
+msgstr "Kanal"
+
+#: src/pages/CustomerChannelsDialog.tsx:216
+msgid "Connect channel"
+msgstr "Kanal bağla"
+
+#: src/pages/CustomerInbox.tsx:49
+msgid "Could not load conversations"
+msgstr "Görüşmeler yüklenemedi"
+
+#: src/pages/CustomerChannelsDialog.tsx:221
+msgid "Could not save channel settings"
+msgstr "Kanal ayarları kaydedilemedi"
+
+#: src/pages/CustomerInbox.tsx:200
+msgid "Could not update conversation"
+msgstr "Görüşme güncellenemedi"
+
+#: src/pages/CustomerInbox.tsx:128
+#: src/pages/Shell.tsx:2594
+msgid "Customer"
+msgstr "Müşteri"
+
+#: src/pages/CustomerChannelsDialog.tsx:81
+msgid "Customer channels"
+msgstr "Müşteri kanalları"
+
+#: src/pages/CustomerChannelsDialog.tsx:187
+msgid "Customer instructions"
+msgstr "Müşteri talimatları"
+
+#: src/pages/CustomerInbox.tsx:69
+msgid "Needs attention"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:76
+msgid "No customer conversations yet"
+msgstr "Henüz müşteri görüşmesi yok"
+
+#: src/pages/CustomerChannelsDialog.tsx:94
+msgid "Reconnect"
+msgstr "Yeniden bağlan"
+
+#: src/pages/CustomerInbox.tsx:182
+msgid "Reply failed"
+msgstr "Yanıt gönderilemedi"
+
+#: src/pages/CustomerInbox.tsx:224
+#: src/pages/CustomerInbox.tsx:225
+msgid "Reply to customer"
+msgstr "Müşteriye yanıt ver"
+
+#: src/pages/CustomerInbox.tsx:147
+msgid "Resume bot"
+msgstr "Botu devam ettir"
+
+#: src/pages/CustomerChannelsDialog.tsx:114
+msgid "Setup guide"
+msgstr "Kurulum kılavuzu"
+
+#: src/pages/Shell.tsx:2590
+msgid "Staff"
+msgstr "Personel"
+
+#: src/pages/CustomerInbox.tsx:145
+msgid "Take over"
+msgstr "Devral"
+
+#: src/pages/CustomerChannelsDialog.tsx:99
+msgid "Webhook URL"
+msgstr "Webhook URL’si"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Apps"
+msgstr "Uygulamalar"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Could not load channels"
+msgstr "Kanallar yüklenemedi"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Agent unavailable"
+msgstr "Ajan kullanılamıyor"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No channels connected"
+msgstr "Bağlı kanal yok"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Create an agent to connect a channel"
+msgstr "Kanal bağlamak için bir ajan oluşturun"

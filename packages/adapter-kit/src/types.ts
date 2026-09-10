@@ -353,6 +353,8 @@ export interface AgentRunRequest {
   history: Array<{ id?: string; role: "user" | "assistant" | "system"; content: string }>;
   currentTurnImages?: AgentInputImage[];
   tools: ConnectorTool[];
+  /** Disable the legacy built-in tool fallback when tools is empty. */
+  allowBuiltinTools?: boolean;
   model: AgentRunModel;
   /** Resolve an explicitly requested helper model within the active user and space scope. */
   resolveModel?: (provider: string, modelId: string) => Promise<AgentRunModel>;
@@ -460,6 +462,7 @@ export interface VoiceTranscribeRequest {
 }
 
 export interface BackgroundJobPayloads {
+  "customer.process": Record<string, never>;
   "run.continue": { runId: string };
   "routine.wakeup": { routineId: string; scheduledFor: string };
   "computer.sleep": { computerId: string };
@@ -542,6 +545,8 @@ export interface MessagingSendResult {
 export type TeamChatMessageKind = "direct" | "mention" | "ambient";
 
 export interface MessagingInboundMessage {
+  /** Receipt identity when distinct from the provider message identity. */
+  receiptId?: string;
   type: "message";
   provider: string;
   /** Per-message transport when one provider spans multiple networks (for example SMS vs RCS). */
@@ -562,6 +567,8 @@ export interface MessagingInboundMessage {
   participants: string[];
   content: string;
   mediaUrl: string | null;
+  /** Provider timestamp in milliseconds, for channel reply-window enforcement. */
+  sentAt?: number;
   /** Team-room workspace/team id when the platform reports one (Slack team_id, …). */
   workspaceId?: string;
   /** Stable conversation key within the workspace (channel id, DM key, …). */

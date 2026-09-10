@@ -12,7 +12,7 @@ import type {
   MessagingSendResult,
   MessagingSurface,
 } from "@rakazo/adapter-kit";
-import type { Adapter, Message, Thread } from "chat";
+import type { Adapter, Message, StateAdapter, Thread } from "chat";
 import { Chat } from "chat";
 
 /** Per-webhook drain of Chat SDK waitUntil work + inbound sink failures. */
@@ -30,6 +30,8 @@ export const MESSAGING_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
  * extra hooks cover the few per-platform facts the SDK does not surface.
  */
 export interface MessagingPlatform {
+  receiptId?: (raw: unknown) => string | undefined;
+  send?: (request: MessagingSendRequest) => Promise<{ id: string }>;
   provider: string;
   capabilities: MessagingCapabilities;
   adapter: Adapter;
@@ -65,13 +67,16 @@ export class ChatSdkMessagingSurface implements MessagingSurface {
   private sink: ((event: MessagingInboundEvent) => Promise<void>) | undefined;
   private initialized: Promise<void> | undefined;
 
-  constructor(platforms: MessagingPlatform[], options: { userName?: string } = {}) {
+  constructor(
+    platforms: MessagingPlatform[],
+    options: { userName?: string; state?: StateAdapter } = {},
+  ) {
     if (platforms.length === 0) throw new Error("ChatSdkMessagingSurface needs >=1 platform");
     for (const platform of platforms) this.byProvider.set(platform.provider, platform);
     this.chat = new Chat({
       userName: options.userName ?? "rakazo",
       adapters: Object.fromEntries(platforms.map((p) => [p.provider, p.adapter])),
-      state: createMemoryState(),
+      state: options.state ?? createMemoryState(),
       // The SDK default ("drop") takes a per-conversation lock and discards
       // any message that arrives while it is held — and the LockError is
       // swallowed into waitUntil, so the webhook still ACKs 200 and the
@@ -124,6 +129,15 @@ export class ChatSdkMessagingSurface implements MessagingSurface {
     this.sink = sink;
   }
 
+  async getUserProfile(provider: string, userId: string) {
+    const adapter = this.byProvider.get(provider)?.adapter;
+    if (!adapter?.getUser) return null;
+    await this.ensureInitialized();
+    const user = await adapter.getUser(userId);
+    if (!user || user.userId !== userId) return null;
+    return { name: user.fullName || user.userName, avatarUrl: user.avatarUrl ?? null };
+  }
+
   handleWebhook(provider: string, request: Request): Promise<Response> | null {
     const platform = this.byProvider.get(provider);
     if (!platform) return null;
@@ -135,7 +149,10 @@ export class ChatSdkMessagingSurface implements MessagingSurface {
     _context: AdapterContext,
   ): Promise<MessagingSendResult> {
     await this.ensureInitialized();
-    const sent = await this.chat.thread(request.threadId).post(request.body);
+    const platform = this.byProvider.get(providerOfThreadId(request.threadId));
+    const sent = platform?.send
+      ? await platform.send(request)
+      : await this.chat.thread(request.threadId).post(request.body);
     const handle = "id" in sent && typeof sent.id === "string" ? sent.id : "";
     return { handle };
   }
@@ -236,18 +253,22 @@ export class ChatSdkMessagingSurface implements MessagingSurface {
     // a vendor 200 cannot race ahead of provision/enqueue, and surface sink
     // failures as 5xx so the vendor retries.
     const drain = { pending: [] as Promise<unknown>[], failed: false };
-    const response = await webhookDrain.run(drain, async () => {
-      const adapterResponse = await this.chat.webhooks[platform.provider]!(forwarded, {
-        waitUntil: (task) => {
-          drain.pending.push(task);
-        },
+    const response = await webhookDrain
+      .run(drain, async () => {
+        const adapterResponse = await this.chat.webhooks[platform.provider]!(forwarded, {
+          waitUntil: (task) => {
+            drain.pending.push(task);
+          },
+        });
+        await Promise.all(drain.pending);
+        return adapterResponse;
+      })
+      .catch((error) => {
+        if (!drain.failed) throw error;
+        return null;
       });
-      await Promise.all(drain.pending);
-      return adapterResponse;
-    });
-    if (drain.failed) {
+    if (!response || drain.failed)
       return new Response("Inbound processing failed", { status: 500 });
-    }
     // Status peeking runs only after the adapter verified and accepted the
     // request — a forged webhook must not be able to flip outbox rows.
     if (platform.peekStatus && response.status < 300 && body) {
@@ -271,14 +292,17 @@ export class ChatSdkMessagingSurface implements MessagingSurface {
       provider,
       ...(transport ? { transport } : {}),
       handle: message.id,
+      receiptId: platform.receiptId?.(message.raw),
       threadId: thread.id,
       isDirect,
       from: message.author.userId,
+      ...(message.author.isBot === true ? { senderIsBot: true } : {}),
       fromLabel: fromLabel === message.author.userId ? null : fromLabel,
       channelName: isDirect ? null : (platform.channelName?.(message.raw) ?? null),
       participants: isDirect ? [] : (platform.participants?.(message.raw) ?? []),
       content: message.text ?? "",
       mediaUrl: message.attachments.find((attachment) => attachment.url)?.url ?? null,
+      sentAt: message.metadata.dateSent.getTime(),
     };
     const enrichment = platform.enrichTeamRoom?.(message.raw, base) ?? {};
     return { ...base, ...enrichment };

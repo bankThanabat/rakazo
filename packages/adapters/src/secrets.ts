@@ -34,7 +34,7 @@ export class EncryptedSecretStore implements SecretStore {
     return { id: recordId, ciphertext: this.seal(plaintext, recordId) };
   }
 
-  private seal(plaintext: string, recordId: string): string {
+  seal(plaintext: string, recordId: string): string {
     const salt = randomBytes(SALT_BYTES);
     const iv = randomBytes(IV_BYTES);
     const cipher = createCipheriv("aes-256-gcm", keyFrom(this.encryptionKey, salt), iv);

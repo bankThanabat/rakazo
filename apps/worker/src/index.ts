@@ -1,5 +1,5 @@
 import type { JobPublisher, JobWorkerHost } from "@rakazo/adapter-kit";
-import { ComposioConnector, IntegrationProviderSettings } from "@rakazo/adapters";
+import { ComposioConnector, CustomerService, IntegrationProviderSettings } from "@rakazo/adapters";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 
 loadRootEnv();
@@ -181,7 +181,15 @@ async function main() {
     cloudAgent,
   });
 
+  const customers = new CustomerService({
+    prisma,
+    jobs,
+    secrets,
+    runtime,
+    resolveModel: executor.resolveModel,
+  });
   const jobHandlers = createBackgroundJobHandlers({
+    customers,
     executor,
     prisma,
     sandbox,
@@ -202,6 +210,7 @@ async function main() {
     jobs,
     events,
     leadership: createPostgresReconciliationLeadership(pool),
+    reconcileCustomers: () => customers.schedule(),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
   });
@@ -214,6 +223,7 @@ async function main() {
     try {
       await reconciler.stop();
       await jobHost.stop();
+      await customers.stop();
       await jobs.close();
       await realtime.close();
       await connector.stop();
