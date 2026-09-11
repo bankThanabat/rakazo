@@ -3835,3 +3835,23 @@ msgstr "연결된 채널 없음"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "Create an agent to connect a channel"
 msgstr "채널을 연결하려면 에이전트를 만드세요"
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "MCP endpoint"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Brain label"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Allow writing"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Recall only"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Recall and write"
+msgstr ""

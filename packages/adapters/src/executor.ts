@@ -608,7 +608,7 @@ async function loadLivePluginSlugs(
   }
 }
 
-async function persistLivePluginConnections(
+export async function persistLivePluginConnections(
   prisma: PrismaClient,
   owner: { userId: string; spaceId: string },
   rows: PluginConnectionRow[],
@@ -624,6 +624,9 @@ async function persistLivePluginConnections(
       },
       data: { status: "connected" },
     });
+    for (const row of rows) {
+      if (sync.connectIds.includes(row.id)) row.status = "connected";
+    }
   }
   if (sync.revokeIds.length > 0) {
     await prisma.connection.updateMany({
@@ -634,6 +637,9 @@ async function persistLivePluginConnections(
       },
       data: { status: "revoked" },
     });
+    for (const row of rows) {
+      if (sync.revokeIds.includes(row.id)) row.status = "revoked";
+    }
   }
 }
 
@@ -1142,13 +1148,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
           }
         }
         const connectedComposio = mergeConnectedPlugins(composioRows, liveSlugs);
-        const activeKeys = new Set(
-          connectedComposio.map((connection) => `composio:${connection.provider}`),
-        );
-        const connectedPlugins = storedConnections.filter(
-          (connection) =>
-            connection.status === "connected" ||
-            activeKeys.has(`${connection.connectorId}:${connection.provider}`),
+        const connectedPlugins = selectRunConnections(
+          storedConnections,
+          connectedComposio.map((connection) => connection.provider),
         );
         const context = {
           operationId: runId,
@@ -2717,6 +2719,27 @@ export function createRunExecutor(deps: ExecutorDeps) {
               ),
             );
           }
+          if (name === "forget_memory") {
+            if (!semanticMemory?.forget) {
+              return finish({
+                error: "This memory provider does not support forgetting individual facts.",
+              });
+            }
+            return finish(
+              await semanticMemory.forget(
+                {
+                  id: String(args.id ?? ""),
+                  ...(typeof args.entity === "string" && args.entity.trim()
+                    ? { entity: args.entity.trim() }
+                    : {}),
+                  ...(typeof args.reason === "string" && args.reason.trim()
+                    ? { reason: args.reason.trim() }
+                    : {}),
+                },
+                context,
+              ),
+            );
+          }
           if (name === "list_secrets") return listBotSecrets(deps.prisma, run);
           if (name === "forget_secret") {
             const parsed = BotSecretName.safeParse(args.name);
@@ -4157,7 +4180,7 @@ export function selectBuiltinToolsForRun(options: {
   ).filter(
     (tool) =>
       !options.messagingChannelRun ||
-      (!["remember", "save_memory", "recall_memory"].includes(tool.name) &&
+      (!["remember", "save_memory", "recall_memory", "forget_memory"].includes(tool.name) &&
         !tool.name.startsWith("scratchpad_")),
   );
 }
@@ -4572,6 +4595,17 @@ async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Pr
     release();
     if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
   }
+}
+
+export function selectRunConnections<
+  T extends { connectorId: string; provider: string; status: string },
+>(rows: T[], connectedComposioProviders: string[]): T[] {
+  const activeKeys = new Set(connectedComposioProviders.map((provider) => `composio:${provider}`));
+  return rows.filter(
+    (row) =>
+      row.status !== "revoked" &&
+      (row.status === "connected" || activeKeys.has(`${row.connectorId}:${row.provider}`)),
+  );
 }
 
 export async function loadCurrentTurnImages(

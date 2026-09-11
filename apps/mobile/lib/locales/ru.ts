@@ -263,6 +263,11 @@ export const RU_MESSAGES: Record<string, string> = {
   "Don’t have an account?": "Нет аккаунта?",
   Done: "Готово",
   Email: "Электронная почта",
+  Embedded: "Встроенная",
+  "{channel} · {id}": "{channel} · {id}",
+  "{channel} · {id} · {date}": "{channel} · {id} · {date}",
+  "OTA · {id}": "OTA · {id}",
+  "OTA · {id} · {date}": "OTA · {id} · {date}",
   "Enter a server URL": "Введите URL-адрес сервера",
   "Enter this code in your browser:": "Введите этот код в браузере:",
   "Enter your current password, then confirm permanent deletion of your account and all associated data.":
@@ -377,7 +382,7 @@ export const RU_MESSAGES: Record<string, string> = {
   Pin: "Закрепить",
   "Please try again.": "Повторите попытку.",
   "Point this app at your self-hosted Rakazo origin, the same HTTPS URL you open in a browser.":
-    "Направьте это приложение на свой собственный источник Rakazo — тот же URL-адрес HTTPS, который вы открываете в браузере.",
+    "Направьте это приложение на свой собственный источник Rakazo, тот же URL-адрес HTTPS, который вы открываете в браузере.",
   Private: "Личный",
   Providers: "Провайдеры",
   "Public servers need https://. HTTP only works on your local network.":

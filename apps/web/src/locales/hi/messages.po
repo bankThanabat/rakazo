@@ -3835,3 +3835,23 @@ msgstr "कोई चैनल कनेक्ट नहीं है"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "Create an agent to connect a channel"
 msgstr "चैनल कनेक्ट करने के लिए एक एजेंट बनाएँ"
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "MCP endpoint"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Brain label"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Allow writing"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Recall only"
+msgstr ""
+
+#: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
+msgid "Recall and write"
+msgstr ""
