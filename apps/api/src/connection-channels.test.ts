@@ -1,7 +1,5 @@
-import { createHmac } from "node:crypto";
 import { EncryptedSecretStore } from "@rakazo/adapters";
 import { beforeEach, expect, it, vi } from "vitest";
-import { parseLineWebhook } from "../../../packages/adapters/src/line-webhook.js";
 import { ConnectionChannels, connectionIncomingDto } from "./connection-channels.js";
 
 const bridges = vi.hoisted(
@@ -32,7 +30,7 @@ function fixture() {
     userId: actor.userId,
     status: "connected",
     connectorId: "open-connector",
-    provider: "line",
+    provider: "sample",
     providerRef: "alias-a",
     displayName: "Support",
     metadata: {},
@@ -67,10 +65,8 @@ function fixture() {
     $transaction: (callback: any) => callback(prisma),
   };
   const provider = {
-    catalog: async () => [{ slug: "line", incomingMessages: true }],
-    receiveWebhook: vi.fn((request, key, context) =>
-      parseLineWebhook(request, key, context.connectedConnections[0].id),
-    ),
+    catalog: async () => [{ slug: "sample", incomingMessages: true }],
+    receiveWebhook: vi.fn(async () => ({ status: 200, events: [] })),
     sendReply: vi.fn(async () => ({ handle: "sent" })),
   };
   const channels = new ConnectionChannels({
@@ -86,14 +82,7 @@ function fixture() {
     webhookOrigin: "https://example.test",
     channelSecret: "fake-channel-secret",
   };
-  const request = (key = input.channelSecret, events: unknown[] = []) => {
-    const body = JSON.stringify({ events });
-    return new Request("https://example.test/webhook", {
-      method: "POST",
-      headers: { "x-line-signature": createHmac("sha256", key).update(body).digest("base64") },
-      body,
-    });
-  };
+  const request = () => new Request("https://example.test/webhook", { method: "POST" });
   return { channels, prisma, provider, actor, input, row, request };
 }
 it("only lets the account owner configure a bot in the same team", async () => {
@@ -113,30 +102,6 @@ it("stores encrypted credentials and returns only public setup fields", async ()
   expect(connectionIncomingDto(f.row.metadata)).toEqual(result);
   expect(JSON.stringify(f.prisma.secret.upsert.mock.calls)).not.toContain(f.input.channelSecret);
   expect(JSON.stringify(f.row)).not.toContain(f.input.channelSecret);
-  await f.channels.stop();
-});
-it("rejects unconfigured and unsigned requests and accepts LINE verification", async () => {
-  const f = fixture();
-  expect((await f.channels.receive(f.row.id, f.request())).status).toBe(404);
-  await f.channels.save(f.actor, f.input);
-  expect((await f.channels.receive(f.row.id, f.request("wrong"))).status).toBe(401);
-  expect((await f.channels.receive(f.row.id, f.request())).status).toBe(200);
-  expect(bridges[0]!.receive).not.toHaveBeenCalled();
-  const events = [
-    {
-      type: "message",
-      webhookEventId: "event-a",
-      source: { type: "user", userId: "contact-a" },
-      message: { type: "text", text: "Hello" },
-    },
-  ];
-  expect(
-    (await f.channels.receive(f.row.id, f.request(f.input.channelSecret, events))).status,
-  ).toBe(200);
-  expect(bridges[0]!.receive).toHaveBeenCalledWith(
-    expect.objectContaining({ workspaceId: "account-a", eventId: "account-a:event-a" }),
-    { reconcile: false },
-  );
   await f.channels.stop();
 });
 it("stops disabled connections and checks persisted permission before sending", async () => {

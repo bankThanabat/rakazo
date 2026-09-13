@@ -2,12 +2,11 @@ import type { PrismaClient } from "@rakazo/db";
 import { vi } from "vitest";
 import { OpenConnector } from "./open-connector.js";
 import type { OpenConnectorProvider } from "./open-connector-catalog.js";
-import { openConnectorLineChannel } from "./open-connector-line-channel.js";
 import { EncryptedSecretStore } from "./secrets.js";
 
-export const lineTestAction = {
-  id: "line.send_push_text",
-  service: "line",
+export const sampleAction = {
+  id: "sample.send",
+  service: "sample",
   execution: { locallyExecutable: true },
   description: "Send text",
   inputSchema: {
@@ -39,11 +38,11 @@ interface TestSecret {
 export function createOpenConnectorFixture() {
   const providers: OpenConnectorProvider[] = [
     {
-      service: "line",
-      displayName: "LINE",
+      service: "sample",
+      displayName: "Sample app",
       categories: ["Messaging"],
-      auth: [{ type: "api_key", label: "Channel access token" }],
-      actions: [lineTestAction],
+      auth: [{ type: "api_key", label: "API key" }],
+      actions: [sampleAction],
     },
   ];
   const requests = new Map<
@@ -236,7 +235,6 @@ export function createOpenConnectorFixture() {
     prisma,
     secrets,
     fetch: fetcher,
-    channels: [openConnectorLineChannel],
   });
   function authorize(id: string, scopes: string[] = []) {
     const request = requests.get(id)!;

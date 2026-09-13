@@ -6,7 +6,7 @@ for (const viewport of [
   { width: 1280, height: 900 },
   { width: 390, height: 844 },
 ]) {
-  test(`OpenConnector catalog connects LINE and an unknown app at ${viewport.width}px`, async ({
+  test(`OpenConnector catalog connects API-key and custom-credential apps at ${viewport.width}px`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize(viewport);
@@ -22,13 +22,12 @@ for (const viewport of [
     const catalog = [
       {
         connectorId: "open-connector",
-        slug: "line",
-        name: "LINE Official Account",
-        logo: "https://assets.example.test/line.svg",
+        slug: "sample",
+        name: "Sample app",
+        logo: "https://assets.example.test/sample.svg",
         connected: false,
         noAuth: false,
         scope: "team",
-        incomingMessages: true,
         categories: ["Messaging"],
         availability: "available",
       },
@@ -59,14 +58,14 @@ for (const viewport of [
       else if (path === "connections/setup")
         result = {
           methods:
-            input.provider === "line"
+            input.provider === "sample"
               ? [
                   {
                     type: "api_key",
                     fields: [
                       {
                         key: "apiKey",
-                        label: "Channel access token",
+                        label: "API key",
                         inputType: "password",
                         required: true,
                         secret: true,
@@ -99,7 +98,6 @@ for (const viewport of [
         };
       else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
       else if (path === "connections/list") result = accounts;
-      else if (path === "bots/list") result = [{ id: "chief-test", name: "Chief" }];
       else if (path === "connections/begin") {
         started.push(input);
         const row: Connection = {
@@ -120,57 +118,42 @@ for (const viewport of [
       else if (path === "connections/revoke") {
         accounts.find((row) => row.id === input.connectionId)!.status = "revoked";
         result = { ok: true };
-      } else if (path === "connections/incoming/save") {
-        const row = accounts.find((row) => row.id === input.connectionId)!;
-        row.incoming = {
-          botId: input.botId,
-          webhookUrl: `${input.webhookOrigin}/api/v1/connections/${row.id}/webhook`,
-        };
-        result = row.incoming;
       } else if (path === "connections/tools")
         result = [{ name: `${input.provider}.send`, description: "Send text" }];
       else if (path !== "capabilities/list") throw new Error(`Unexpected RPC: ${path}`);
       await route.fulfill({ json: { json: result } });
     });
-    await page.goto("/e2e/fixtures/line-connector.html");
-    await expect(page.getByTestId("featured-connectors")).not.toContainText("LINE");
+    await page.goto("/e2e/fixtures/open-connector.html");
+    await expect(page.getByTestId("featured-connectors")).not.toContainText("Sample app");
     await page.getByRole("button", { name: "Browse apps", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Future app, Connect", exact: true }),
     ).toBeVisible();
-    const lineCard = page.getByRole("button", {
-      name: "LINE Official Account, Connect",
+    const sampleCard = page.getByRole("button", {
+      name: "Sample app, Connect",
       exact: true,
     });
     await expect
-      .poll(() => lineCard.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth))
+      .poll(() => sampleCard.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth))
       .toBeGreaterThan(0);
     const futureCard = page.getByRole("button", { name: "Future app, Connect", exact: true });
     await expect(futureCard.locator("img")).toHaveCount(0);
     await expect(futureCard.getByText("F", { exact: true })).toBeVisible();
     await captureScreenshot(page, testInfo, `openconnector-catalog-${viewport.width}`);
-    await page.getByRole("button", { name: "LINE Official Account, Connect", exact: true }).click();
+    await page.getByRole("button", { name: "Sample app, Connect", exact: true }).click();
     await page.getByRole("button", { name: "Connect", exact: true }).click();
-    const token = page.getByLabel("Channel access token", { exact: true });
+    const token = page.getByLabel("API key", { exact: true });
     await expect(token).toHaveAttribute("type", "password");
-    await token.fill("fake-line-token");
-    await captureScreenshot(page, testInfo, `openconnector-line-auth-${viewport.width}`);
+    await token.fill("fake-account-token");
+    await captureScreenshot(page, testInfo, `openconnector-api-key-auth-${viewport.width}`);
     await page.getByRole("button", { name: "Connect account", exact: true }).click();
-    await expect(page.getByLabel("Account label")).toHaveValue("LINE Official Account");
+    await expect(page.getByLabel("Account label")).toHaveValue("Sample app");
     expect(started[0]).toMatchObject({
       connectorId: "open-connector",
-      provider: "line",
-      auth: { type: "api_key", values: { apiKey: "fake-line-token" } },
+      provider: "sample",
+      auth: { type: "api_key", values: { apiKey: "fake-account-token" } },
     });
-    await page.getByRole("button", { name: "Automatic replies", exact: true }).click();
-    await page.getByLabel("Reply with").selectOption("chief-test");
-    await page.getByLabel("Public HTTPS origin").fill("https://example.test");
-    await page.getByLabel("Channel secret", { exact: true }).fill("fake-channel-secret");
-    await page.getByRole("button", { name: "Enable replies", exact: true }).click();
-    await expect(page.getByLabel("Webhook URL")).toHaveValue(
-      "https://example.test/api/v1/connections/connection-1/webhook",
-    );
-    await captureScreenshot(page, testInfo, `openconnector-line-connected-${viewport.width}`);
+    await captureScreenshot(page, testInfo, `openconnector-connected-${viewport.width}`);
     await page.getByRole("button", { name: "Back to apps", exact: true }).click();
     await page.getByLabel("Search OpenConnector apps").fill("future");
     await page.getByRole("button", { name: "Future app, Connect", exact: true }).click();
@@ -216,7 +199,7 @@ test("server owner configures OpenConnector without exposing server credentials 
     saved.push(route.request().postDataJSON().json);
     await route.fulfill({ json: { json: { ok: true } } });
   });
-  await page.goto("/e2e/fixtures/line-connector.html?setup");
+  await page.goto("/e2e/fixtures/open-connector.html?setup");
   await page.getByRole("button", { name: "OpenConnector", exact: true }).click();
   await page.getByLabel("Server URL", { exact: true }).fill("https://connector.example.test");
   await page.getByLabel("Admin token", { exact: true }).fill("fake-admin-token");
@@ -233,9 +216,7 @@ test("server owner configures OpenConnector without exposing server credentials 
   await captureScreenshot(page, testInfo, "open-connector-configured");
 });
 
-test("a teammate can inspect a shared LINE account without management controls", async ({
-  page,
-}) => {
+test("a teammate can inspect a shared account without management controls", async ({ page }) => {
   const mutations: string[] = [];
   await page.route("**/rpc/**", async (route) => {
     const path = new URL(route.request().url()).pathname.replace("/rpc/", "");
@@ -247,8 +228,8 @@ test("a teammate can inspect a shared LINE account without management controls",
         : [
             {
               connectorId: "open-connector",
-              slug: "line",
-              name: "LINE Official Account",
+              slug: "sample",
+              name: "Sample app",
               logo: null,
               connected: false,
               noAuth: false,
@@ -269,7 +250,7 @@ test("a teammate can inspect a shared LINE account without management controls",
         {
           id: "shared",
           connectorId: "open-connector",
-          provider: "line",
+          provider: "sample",
           displayName: "Support",
           status: "connected",
           canManage: false,
@@ -279,13 +260,13 @@ test("a teammate can inspect a shared LINE account without management controls",
       ];
     else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
     else if (path === "connections/tools")
-      result = [{ name: "line_send_push_text", description: "Send text" }];
+      result = [{ name: "sample.send", description: "Send text" }];
     else if (path !== "capabilities/list") mutations.push(path);
     await route.fulfill({ json: { json: result } });
   });
-  await page.goto("/e2e/fixtures/line-connector.html");
+  await page.goto("/e2e/fixtures/open-connector.html");
   await page.getByRole("button", { name: "Browse apps", exact: true }).click();
-  await page.getByRole("button", { name: "LINE Official Account, Manage", exact: true }).click();
+  await page.getByRole("button", { name: "Sample app, Manage", exact: true }).click();
   const label = page.getByLabel("Account label");
   await expect(label).toHaveValue("Support");
   await expect(label).not.toBeEditable();
@@ -333,7 +314,7 @@ test("large catalogs stay bounded and restore focus after browsing more results"
               : [];
     await route.fulfill({ json: { json: result } });
   });
-  await page.goto("/e2e/fixtures/line-connector.html");
+  await page.goto("/e2e/fixtures/open-connector.html");
   await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   const entries = page.getByRole("button", { name: /^App \d+, Connect$/ });
   await expect(entries).toHaveCount(60);
@@ -410,7 +391,7 @@ test("OAuth reconnect survives reload and cancellation preserves the existing ac
     else if (path !== "capabilities/list") mutations.push(path);
     await route.fulfill({ json: { json: result } });
   });
-  await page.goto("/e2e/fixtures/line-connector.html");
+  await page.goto("/e2e/fixtures/open-connector.html");
   await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   await page.getByRole("button", { name: "OAuth app, Manage", exact: true }).click();
   await expect(page.getByText("Reconnect required", { exact: true })).toBeVisible();

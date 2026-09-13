@@ -12,7 +12,7 @@ const actor: Actor = {
   isDeploymentOwner: false,
 };
 
-it("passes the user's channel token to OpenConnector and persists only its scoped reference", async () => {
+it("passes the user's credential to OpenConnector and persists only its scoped reference", async () => {
   const fixture = createOpenConnectorFixture();
   const connector = fixture.adapter;
   const writes: unknown[] = [];
@@ -44,9 +44,9 @@ it("passes the user's channel token to OpenConnector and persists only its scope
       body: JSON.stringify({
         json: {
           connectorId: "open-connector",
-          provider: "line",
+          provider: "sample",
           displayName: "Support",
-          credential: "fake-user-line-token",
+          credential: "fake-user-account-token",
         },
       }),
     }),
@@ -68,11 +68,11 @@ it("passes the user's channel token to OpenConnector and persists only its scope
       }),
     }),
   );
-  expect(JSON.stringify(writes)).not.toContain("fake-user-line-token");
+  expect(JSON.stringify(writes)).not.toContain("fake-user-account-token");
   expect(JSON.stringify(writes)).not.toContain("fake-admin-token");
   expect(fixture.fetcher).toHaveBeenCalledWith(
-    "https://connector.example.test/api/connections/line",
-    expect.objectContaining({ body: expect.stringContaining("fake-user-line-token") }),
+    "https://connector.example.test/api/connections/sample",
+    expect.objectContaining({ body: expect.stringContaining("fake-user-account-token") }),
   );
   expect(JSON.stringify([...fixture.records.values()])).not.toContain("fake-runtime-token-");
 });
@@ -111,7 +111,7 @@ it("lists team connections and discovers tools for teammates while keeping manag
     signal: new AbortController().signal,
   };
   const auth = await fixture.adapter.begin(
-    { provider: "line", redirectUrl: "https://example.test", credential: "fake-line-token" },
+    { provider: "sample", redirectUrl: "https://example.test", credential: "fake-account-token" },
     ownerContext,
   );
   const rows = [
@@ -121,7 +121,7 @@ it("lists team connections and discovers tools for teammates while keeping manag
       spaceId: actor.spaceId,
       scope: "team",
       connectorId: "open-connector",
-      provider: "line",
+      provider: "sample",
       displayName: "Support",
       status: "connected",
       providerRef: auth.state,
@@ -144,7 +144,7 @@ it("lists team connections and discovers tools for teammates while keeping manag
       spaceId: "other-team",
       scope: "team",
       connectorId: "open-connector",
-      provider: "line",
+      provider: "sample",
       displayName: "Foreign",
       status: "connected",
       createdAt: new Date("2026-01-01"),
@@ -189,8 +189,8 @@ it("lists team connections and discovers tools for teammates while keeping manag
     expect.objectContaining({ id: "team-account", canManage: false }),
   ]);
   expect(
-    (await rpc("tools", { connectorId: "open-connector", provider: "line" })).body.json,
-  ).toEqual([expect.objectContaining({ name: "line.send_push_text" })]);
+    (await rpc("tools", { connectorId: "open-connector", provider: "sample" })).body.json,
+  ).toEqual([expect.objectContaining({ name: "sample.send" })]);
   expect((await rpc("list", {}, { ...teammate, spaceId: "empty-team" })).body.json).toEqual([]);
   expect(
     (await rpc("rename", { connectionId: "team-account", displayName: "Changed" })).status,
@@ -205,7 +205,11 @@ it("restores pending authorization only for its creator without a remote catalog
   const fixture = createOpenConnectorFixture();
   fixture.providers[0]!.auth = [{ type: "oauth2" }];
   const started = await fixture.adapter.begin(
-    { provider: "line", redirectUrl: "https://example.test", auth: { type: "oauth2", values: {} } },
+    {
+      provider: "sample",
+      redirectUrl: "https://example.test",
+      auth: { type: "oauth2", values: {} },
+    },
     { ...actor, operationId: "test", traceId: "test", signal: new AbortController().signal },
   );
   const row = {
@@ -213,7 +217,7 @@ it("restores pending authorization only for its creator without a remote catalog
     spaceId: actor.spaceId,
     userId: actor.userId,
     connectorId: "open-connector",
-    provider: "line",
+    provider: "sample",
     providerRef: started.state,
     displayName: "Support",
     status: "pending",

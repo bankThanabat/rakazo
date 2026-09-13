@@ -2,7 +2,7 @@ import type { AdapterContext, ConnectorCall } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenConnector } from "./open-connector.js";
 import {
-  lineTestAction as action,
+  sampleAction as action,
   createOpenConnectorFixture as fixture,
 } from "./open-connector-test-fixture.js";
 
@@ -14,9 +14,9 @@ const owner: AdapterContext = {
   signal: new AbortController().signal,
 };
 
-async function connect(adapter: OpenConnector, context = owner, credential = "fake-line-token") {
+async function connect(adapter: OpenConnector, context = owner, credential = "fake-account-token") {
   return adapter.begin(
-    { provider: "line", redirectUrl: "https://example.test/app", credential },
+    { provider: "sample", redirectUrl: "https://example.test/app", credential },
     context,
   );
 }
@@ -27,7 +27,7 @@ function connected(state: string, context = owner): AdapterContext {
       {
         id: "connection-1",
         connectorId: "open-connector",
-        externalId: "line",
+        externalId: "sample",
         displayName: "Support",
         providerRef: state,
       },
@@ -55,7 +55,7 @@ describe("OpenConnector accounts", () => {
   it("connects, discovers and sends through the exact owned account, then disconnects it", async () => {
     const f = fixture();
     const catalog = await f.adapter.catalog(owner);
-    expect(catalog[0]).toMatchObject({ slug: "line", scope: "team", availability: "available" });
+    expect(catalog[0]).toMatchObject({ slug: "sample", scope: "team", availability: "available" });
     const { state, authorizationUrl } = await connect(f.adapter);
     expect(authorizationUrl).toBeNull();
     expect(await f.adapter.complete({ state }, owner)).toEqual({ connectionRef: state });
@@ -107,7 +107,7 @@ describe("OpenConnector accounts", () => {
     const { state, scope } = await connect(f.adapter);
     expect(scope).toBe("team");
     const teammate = connected(state, { ...owner, userId: "teammate" });
-    expect(await f.adapter.listConnectedExternalIds(teammate)).toEqual(["line"]);
+    expect(await f.adapter.listConnectedExternalIds(teammate)).toEqual(["sample"]);
     expect(await f.adapter.discoverTools(teammate)).toHaveLength(3);
     expect(await collect(f.adapter.execute(call(), teammate))).toEqual([
       expect.objectContaining({ type: "result" }),
@@ -120,15 +120,12 @@ describe("OpenConnector accounts", () => {
     await connect(f.adapter);
     const second = await connect(f.adapter);
     const token = [...f.tokens.keys()][0]!;
-    const response = await f.fetcher(
-      "https://connector.example.test/v1/actions/line.send_push_text",
-      {
-        method: "POST",
-        redirect: "error",
-        headers: { authorization: `Bearer ${token}`, "x-oo-connector-alias": second.state },
-        body: JSON.stringify({ input: call().args }),
-      },
-    );
+    const response = await f.fetcher("https://connector.example.test/v1/actions/sample.send", {
+      method: "POST",
+      redirect: "error",
+      headers: { authorization: `Bearer ${token}`, "x-oo-connector-alias": second.state },
+      body: JSON.stringify({ input: call().args }),
+    });
     expect(response.status).toBe(403);
     expect(f.sent).toEqual([]);
   });
@@ -139,7 +136,7 @@ describe("OpenConnector accounts", () => {
     const second = await connect(f.adapter);
     expect(first.state).not.toBe(second.state);
     expect((await f.adapter.catalog(owner))[0]?.connected).toBe(false);
-    expect(await f.adapter.connectionReady(owner, "line")).toBe(false);
+    expect(await f.adapter.connectionReady(owner, "sample")).toBe(false);
     await f.adapter.revoke(first.state, owner);
     await expect(f.adapter.complete({ state: second.state }, owner)).resolves.toEqual({
       connectionRef: second.state,
@@ -241,11 +238,11 @@ describe("catalog-driven authentication", () => {
     f.providers[0]!.auth = [{ type: "oauth2" }];
     const auth = { type: "oauth2" as const, values: {} };
     const first = await f.adapter.begin(
-      { provider: "line", redirectUrl: "https://app.example.test", auth },
+      { provider: "sample", redirectUrl: "https://app.example.test", auth },
       owner,
     );
     const second = await f.adapter.begin(
-      { provider: "line", redirectUrl: "https://app.example.test", auth },
+      { provider: "sample", redirectUrl: "https://app.example.test", auth },
       owner,
     );
     expect(await f.adapter.pollConnection(first.state, owner)).toBeNull();
@@ -271,15 +268,15 @@ describe("catalog-driven authentication", () => {
     const { state } = await connect(f.adapter);
     const context = connected(state);
     await f.adapter.catalog(owner);
-    f.providers[0]!.actions.push({ ...action, id: "line.new_action" });
+    f.providers[0]!.actions.push({ ...action, id: "sample.new_action" });
     vi.advanceTimersByTime(31000);
     const request = call();
-    request.route!.toolName = "line.new_action";
+    request.route!.toolName = "sample.new_action";
     expect(await collect(f.adapter.execute(request, context))).toEqual([
       expect.objectContaining({ type: "result" }),
     ]);
     expect([...f.tokens.values()][0]).toMatchObject({
-      allowedActions: ["line.new_action", action.id],
+      allowedActions: ["sample.new_action", action.id],
       allowedConnections: [f.accounts.get(state)!.id],
       allowedProxies: [],
     });
@@ -305,7 +302,7 @@ it("cancels OAuth reconnect without deleting the existing team account", async (
   f.providers[0]!.auth = [{ type: "oauth2" }];
   const auth = { type: "oauth2" as const, values: {} };
   const first = await f.adapter.begin(
-    { provider: "line", redirectUrl: "https://example.test", auth },
+    { provider: "sample", redirectUrl: "https://example.test", auth },
     owner,
   );
   f.authorize([...f.requests.keys()][0]!);
@@ -326,12 +323,12 @@ it("supports providers larger than the runtime token rule limit without granting
   const f = fixture();
   f.providers[0]!.actions = Array.from({ length: 129 }, (_, index) => ({
     ...action,
-    id: `line.action_${index}`,
+    id: `sample.action_${index}`,
   }));
   const { state } = await connect(f.adapter);
   await f.adapter.complete({ state }, owner);
   expect([...f.tokens.values()][0]).toMatchObject({
-    allowedActions: ["line.*"],
+    allowedActions: ["sample.*"],
     allowedConnections: [f.accounts.get(state)!.id],
     allowedProxies: [],
   });
@@ -360,7 +357,7 @@ async function oauthFixture() {
   f.providers[0]!.auth = [{ type: "oauth2" }];
   const auth = { type: "oauth2" as const, values: {} };
   const started = await f.adapter.begin(
-    { provider: "line", redirectUrl: "https://app.example.test", auth },
+    { provider: "sample", redirectUrl: "https://app.example.test", auth },
     owner,
   );
   return { ...f, auth, ...started };
@@ -371,7 +368,7 @@ it("execution cannot erase a reconnect request, even during a runtime policy ref
   const f = await oauthFixture();
   f.authorize([...f.requests.keys()][0]!);
   await f.adapter.complete({ state: f.state }, owner);
-  f.providers[0]!.actions.push({ ...action, id: "line.new_action" });
+  f.providers[0]!.actions.push({ ...action, id: "sample.new_action" });
   vi.advanceTimersByTime(31000);
   let entered!: () => void;
   let release!: () => void;
