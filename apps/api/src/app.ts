@@ -81,7 +81,9 @@ import {
 import { requestLogging } from "@rakazo/logging/hono";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
+import { ConnectionChannels } from "./connection-channels.js";
 import { type AppEnv, loadEnv } from "./env.js";
 import { mountLocalSettings } from "./local-settings.js";
 import {
@@ -398,7 +400,16 @@ export async function createApp(
     : undefined;
   reconciler?.start();
 
+  const connectionChannels = new ConnectionChannels({
+    prisma,
+    secrets,
+    connectors: stack.connector,
+    events,
+    jobs,
+  });
+  await connectionChannels.start();
   const router = createRouter({
+    connectionChannels,
     prisma,
     events,
     auth,
@@ -504,6 +515,9 @@ export async function createApp(
     return actor;
   });
   mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
+  app.post("/api/v1/connections/:connectionId/webhook", bodyLimit({ maxSize: 1024 * 1024 }), (c) =>
+    connectionChannels.receive(c.req.param("connectionId"), c.req.raw),
+  );
   // Shared with stop so a shutdown during retry delays does not restart polling.
   let messagingStopped = false;
   let clearMessagingRetryDelay: (() => void) | undefined;
@@ -803,6 +817,7 @@ export async function createApp(
       // Abort in-flight continueRun boot waits before draining jobs so stop() cannot sit
       // on waitForComputerReady for the full boot-wait window during shared Postgres journeys.
       shutdown.abort();
+      await connectionChannels.stop();
       oauthLogins.abortAll();
       messagingStopped = true;
       clearMessagingRetryDelay?.();

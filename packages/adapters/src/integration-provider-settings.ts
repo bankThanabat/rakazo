@@ -1,12 +1,14 @@
 import type { AdapterContext, ConnectorCall, ManagedConnectorProvider } from "@rakazo/adapter-kit";
-import {
-  type IntegrationProviderConfig,
-  IntegrationProviderConfigSchema,
-  type IntegrationProviderId,
-  IntegrationProviderIdSchema,
+import type {
+  ConnectorAuthInput,
+  IntegrationProviderConfig,
+  IntegrationProviderId,
 } from "@rakazo/contracts";
+import { IntegrationProviderConfigSchema, IntegrationProviderIdSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { ComposioConnector } from "./composio-connector.js";
+import { OpenConnector } from "./open-connector.js";
+import { openConnectorLineChannel } from "./open-connector-line-channel.js";
 import { PipedreamConnector } from "./pipedream-connector.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -30,6 +32,12 @@ export class IntegrationProviderSettings {
 
   private create(config: IntegrationProviderConfig): ManagedConnectorProvider {
     if (this.factory) return this.factory(config);
+    if (config.provider === "open-connector") {
+      return new OpenConnector(
+        { ...config, identitySecret: this.identitySecret },
+        { prisma: this.prisma, secrets: this.secrets, channels: [openConnectorLineChannel] },
+      );
+    }
     return config.provider === "composio"
       ? new ComposioConnector(config.apiKey)
       : new PipedreamConnector({ ...config, identitySecret: this.identitySecret });
@@ -68,7 +76,8 @@ export class IntegrationProviderSettings {
     const adapter = this.create(config);
     try {
       // Exercises authenticated access before replacing working credentials.
-      await adapter.listConnectedExternalIds(context);
+      if (config.provider === "open-connector") await adapter.catalog(context);
+      else await adapter.listConnectedExternalIds(context);
     } catch {
       // Provider errors can contain credentials or account details.
       throw new Error("Could not verify these credentials");
@@ -141,8 +150,50 @@ class ConfiguredIntegrationProvider implements ManagedConnectorProvider {
   ) {
     return (await this.required()).complete(request, context);
   }
+  async setup(provider: string, context: AdapterContext) {
+    const adapter = await this.required();
+    if (!adapter.setup) throw new Error("This connector does not use catalog authentication");
+    return adapter.setup(provider, context);
+  }
+  async connectionStatus(ref: string, context: AdapterContext) {
+    return (await this.required()).connectionStatus?.(ref, context) ?? {};
+  }
+  async pollConnection(state: string, context: AdapterContext) {
+    return (await this.required()).pollConnection?.(state, context);
+  }
+  async configureOAuth(provider: string, values: Record<string, string>, context: AdapterContext) {
+    const adapter = await this.required();
+    if (!adapter.configureOAuth) throw new Error("OAuth setup is unavailable");
+    return adapter.configureOAuth(provider, values, context);
+  }
+  async cancelAuthorization(ref: string, context: AdapterContext) {
+    const adapter = await this.required();
+    if (!adapter.cancelAuthorization) throw new Error("Cancellation is unavailable");
+    return adapter.cancelAuthorization(ref, context);
+  }
+  async reconnect(ref: string, auth: ConnectorAuthInput, context: AdapterContext) {
+    const adapter = await this.required();
+    if (!adapter.reconnect) throw new Error("Reconnect is unavailable");
+    return adapter.reconnect(ref, auth, context);
+  }
+  async listActions(provider: string, context: AdapterContext) {
+    return (await this.required()).listActions?.(provider, context) ?? [];
+  }
   async revoke(ref: string, context: AdapterContext) {
     return (await this.required()).revoke(ref, context);
+  }
+  async receiveWebhook(request: Request, secret: string, context: AdapterContext) {
+    const provider = await this.required();
+    if (!provider.receiveWebhook) throw new Error("This connector cannot receive messages");
+    return provider.receiveWebhook(request, secret, context);
+  }
+  async sendReply(
+    request: Parameters<NonNullable<ManagedConnectorProvider["sendReply"]>>[0],
+    context: AdapterContext,
+  ) {
+    const provider = await this.required();
+    if (!provider.sendReply) throw new Error("This connector cannot reply to messages");
+    return provider.sendReply(request, context);
   }
   async resolveCall(call: ConnectorCall, context: AdapterContext) {
     return (await this.required()).resolveCall?.(call, context);

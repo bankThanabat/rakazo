@@ -1,5 +1,5 @@
 import type { Actor } from "@rakazo/contracts";
-import type { PrismaClient } from "./client.js";
+import type { Prisma, PrismaClient } from "./client.js";
 
 export class IsolationError extends Error {
   constructor(message = "Resource not found") {
@@ -46,4 +46,11 @@ export function scoped<T extends { spaceId: string; userId?: string }>(
     throw new IsolationError();
   }
   return record;
+}
+
+/** Callers must authenticate membership before using the actor’s team scope. */
+export function connectionAccessWhere(
+  actor: Pick<Actor, "spaceId" | "userId">,
+): Prisma.ConnectionWhereInput {
+  return { spaceId: actor.spaceId, OR: [{ userId: actor.userId }, { scope: "team" }] };
 }

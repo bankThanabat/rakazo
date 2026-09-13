@@ -100,6 +100,7 @@ import {
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
+  connectionAccessWhere,
   createExternalConversationRepos,
   createGroupRepos,
   createRepos,
@@ -143,6 +144,8 @@ import {
   resolveBusyBotName,
   toComputerStatus,
 } from "./computer-status.js";
+import type { ConnectionChannels } from "./connection-channels.js";
+import { connectionIncomingDto } from "./connection-channels.js";
 import { searchIntegrationCatalog } from "./integration-catalog.js";
 import { buildMcpUpdateMaterial } from "./mcp-material.js";
 import {
@@ -424,6 +427,7 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   integrationSettings?: IntegrationProviderSettings;
+  connectionChannels?: ConnectionChannels;
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
   connectors: ConnectorRegistry;
@@ -3241,6 +3245,108 @@ export function createRouter(deps: RouterDeps) {
       }),
     },
     connections: {
+      setup: authed.connections.setup.handler(async ({ context, input }) => {
+        const provider = deps.connectors.managed(input.connectorId);
+        if (input.connectorId !== "open-connector" || !provider?.setup)
+          throw new ORPCError("BAD_REQUEST");
+        return provider.setup(
+          input.provider,
+          connectionContext(context.actor, "connections.setup", context.signal),
+        );
+      }),
+      configureOAuth: authed.connections.configureOAuth.handler(async ({ context, input }) => {
+        if (!context.actor.isDeploymentOwner) throw new ORPCError("FORBIDDEN");
+        const provider = deps.connectors.managed(input.connectorId);
+        if (input.connectorId !== "open-connector" || !provider?.configureOAuth)
+          throw new ORPCError("BAD_REQUEST");
+        await provider.configureOAuth(
+          input.provider,
+          input.values,
+          connectionContext(context.actor, "connections.configureOAuth", context.signal),
+        );
+        return { ok: true as const };
+      }),
+      cancel: authed.connections.cancel.handler(async ({ context, input }) => {
+        await deps.prisma.$transaction(
+          async (tx) => {
+            const where = {
+              id: input.connectionId,
+              spaceId: context.actor.spaceId,
+              userId: context.actor.userId,
+              connectorId: "open-connector",
+              status: "pending",
+            };
+            const initial = await tx.connection.findFirst({ where });
+            if (!initial) throw new ORPCError("NOT_FOUND");
+            await lockProviderConnectionScope(
+              tx,
+              context.actor,
+              initial.connectorId,
+              initial.provider,
+            );
+            const row = await tx.connection.findFirst({ where });
+            if (!row?.providerRef) throw new ORPCError("NOT_FOUND");
+            const provider = deps.connectors.managed(row.connectorId);
+            if (!provider?.cancelAuthorization) throw new ORPCError("BAD_REQUEST");
+            const result = await provider.cancelAuthorization(
+              row.providerRef,
+              connectionContext(context.actor, "connections.cancel", context.signal),
+            );
+            await tx.connection.update({
+              where: { id: row.id },
+              data: { status: result.connected ? "connected" : "revoked" },
+            });
+          },
+          { timeout: 60000 },
+        );
+        return { ok: true as const };
+      }),
+      reconnect: authed.connections.reconnect.handler(async ({ context, input }) => {
+        return deps.prisma.$transaction(
+          async (tx) => {
+            const scope = {
+              id: input.connectionId,
+              spaceId: context.actor.spaceId,
+              userId: context.actor.userId,
+              connectorId: "open-connector",
+              status: { in: ["connected", "pending", "error"] },
+            };
+            const initial = await tx.connection.findFirst({ where: scope });
+            if (!initial) throw new ORPCError("NOT_FOUND");
+            await lockProviderConnectionScope(
+              tx,
+              context.actor,
+              initial.connectorId,
+              initial.provider,
+            );
+            const row = await tx.connection.findFirst({ where: scope });
+            if (!row?.providerRef) throw new ORPCError("NOT_FOUND");
+            const provider = deps.connectors.managed(row.connectorId);
+            if (!provider?.reconnect) throw new ORPCError("BAD_REQUEST");
+            const result = await provider.reconnect(
+              row.providerRef,
+              input.auth,
+              connectionContext(context.actor, "connections.reconnect", context.signal),
+            );
+            await tx.connection.update({
+              where: { id: row.id },
+              data: { status: result.authorizationUrl ? "pending" : "connected" },
+            });
+            return result;
+          },
+          { timeout: 60000 },
+        );
+      }),
+      incoming: {
+        save: authed.connections.incoming.save.handler(({ context, input }) => {
+          if (!deps.connectionChannels) throw new ORPCError("SERVICE_UNAVAILABLE");
+          return deps.connectionChannels.save(context.actor, input);
+        }),
+        disable: authed.connections.incoming.disable.handler(({ context, input }) => {
+          if (!deps.connectionChannels) throw new ORPCError("SERVICE_UNAVAILABLE");
+          return deps.connectionChannels.disable(context.actor, input.connectionId);
+        }),
+      },
       catalog: authed.connections.catalog.handler(async ({ context, input }) => {
         const adapterContext = connectionContext(
           context.actor,
@@ -3251,7 +3357,9 @@ export function createRouter(deps: RouterDeps) {
           ? [deps.connectors.managed(input.connectorId)].filter(
               (provider): provider is NonNullable<typeof provider> => Boolean(provider),
             )
-          : deps.connectors.managedProviders();
+          : deps.connectors
+              .managedProviders()
+              .filter((provider) => !input.excludeConnectorIds?.includes(provider.describe().id));
         const catalogs = await Promise.all(
           providers.map(async (provider): Promise<ConnectorCatalogItem[]> => {
             try {
@@ -3272,6 +3380,10 @@ export function createRouter(deps: RouterDeps) {
               }
               return items;
             } catch {
+              if (input.connectorId === "open-connector")
+                throw new ORPCError("SERVICE_UNAVAILABLE", {
+                  message: "OpenConnector is unavailable. Try again.",
+                });
               return [];
             }
           }),
@@ -3280,23 +3392,48 @@ export function createRouter(deps: RouterDeps) {
       }),
       list: authed.connections.list.handler(async ({ context }) => {
         const rows = await deps.prisma.connection.findMany({
-          where: { spaceId: context.actor.spaceId, userId: context.actor.userId },
+          where: connectionAccessWhere(context.actor),
         });
-        return rows.map((row) => ({
-          id: row.id,
-          connectorId: row.connectorId,
-          provider: row.provider,
-          displayName: row.displayName,
-          status: row.status as "pending" | "connected" | "revoked" | "error",
-          capabilities: [],
-          createdAt: row.createdAt.toISOString(),
-        }));
+        return Promise.all(
+          rows.map(async (row) => {
+            const provider =
+              row.connectorId === "open-connector" && row.status !== "revoked"
+                ? deps.connectors.managed(row.connectorId)
+                : undefined;
+            const state: { authorizationUrl?: string; reconnectRequired?: boolean } =
+              row.providerRef && provider?.connectionStatus
+                ? await provider
+                    .connectionStatus(
+                      row.providerRef,
+                      connectionContext(context.actor, "connections.list", context.signal),
+                    )
+                    .catch(() => ({}))
+                : {};
+            return {
+              ...state,
+              // Authorization URLs belong to the creator, even for team-shared accounts.
+              authorizationUrl:
+                row.userId === context.actor.userId ? state.authorizationUrl : undefined,
+              id: row.id,
+              canManage: row.userId === context.actor.userId,
+              incoming: connectionIncomingDto(row.metadata),
+              connectorId: row.connectorId,
+              provider: row.provider,
+              displayName: row.displayName,
+              status: row.status as "pending" | "connected" | "revoked" | "error",
+              capabilities: [],
+              createdAt: row.createdAt.toISOString(),
+            };
+          }),
+        );
       }),
       begin: authed.connections.begin.handler(async ({ context, input }) => {
         const connector =
           deps.integrationSettings &&
-          (input.connectorId === "composio" || input.connectorId === "pipedream")
-            ? await deps.integrationSettings.resolve(input.connectorId)
+          IntegrationProviderIdSchema.safeParse(input.connectorId).success
+            ? await deps.integrationSettings.resolve(
+                IntegrationProviderIdSchema.parse(input.connectorId),
+              )
             : deps.connectors.managed(input.connectorId);
         if (!connector) {
           throw new ORPCError("BAD_REQUEST", {
@@ -3320,7 +3457,12 @@ export function createRouter(deps: RouterDeps) {
         });
         try {
           const auth = await connector.begin(
-            { provider: input.provider, redirectUrl: `${deps.env.webOrigin}/app` },
+            {
+              provider: input.provider,
+              redirectUrl: `${deps.env.webOrigin}/app`,
+              credential: input.credential,
+              ...(input.connectorId === "open-connector" && input.auth ? { auth: input.auth } : {}),
+            },
             connectionContext(context.actor, "connections.begin", context.signal),
           );
           // Re-take the provider lock and only advance still-pending rows so a
@@ -3336,6 +3478,7 @@ export function createRouter(deps: RouterDeps) {
               },
               data: {
                 status: auth.authorizationUrl ? "pending" : "connected",
+                scope: auth.scope ?? "user",
                 providerRef: auth.state || null,
                 metadata: { state: auth.state },
               },
@@ -3618,6 +3761,15 @@ export function createRouter(deps: RouterDeps) {
                 "connections.complete",
                 context.signal,
               );
+              if (current.connectorId === "open-connector" && connector.pollConnection) {
+                if (!current.providerRef) return current;
+                const result = await connector.pollConnection(current.providerRef, adapterContext);
+                if (!result) return current;
+                return tx.connection.update({
+                  where: { id: current.id },
+                  data: { status: "connected", providerRef: result.connectionRef },
+                });
+              }
               if (input.code) {
                 const state = current.providerRef ?? current.provider;
                 try {
@@ -3841,6 +3993,17 @@ export function createRouter(deps: RouterDeps) {
               };
             }
 
+            if (connectionIncomingDto(row.metadata)) {
+              await tx.secret.deleteMany({
+                where: {
+                  id: `${row.id}:webhook`,
+                  spaceId: row.spaceId,
+                  userId: row.userId,
+                  kind: "connection-webhook",
+                },
+              });
+            }
+
             const remaining = await tx.connection.count({
               where: {
                 spaceId: context.actor.spaceId,
@@ -3956,14 +4119,18 @@ export function createRouter(deps: RouterDeps) {
         if (!connector) return [];
         const row = await deps.prisma.connection.findFirst({
           where: {
-            spaceId: context.actor.spaceId,
-            userId: context.actor.userId,
+            ...connectionAccessWhere(context.actor),
             connectorId: input.connectorId,
             provider: input.provider,
             status: "connected",
           },
         });
         if (!row) return [];
+        if (input.connectorId === "open-connector" && connector.listActions)
+          return connector.listActions(
+            input.provider,
+            connectionContext(context.actor, "connections.tools", context.signal),
+          );
         try {
           const tools = await connector.discoverTools({
             ...connectionContext(context.actor, "connections.tools", context.signal),

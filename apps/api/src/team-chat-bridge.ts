@@ -199,11 +199,11 @@ export class TeamChatBridge {
   ): Promise<DeferredTeamChatInboundTarget>;
   async receive(
     message: TeamChatInboundMessage,
-    options?: { queueAgent?: true },
+    options?: { queueAgent?: true; reconcile?: boolean },
   ): Promise<TeamChatInboundTarget>;
   async receive(
     message: TeamChatInboundMessage,
-    options?: { queueAgent?: boolean },
+    options?: { queueAgent?: boolean; reconcile?: boolean },
   ): Promise<TeamChatInboundTarget | DeferredTeamChatInboundTarget> {
     const target = this.target;
     if (!target) throw new Error("Team chat bridge is not started");
@@ -295,7 +295,7 @@ export class TeamChatBridge {
         externalMessageId: externalMessage.id,
       };
     }
-    await this.reconcileOnce();
+    if (options?.reconcile !== false) await this.reconcileOnce();
     return {
       spaceId: conversation.spaceId,
       userId: conversation.userId,

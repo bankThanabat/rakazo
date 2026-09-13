@@ -1,4 +1,46 @@
 export const RU_MESSAGES: Record<string, string> = {
+  "A deployment administrator must configure this app’s OAuth client.":
+    "Администратор развертывания должен настроить OAuth-клиент этого приложения.",
+  "Account name": "Название аккаунта",
+  "Add account": "Добавить аккаунт",
+  "Admin setup required": "Требуется настройка администратором",
+  "Admin token": "Токен администратора",
+  "Authentication method": "Способ аутентификации",
+  "Authorization failed.": "Не удалось выполнить авторизацию.",
+  "Authorization is still pending. Check again or cancel.":
+    "Авторизация еще не завершена. Проверьте снова или отмените.",
+  "Available actions": "Доступные действия",
+  "Available to everyone in this team.": "Доступно всем участникам этой команды.",
+  "Back to apps": "Назад к приложениям",
+  "Browse apps": "Обзор приложений",
+  "Cancel authorization": "Отменить авторизацию",
+  "Check again": "Проверить снова",
+  "Close catalog": "Закрыть каталог",
+  "Configure automatic replies in Rakazo on web or desktop.":
+    "Настройте автоматические ответы в веб-версии или настольном приложении Rakazo.",
+  "Connect account": "Подключить аккаунт",
+  "Connected only": "Только подключенные",
+  "Could not complete the request": "Не удалось выполнить запрос",
+  "Could not refresh accounts. Try again.":
+    "Не удалось обновить список аккаунтов. Попробуйте снова.",
+  Disconnect: "Отключить",
+  "Disconnect account": "Отключить аккаунт",
+  "Disconnect this account for everyone in the team?":
+    "Отключить этот аккаунт для всех участников команды?",
+  "OAuth setup instructions": "Инструкции по настройке OAuth",
+  "Open authorization": "Открыть страницу авторизации",
+  Pending: "Ожидание",
+  Reconnect: "Подключить снова",
+  "Reconnect required": "Требуется повторное подключение",
+  Retry: "Повторить",
+  "Save OAuth setup": "Сохранить настройки OAuth",
+  "Search OpenConnector apps": "Поиск приложений OpenConnector",
+  "Search actions": "Поиск действий",
+  "Search apps…": "Поиск приложений…",
+  "Set up OpenConnector": "Настроить OpenConnector",
+  Unavailable: "Недоступно",
+  "Waiting for authorization": "Ожидание авторизации",
+
   "Ask the server owner to configure this provider.":
     "Попросите владельца сервера настроить этого провайдера.",
   "Client ID": "ID клиента",
