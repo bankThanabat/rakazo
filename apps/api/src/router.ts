@@ -144,8 +144,6 @@ import {
   resolveBusyBotName,
   toComputerStatus,
 } from "./computer-status.js";
-import type { ConnectionChannels } from "./connection-channels.js";
-import { connectionIncomingDto } from "./connection-channels.js";
 import { searchIntegrationCatalog } from "./integration-catalog.js";
 import { buildMcpUpdateMaterial } from "./mcp-material.js";
 import {
@@ -427,7 +425,6 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   integrationSettings?: IntegrationProviderSettings;
-  connectionChannels?: ConnectionChannels;
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
   connectors: ConnectorRegistry;
@@ -3337,16 +3334,6 @@ export function createRouter(deps: RouterDeps) {
           { timeout: 60000 },
         );
       }),
-      incoming: {
-        save: authed.connections.incoming.save.handler(({ context, input }) => {
-          if (!deps.connectionChannels) throw new ORPCError("SERVICE_UNAVAILABLE");
-          return deps.connectionChannels.save(context.actor, input);
-        }),
-        disable: authed.connections.incoming.disable.handler(({ context, input }) => {
-          if (!deps.connectionChannels) throw new ORPCError("SERVICE_UNAVAILABLE");
-          return deps.connectionChannels.disable(context.actor, input.connectionId);
-        }),
-      },
       catalog: authed.connections.catalog.handler(async ({ context, input }) => {
         const adapterContext = connectionContext(
           context.actor,
@@ -3416,7 +3403,6 @@ export function createRouter(deps: RouterDeps) {
                 row.userId === context.actor.userId ? state.authorizationUrl : undefined,
               id: row.id,
               canManage: row.userId === context.actor.userId,
-              incoming: connectionIncomingDto(row.metadata),
               connectorId: row.connectorId,
               provider: row.provider,
               displayName: row.displayName,
@@ -3991,17 +3977,6 @@ export function createRouter(deps: RouterDeps) {
                 remote: null as null | RemoteRevoke,
                 previousStatus: null as string | null,
               };
-            }
-
-            if (connectionIncomingDto(row.metadata)) {
-              await tx.secret.deleteMany({
-                where: {
-                  id: `${row.id}:webhook`,
-                  spaceId: row.spaceId,
-                  userId: row.userId,
-                  kind: "connection-webhook",
-                },
-              });
             }
 
             const remaining = await tx.connection.count({

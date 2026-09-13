@@ -22,7 +22,6 @@ import {
   ComputerStatusSchema,
   ComputerUpdateSchema,
   ConnectionCatalogItemSchema,
-  ConnectionIncomingSchema,
   ConnectionSchema,
   CreateAgentSkillInput,
   CreateBotInput,
@@ -649,28 +648,6 @@ export const appContract = {
       .input(z.object({ connectionId: Id, displayName: z.string().trim().min(1).max(80) }))
       .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
-    incoming: {
-      save: oc
-        .input(
-          z.object({
-            connectionId: Id,
-            botId: Id,
-            webhookOrigin: z
-              .string()
-              .url()
-              .refine((value) => {
-                try {
-                  return new URL(value).protocol === "https:";
-                } catch {
-                  return false;
-                }
-              }, "Use a public HTTPS URL"),
-            channelSecret: z.string().trim().min(16).max(512).optional(),
-          }),
-        )
-        .output(ConnectionIncomingSchema),
-      disable: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
-    },
     /** Tools the connected provider exposes. Read-only; no per-tool allowlist yet. */
     tools: oc.input(z.object({ connectorId: z.string(), provider: z.string() })).output(
       z.array(

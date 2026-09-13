@@ -62,9 +62,6 @@ import type {
   SemanticMemorySaveRequest,
   SnapshotRef,
   SpeechClip,
-  TeamChatInboundMessage,
-  TeamChatSendRequest,
-  TeamChatSendResult,
   TransactionalEmail,
   VoiceCapabilities,
   VoiceInfo,
@@ -219,13 +216,6 @@ export interface ManagedConnectorProvider
     auth: ConnectorAuthInput,
     context: AdapterContext,
   ): Promise<{ authorizationUrl: string | null }>;
-
-  receiveWebhook?(
-    request: Request,
-    secret: string,
-    context: AdapterContext,
-  ): Promise<{ status: number; events: TeamChatInboundMessage[] }>;
-  sendReply?(request: TeamChatSendRequest, context: AdapterContext): Promise<TeamChatSendResult>;
 }
 
 export interface MemoryStore {

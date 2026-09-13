@@ -6,9 +6,6 @@ import type {
   ConnectorEvent,
   ConnectorTool,
   ManagedConnectorProvider,
-  TeamChatInboundMessage,
-  TeamChatSendRequest,
-  TeamChatSendResult,
 } from "@rakazo/adapter-kit";
 import type { ConnectorAuthInput } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
@@ -29,19 +26,6 @@ import { authMethods, OpenConnectorHttp } from "./open-connector-catalog.js";
 import { OpenConnectorIcons } from "./open-connector-icons.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
-export interface OpenConnectorChannel {
-  provider: string;
-  receive(
-    request: Request,
-    secret: string,
-    connectionId: string,
-  ): Promise<{ status: number; events: TeamChatInboundMessage[] }>;
-  reply(
-    request: TeamChatSendRequest,
-    connectionId: string,
-  ): { actionId: string; input: Record<string, unknown>; handle: string };
-}
-
 /** Catalog-driven accounts and actions; provider translation belongs to OpenConnector. */
 export class OpenConnector implements ManagedConnectorProvider {
   private readonly http: OpenConnectorHttp;
@@ -49,11 +33,10 @@ export class OpenConnector implements ManagedConnectorProvider {
   private readonly icons: OpenConnectorIcons;
   constructor(
     private readonly config: { endpoint: string; apiKey: string; identitySecret: string },
-    private readonly deps: {
+    deps: {
       prisma: Pick<PrismaClient, "secret">;
       secrets: EncryptedSecretStore;
       fetch?: typeof fetch;
-      channels?: OpenConnectorChannel[];
     },
   ) {
     this.http = new OpenConnectorHttp(config, deps.fetch);
@@ -98,8 +81,6 @@ export class OpenConnector implements ManagedConnectorProvider {
           provider.actions.some((action) => action.execution?.locallyExecutable)
             ? "available"
             : "unavailable",
-        incomingMessages:
-          this.deps.channels?.some((channel) => channel.provider === provider.service) ?? false,
       }));
   }
   async setup(provider: string, context: AdapterContext) {
@@ -308,40 +289,5 @@ export class OpenConnector implements ManagedConnectorProvider {
         message: error instanceof Error ? error.message : "OpenConnector action failed",
       };
     }
-  }
-  async receiveWebhook(request: Request, secret: string, context: AdapterContext) {
-    const connection = this.connections(context)[0];
-    const channel = this.deps.channels?.find((item) => item.provider === connection?.externalId);
-    return connection && channel
-      ? channel.receive(request, secret, connection.id)
-      : { status: 404, events: [] };
-  }
-  async sendReply(
-    request: TeamChatSendRequest,
-    context: AdapterContext,
-  ): Promise<TeamChatSendResult> {
-    const connection = this.connections(context)[0];
-    const channel = this.deps.channels?.find((item) => item.provider === connection?.externalId);
-    if (!connection || !channel)
-      throw new Error("Incoming messages are unsupported for this connection");
-    const reply = channel.reply(request, connection.id);
-    for await (const event of this.execute(
-      {
-        tool: reply.actionId,
-        args: reply.input,
-        executionId: request.idempotencyKey!,
-        connectionId: connection.id,
-        route: {
-          connectorId: "open-connector",
-          toolName: reply.actionId,
-          resourceId: connection.id,
-        },
-      },
-      context,
-    )) {
-      if (event.type === "error") throw new Error(event.message);
-      if (event.type === "result") return { handle: reply.handle };
-    }
-    throw new Error("Reply returned no result");
   }
 }

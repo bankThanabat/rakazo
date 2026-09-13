@@ -15,8 +15,6 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Cancel authorization": "取消授权",
   "Check again": "再次检查",
   "Close catalog": "关闭目录",
-  "Configure automatic replies in Rakazo on web or desktop.":
-    "请在 Rakazo 网页版或桌面版中配置自动回复。",
   "Connect account": "连接账户",
   "Connected only": "仅显示已连接",
   "Could not complete the request": "无法完成请求",

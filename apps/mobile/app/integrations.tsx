@@ -488,11 +488,6 @@ export default function Integrations() {
               ) : null}
             </View>
           ))}
-          {item.incomingMessages && accounts.length > 0 ? (
-            <Text style={styles.explanation}>
-              {t("Configure automatic replies in Rakazo on web or desktop.")}
-            </Text>
-          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={

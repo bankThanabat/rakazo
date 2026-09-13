@@ -8,7 +8,6 @@ import { IntegrationProviderConfigSchema, IntegrationProviderIdSchema } from "@r
 import type { PrismaClient } from "@rakazo/db";
 import { ComposioConnector } from "./composio-connector.js";
 import { OpenConnector } from "./open-connector.js";
-import { openConnectorLineChannel } from "./open-connector-line-channel.js";
 import { PipedreamConnector } from "./pipedream-connector.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -35,7 +34,7 @@ export class IntegrationProviderSettings {
     if (config.provider === "open-connector") {
       return new OpenConnector(
         { ...config, identitySecret: this.identitySecret },
-        { prisma: this.prisma, secrets: this.secrets, channels: [openConnectorLineChannel] },
+        { prisma: this.prisma, secrets: this.secrets },
       );
     }
     return config.provider === "composio"
@@ -181,19 +180,6 @@ class ConfiguredIntegrationProvider implements ManagedConnectorProvider {
   }
   async revoke(ref: string, context: AdapterContext) {
     return (await this.required()).revoke(ref, context);
-  }
-  async receiveWebhook(request: Request, secret: string, context: AdapterContext) {
-    const provider = await this.required();
-    if (!provider.receiveWebhook) throw new Error("This connector cannot receive messages");
-    return provider.receiveWebhook(request, secret, context);
-  }
-  async sendReply(
-    request: Parameters<NonNullable<ManagedConnectorProvider["sendReply"]>>[0],
-    context: AdapterContext,
-  ) {
-    const provider = await this.required();
-    if (!provider.sendReply) throw new Error("This connector cannot reply to messages");
-    return provider.sendReply(request, context);
   }
   async resolveCall(call: ConnectorCall, context: AdapterContext) {
     return (await this.required()).resolveCall?.(call, context);

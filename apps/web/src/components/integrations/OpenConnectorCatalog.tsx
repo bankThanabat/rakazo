@@ -5,19 +5,16 @@ import { Button, Input, NativeSelect, NativeSelectOption, Skeleton } from "@raka
 import { ArrowLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { rpc } from "../../lib/rpc";
-import { ConnectionIncomingSetup } from "./ConnectionIncomingSetup";
 import { OpenConnectorFields } from "./OpenConnectorFields";
 
 export function OpenConnectorCatalog({
   connections,
   onRefresh,
   onSetup,
-  activeBotId,
 }: {
   connections: Connection[];
   onRefresh: () => Promise<unknown>;
   onSetup: () => void;
-  activeBotId?: string;
 }) {
   const { t } = useLingui();
   const formId = useId();
@@ -531,13 +528,6 @@ export function OpenConnectorCatalog({
                     </Button>
                   </div>
                 </div>
-              ) : null}
-              {selected.incomingMessages && row.status === "connected" ? (
-                <ConnectionIncomingSetup
-                  connection={row}
-                  activeBotId={activeBotId}
-                  onChange={() => void onRefresh()}
-                />
               ) : null}
             </div>
           ))}

@@ -557,18 +557,11 @@ export const MemoryDocumentSchema = z.object({
 });
 export type MemoryDocument = z.infer<typeof MemoryDocumentSchema>;
 
-export const ConnectionIncomingSchema = z.object({
-  botId: Id,
-  webhookUrl: z.string().url(),
-});
-export type ConnectionIncoming = z.infer<typeof ConnectionIncomingSchema>;
-
 export const ConnectionSchema = z.object({
   id: Id,
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),
   authorizationUrl: z.string().url().optional(),
-  incoming: ConnectionIncomingSchema.optional(),
   connectorId: z.string(),
   provider: z.string(),
   displayName: z.string(),
@@ -586,7 +579,6 @@ export const ConnectionCatalogItemSchema = z.object({
   connected: z.boolean(),
   noAuth: z.boolean(),
   scope: z.enum(["user", "team"]).optional(),
-  incomingMessages: z.boolean().optional(),
   description: z.string().optional(),
   categories: z.array(z.string()).optional(),
   availability: z.enum(["available", "unavailable"]).optional(),

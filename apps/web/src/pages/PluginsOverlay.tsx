@@ -31,7 +31,6 @@ import {
 } from "@rakazo/ui-web";
 import { ChevronDown, ChevronLeft, ChevronUp, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConnectionIncomingSetup } from "../components/integrations/ConnectionIncomingSetup";
 import { IntegrationSetup } from "../components/integrations/IntegrationSetup";
 import { OpenConnectorCatalog } from "../components/integrations/OpenConnectorCatalog";
 import { optionalCatalogFeedProbe } from "../lib/optional-catalog-feed";
@@ -612,17 +611,6 @@ export function PluginsOverlay({
                     </Button>
                   ) : null}
                 </div>
-                {item.incomingMessages && row.status === "connected" ? (
-                  <ConnectionIncomingSetup
-                    connection={row}
-                    activeBotId={activeBotId}
-                    onChange={(updated) =>
-                      setConnections((current) =>
-                        current.map((entry) => (entry.id === updated.id ? updated : entry)),
-                      )
-                    }
-                  />
-                ) : null}
               </div>
             ))}
             <Button
@@ -845,7 +833,6 @@ export function PluginsOverlay({
               <OpenConnectorCatalog
                 connections={connections}
                 onRefresh={refresh}
-                activeBotId={activeBotId}
                 onSetup={() => setSetupOpen(true)}
               />
               <details

@@ -16,8 +16,6 @@ export const RU_MESSAGES: Record<string, string> = {
   "Cancel authorization": "Отменить авторизацию",
   "Check again": "Проверить снова",
   "Close catalog": "Закрыть каталог",
-  "Configure automatic replies in Rakazo on web or desktop.":
-    "Настройте автоматические ответы в веб-версии или настольном приложении Rakazo.",
   "Connect account": "Подключить аккаунт",
   "Connected only": "Только подключенные",
   "Could not complete the request": "Не удалось выполнить запрос",

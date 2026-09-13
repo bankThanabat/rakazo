@@ -389,11 +389,6 @@ export function OpenConnectorCatalog({
               ) : null}
             </View>
           ))}
-          {selected.incomingMessages && selectedAccounts.length > 0 ? (
-            <Text style={styles.secondary}>
-              {t("Configure automatic replies in Rakazo on web or desktop.")}
-            </Text>
-          ) : null}
           {setup && !form && selected.availability !== "unavailable"
             ? button(selectedAccounts.length ? t("Add account") : t("Connect"), () => {
                 setReconnect(null);
