@@ -148,12 +148,3 @@ export function cloudAgentPollJob(
     ...(availableAt ? { availableAt } : {}),
   };
 }
-
-export function customerProcessJob(availableAt?: Date): BackgroundJob {
-  return {
-    name: "customer.process",
-    payload: {},
-    replaceKey: "customer.process",
-    ...(availableAt ? { availableAt } : {}),
-  };
-}

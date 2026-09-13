@@ -1,14 +1,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
-import {
-  CUSTOMER_REPLY_MAX_LENGTH,
-  CustomerChannelInputSchema,
-  CustomerChannelSchema,
-  CustomerConversationSchema,
-  CustomerProviderDefinitionSchema,
-  CustomerSnapshotSchema,
-} from "./customer.js";
+import { CustomerConversationSchema, CustomerSnapshotSchema } from "./customer.js";
 import {
   ActionApprovalRuleSchema,
   ActionAutoReviewSettingsSchema,
@@ -760,26 +753,8 @@ export const appContract = {
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
   },
   customers: {
-    providers: oc.output(z.array(CustomerProviderDefinitionSchema)),
-    channels: oc.output(z.array(CustomerChannelSchema)),
-    connect: oc.input(CustomerChannelInputSchema).output(CustomerChannelSchema),
-    setChannelEnabled: oc
-      .input(z.object({ id: Id, enabled: z.boolean() }))
-      .output(z.object({ ok: z.literal(true) })),
     list: oc.output(z.array(CustomerConversationSchema)),
     snapshot: oc.input(z.object({ id: Id })).output(CustomerSnapshotSchema),
-    setOwner: oc
-      .input(z.object({ id: Id, owner: z.enum(["bot", "staff"]) }))
-      .output(z.object({ ok: z.literal(true) })),
-    reply: oc
-      .input(
-        z.object({
-          id: Id,
-          body: z.string().trim().min(1).max(CUSTOMER_REPLY_MAX_LENGTH),
-          clientNonce: z.string().min(1).max(128),
-        }),
-      )
-      .output(z.object({ ok: z.literal(true) })),
   },
   externalConversations: {
     updatePolicy: oc

@@ -21,6 +21,21 @@ vi.mock("./messaging-delivery.js", () => ({
 }));
 
 describe("createBackgroundJobHandlers", () => {
+  it("drains old customer jobs without accessing providers or the database", async () => {
+    const deps = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("Retired job accessed runtime dependencies");
+        },
+      },
+    );
+    const handlers = createBackgroundJobHandlers(
+      deps as Parameters<typeof createBackgroundJobHandlers>[0],
+    );
+    await expect(handlers["customer.process"]({})).resolves.toBeUndefined();
+  });
+
   it("delivers directly when shutdown rejects a completed run's mirror job", async () => {
     const enqueueError = new Error("Background job publisher is closing");
     const jobs = {

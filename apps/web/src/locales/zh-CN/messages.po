@@ -3855,3 +3855,27 @@ msgstr ""
 #: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
 msgid "Recall and write"
 msgstr ""
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Connected integrations"
+msgstr "已连接的集成"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Available integrations"
+msgstr "可用集成"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Manage"
+msgstr "管理"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Your integrations"
+msgstr "你的集成"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Search channels"
+msgstr "搜索渠道"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No integrations match your search."
+msgstr "没有符合搜索条件的集成。"

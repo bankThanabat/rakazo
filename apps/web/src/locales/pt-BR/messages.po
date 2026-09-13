@@ -3855,3 +3855,27 @@ msgstr ""
 #: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
 msgid "Recall and write"
 msgstr ""
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Connected integrations"
+msgstr "Integrações conectadas"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Available integrations"
+msgstr "Integrações disponíveis"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Manage"
+msgstr "Gerenciar"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Your integrations"
+msgstr "Suas integrações"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Search channels"
+msgstr "Buscar canais"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No integrations match your search."
+msgstr "Nenhuma integração corresponde à sua busca."

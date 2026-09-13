@@ -17,11 +17,9 @@ import {
   ComposioConnector,
   type ComposioProvider,
   type ConnectorRegistry,
-  CustomerService,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
-  createCustomerChannelSurface,
   createJobReconciler,
   createMessagingContextLoader,
   createMessagingTeamChatSender,
@@ -123,7 +121,6 @@ export interface AppHandles {
 
 export async function createApp(
   overrides: Partial<AppEnv> & {
-    customerChannelFetch?: typeof fetch;
     prisma?: PrismaClient;
     realtime?: RealtimeFanout;
     sandbox?: SandboxProvider;
@@ -136,7 +133,6 @@ export async function createApp(
   } = {},
 ): Promise<AppHandles> {
   const {
-    customerChannelFetch,
     prisma: prismaOverride,
     realtime: realtimeOverride,
     sandbox: sandboxOverride,
@@ -374,16 +370,7 @@ export async function createApp(
     shutdownSignal: shutdown.signal,
   });
 
-  const customers = new CustomerService({
-    createSurface: (input) => createCustomerChannelSurface(input, customerChannelFetch),
-    prisma,
-    jobs,
-    secrets,
-    runtime,
-    resolveModel: executor.resolveModel,
-  });
   const jobHandlers = createBackgroundJobHandlers({
-    customers,
     executor,
     prisma,
     sandbox,
@@ -405,7 +392,6 @@ export async function createApp(
     ? createJobReconciler({
         prisma,
         jobs,
-        reconcileCustomers: () => customers.schedule(),
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
       })
@@ -413,8 +399,6 @@ export async function createApp(
   reconciler?.start();
 
   const router = createRouter({
-    customers,
-    customerWebhookOrigin: env.apiUrl,
     prisma,
     events,
     auth,
@@ -520,13 +504,6 @@ export async function createApp(
     return actor;
   });
   mountWebhookHttpRoutes(app, { prisma, secrets, events, jobs });
-  app.on(["GET", "POST"], "/api/v1/customers/channels/:id/webhook", async (c) => {
-    try {
-      return await customers.webhook(c.req.param("id"), c.req.raw);
-    } catch {
-      return c.json({ error: "Customer webhook failed" }, 500);
-    }
-  });
   // Shared with stop so a shutdown during retry delays does not restart polling.
   let messagingStopped = false;
   let clearMessagingRetryDelay: (() => void) | undefined;
@@ -826,7 +803,6 @@ export async function createApp(
       // Abort in-flight continueRun boot waits before draining jobs so stop() cannot sit
       // on waitForComputerReady for the full boot-wait window during shared Postgres journeys.
       shutdown.abort();
-      await customers.stop();
       oauthLogins.abortAll();
       messagingStopped = true;
       clearMessagingRetryDelay?.();

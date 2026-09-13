@@ -3855,3 +3855,27 @@ msgstr ""
 #: apps/web/src/pages/memory-providers/SerenitySettingsForm.tsx
 msgid "Recall and write"
 msgstr ""
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Connected integrations"
+msgstr "연결된 연동"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Available integrations"
+msgstr "사용 가능한 연동"
+
+#: src/pages/PluginsOverlay.tsx
+msgid "Manage"
+msgstr "관리"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Your integrations"
+msgstr "내 연동"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "Search channels"
+msgstr "채널 검색"
+
+#: src/pages/CustomerChannelsPanel.tsx
+msgid "No integrations match your search."
+msgstr "검색과 일치하는 연동이 없습니다."

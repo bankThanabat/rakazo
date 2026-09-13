@@ -93,7 +93,7 @@ async function main() {
             "packages/testkit/src/computer-approval.postgres.test.ts",
             "packages/testkit/src/eval-history.postgres.test.ts",
             "packages/testkit/src/eval-customer-support.postgres.test.ts",
-            "packages/testkit/src/customer-support.postgres.test.ts",
+            "packages/testkit/src/customer-archive.postgres.test.ts",
             "packages/testkit/src/journeys.test.ts",
             "packages/testkit/src/authorization.test.ts",
             "packages/testkit/src/attachments.test.ts",
@@ -156,13 +156,7 @@ async function main() {
     }
 
     const [
-      {
-        ComposioEmulator,
-        CustomerChannelEmulator,
-        EmailEmulator,
-        PipedreamConnector,
-        ThirdPartyConnectorEmulator,
-      },
+      { ComposioEmulator, EmailEmulator, PipedreamConnector, ThirdPartyConnectorEmulator },
       { createApp },
     ] = await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
     const { serve } = await import("@hono/node-server");
@@ -178,13 +172,7 @@ async function main() {
       { fetch: thirdParties.fetch, resolveHostname: thirdParties.resolveHostname },
     );
     const email = new EmailEmulator();
-    const customerChannels = new CustomerChannelEmulator();
-    customerChannels.profiles.set("Customer", {
-      displayName: "Alex Customer",
-      pictureUrl: "https://images.example.test/customer.png",
-    });
     const handles = await createApp({
-      customerChannelFetch: customerChannels.fetch,
       databaseUrl,
       prisma: undefined,
       composio: new ComposioEmulator(),

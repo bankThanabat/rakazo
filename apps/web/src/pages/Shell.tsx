@@ -3142,7 +3142,6 @@ export function ShellPage() {
         {inboxTab === "customer" ? (
           <CustomerThread
             id={customerInbox.id}
-            refresh={customerInbox.refresh}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
           />
         ) : (

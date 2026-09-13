@@ -42,6 +42,22 @@ describe("account preferences", () => {
     return { update, deps, actor, handler: new RPCHandler(createRouter(deps)) };
   }
 
+  it.each(["providers", "channels", "connect", "setChannelEnabled", "setOwner", "reply"])(
+    "does not expose the retired customer %s endpoint",
+    async (endpoint) => {
+      const { actor, handler } = preferencesDeps("robot");
+      const result = await handler.handle(
+        new Request(`http://127.0.0.1/rpc/customers/${endpoint}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ json: {} }),
+        }),
+        { prefix: "/rpc", context: { actor } },
+      );
+      expect(result.matched).toBe(false);
+    },
+  );
+
   it("keeps an unconfigured catalog offline unless explicitly requested", async () => {
     const { actor, deps } = preferencesDeps("robot");
     const fetch = vi.fn().mockResolvedValue(

@@ -1,9 +1,8 @@
 import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
-import { useAsyncAction, usePolling } from "@rakazo/chat-ui/async-state";
-import { CUSTOMER_REPLY_MAX_LENGTH } from "@rakazo/contracts";
-import { Button, cn, ProfileAvatar, Textarea } from "@rakazo/ui-web";
-import { ArrowUp, Menu } from "lucide-react";
+import { usePolling } from "@rakazo/chat-ui/async-state";
+import { Button, cn, ProfileAvatar } from "@rakazo/ui-web";
+import { Menu } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { rpc } from "../lib/rpc";
 
@@ -12,7 +11,7 @@ export function useCustomerInbox(enabled: boolean, scope: string | undefined) {
   useEffect(() => {
     setId(null);
   }, [scope]);
-  const { data, error, refresh } = usePolling(
+  const { data, error } = usePolling(
     () => rpc.customers.list(),
     enabled ? (scope ?? "") : null,
     3000,
@@ -22,7 +21,6 @@ export function useCustomerInbox(enabled: boolean, scope: string | undefined) {
     id,
     setId,
     error,
-    refresh,
   };
 }
 type Inbox = ReturnType<typeof useCustomerInbox>;
@@ -81,31 +79,16 @@ export function CustomerSidebar({
 export function CustomerThread({
   id,
   onOpenNavigation,
-  refresh,
 }: {
   id: string | null;
   onOpenNavigation: () => void;
-  refresh: () => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
-  const [body, setBody] = useState("");
-  const nonce = useRef({ body: "", id: "" });
   const polling = usePolling(() => rpc.customers.snapshot({ id: id! }), id, 1500);
-  const {
-    busy,
-    error: actionError,
-    act,
-  } = useAsyncAction(() => {
-    polling.refresh();
-    refresh();
-  });
-  const error = actionError || polling.error;
   const snapshot = polling.data;
   useEffect(() => {
     pinned.current = true;
-    setBody("");
-    nonce.current = { body: "", id: "" };
   }, [id]);
   const current = snapshot?.conversation.id === id ? snapshot : null;
   const lastMessageId = current?.messages.at(-1)?.id;
@@ -130,27 +113,6 @@ export function CustomerThread({
           ) : null}
           <span className="truncate font-medium">{current?.conversation.name ?? t`Customer`}</span>
         </div>
-        {current ? (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() =>
-              void act(() =>
-                rpc.customers.setOwner({
-                  id: current.conversation.id,
-                  owner: current.conversation.owner === "bot" ? "staff" : "bot",
-                }),
-              )
-            }
-          >
-            {current.conversation.owner === "bot" ? (
-              <Trans>Take over</Trans>
-            ) : (
-              <Trans>Resume bot</Trans>
-            )}
-          </Button>
-        ) : null}
       </div>
       <div
         ref={scroll}
@@ -198,43 +160,10 @@ export function CustomerThread({
           </div>
         ))}
       </div>
-      {error ? (
+      {polling.error ? (
         <p role="alert" className="px-5 py-2 text-sm text-destructive">
           <Trans>Could not update conversation</Trans>
         </p>
-      ) : null}
-      {current?.conversation.owner === "staff" ? (
-        <form
-          className="flex items-end gap-2 p-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!body.trim() || busy) return;
-            const text = body;
-            if (nonce.current.body !== text)
-              nonce.current = { body: text, id: crypto.randomUUID() };
-            void act(async () => {
-              await rpc.customers.reply({
-                id: current.conversation.id,
-                body: text,
-                clientNonce: nonce.current.id,
-              });
-              setBody("");
-              nonce.current = { body: "", id: "" };
-            });
-          }}
-        >
-          <Textarea
-            aria-label={t`Reply to customer`}
-            placeholder={t`Reply to customer`}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            maxLength={CUSTOMER_REPLY_MAX_LENGTH}
-            className="min-h-10 resize-none"
-          />
-          <Button type="submit" size="icon" disabled={busy || !body.trim()} aria-label={t`Send`}>
-            <ArrowUp />
-          </Button>
-        </form>
       ) : null}
     </>
   );

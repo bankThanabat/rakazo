@@ -1,8 +1,5 @@
-import { useAsyncAction } from "@rakazo/chat-ui/async-state";
 import type { CustomerSnapshot } from "@rakazo/contracts";
-import { CUSTOMER_REPLY_MAX_LENGTH } from "@rakazo/contracts";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -10,20 +7,16 @@ import {
   Platform,
   Pressable,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { ProfileAvatar } from "../components/profile-avatar";
 import { rpc } from "../lib/api";
-import { newClientNonce } from "../lib/client-nonce";
 import { useI18n } from "../lib/i18n";
 import { useMobileTokens } from "../lib/native";
 import { useFocusedPolling } from "../lib/use-focused-polling";
 
 export default function CustomerThread() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  const [body, setBody] = useState("");
-  const nonce = useRef({ body: "", id: "" });
   const tokens = useMobileTokens();
   const { t } = useI18n();
   const polling = useFocusedPolling(
@@ -31,8 +24,6 @@ export default function CustomerThread() {
     conversationId,
     1500,
   );
-  const { busy, error: actionError, act } = useAsyncAction(polling.refresh);
-  const error = actionError || polling.error;
   const current = polling.data;
   return (
     <KeyboardAvoidingView
@@ -62,25 +53,6 @@ export default function CustomerThread() {
             : undefined,
         }}
       />
-      {current ? (
-        <Pressable
-          disabled={busy}
-          accessibilityRole="button"
-          style={{ padding: 16, alignSelf: "flex-end" }}
-          onPress={() =>
-            void act(() =>
-              rpc("customers/setOwner", {
-                id: conversationId,
-                owner: current.conversation.owner === "bot" ? "staff" : "bot",
-              }),
-            )
-          }
-        >
-          <Text style={{ color: tokens.foreground }}>
-            {current.conversation.owner === "bot" ? t("Take over") : t("Resume bot")}
-          </Text>
-        </Pressable>
-      ) : null}
       <FlatList
         inverted
         data={current ? [...current.messages].reverse() : []}
@@ -128,51 +100,10 @@ export default function CustomerThread() {
           </View>
         )}
       />
-      {error ? (
+      {polling.error ? (
         <Text accessibilityRole="alert" style={{ color: tokens.destructive, padding: 16 }}>
           {t("Could not update conversation")}
         </Text>
-      ) : null}
-      {current?.conversation.owner === "staff" ? (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, padding: 16 }}>
-          <TextInput
-            accessibilityLabel={t("Reply to customer")}
-            placeholder={t("Reply to customer")}
-            placeholderTextColor={tokens.mutedForeground}
-            value={body}
-            onChangeText={setBody}
-            maxLength={CUSTOMER_REPLY_MAX_LENGTH}
-            multiline
-            style={{
-              flex: 1,
-              minHeight: 44,
-              maxHeight: 150,
-              backgroundColor: tokens.muted,
-              borderRadius: 12,
-              color: tokens.foreground,
-              padding: 12,
-            }}
-          />
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy || !body.trim()}
-            style={{ paddingVertical: 12 }}
-            onPress={() => {
-              if (nonce.current.body !== body) nonce.current = { body, id: newClientNonce() };
-              void act(async () => {
-                await rpc("customers/reply", {
-                  id: conversationId,
-                  body,
-                  clientNonce: nonce.current.id,
-                });
-                setBody("");
-                nonce.current = { body: "", id: "" };
-              });
-            }}
-          >
-            <Text style={{ color: tokens.foreground }}>{t("Send")}</Text>
-          </Pressable>
-        </View>
       ) : null}
     </KeyboardAvoidingView>
   );

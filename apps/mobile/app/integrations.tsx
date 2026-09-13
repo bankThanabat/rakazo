@@ -7,7 +7,6 @@ import {
   filterConnectionCatalogItems,
   humanizeToolName,
 } from "@rakazo/core";
-import { useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -22,7 +21,6 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { NativeSymbol } from "../components/native-symbol";
 import { rpc } from "../lib/api";
 import { mobileTokens } from "../lib/appearance";
 import { useI18n } from "../lib/i18n";
@@ -38,7 +36,6 @@ function itemKey(item: Pick<ConnectionCatalogItem, "connectorId" | "slug">) {
 
 export default function Integrations() {
   const styles = useThemedStyles(createIntegrationsStyles);
-  const router = useRouter();
   const { t } = useI18n();
   const { width } = useWindowDimensions();
   const catalogColumns = width >= 480 ? 2 : 1;
@@ -531,20 +528,6 @@ export default function Integrations() {
     <SafeAreaView edges={["bottom"]} style={styles.screen}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
         {!detailItem ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push("/customer-channels")}
-            style={styles.channelLink}
-          >
-            <Text style={styles.title}>{t("Channels")}</Text>
-            <NativeSymbol
-              ios="chevron.right"
-              android="chevron-forward"
-              color={native.secondaryLabel}
-            />
-          </Pressable>
-        ) : null}
-        {!detailItem ? (
           <TextInput
             value={query}
             onChangeText={(value) => {
@@ -788,15 +771,6 @@ function createIntegrationsStyles() {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: native.page },
     content: { padding: 20, gap: 14 },
-    channelLink: {
-      minHeight: 48,
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      backgroundColor: native.fill,
-    },
     explanation: { color: native.secondaryLabel, fontSize: 14, lineHeight: 20 },
     section: { color: native.secondaryLabel, fontSize: 14, fontWeight: "600", marginTop: 2 },
     smallButton: {

@@ -136,8 +136,8 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
 
   await page.getByText("Integrations").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
-  const featured = page.getByTestId("featured-connectors");
-  await expect(featured).toContainText(
+  const available = page.getByRole("region", { name: "Available integrations", exact: true });
+  await expect(available).toContainText(
     /Gmail[\s\S]*Google Calendar[\s\S]*Google Drive[\s\S]*Slack[\s\S]*Notion/,
   );
   await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
@@ -152,16 +152,12 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   ).toBeHidden();
   await captureScreenshot(page, testInfo, "11-plugins-catalog");
 
-  // Nearest ancestor with an Add/Added control (featured tile or catalog row).
-  const gmailRow = featured
-    .getByText("Gmail", { exact: true })
-    .locator("xpath=ancestor::*[.//button][1]");
-  await gmailRow.getByRole("button", { name: "Add", exact: true }).click();
-  await expect(gmailRow.getByRole("button", { name: "Added", exact: true })).toBeVisible();
-  await expect(page.getByTestId("connection-tile-gmail")).toBeVisible();
+  const gmailRow = page.getByTestId("connection-tile-gmail");
+  await gmailRow.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(gmailRow.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "11a-connected-plugins");
 
-  await gmailRow.getByRole("button", { name: "Added", exact: true }).click();
+  await gmailRow.getByRole("button", { name: "Manage", exact: true }).click();
   const detail = page.getByTestId("connection-detail");
   await expect(detail).toBeVisible();
   await expect(page.getByTestId("connection-accounts")).toBeVisible();
@@ -182,8 +178,8 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await page.getByText("Integrations").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
   const gmailTileAgain = page.getByTestId("connection-tile-gmail");
-  await expect(gmailTileAgain.getByRole("button", { name: "Added", exact: true })).toBeVisible();
-  await gmailTileAgain.click();
+  await expect(gmailTileAgain.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
+  await gmailTileAgain.getByRole("button", { name: "Manage", exact: true }).click();
   const detailAgain = page.getByTestId("connection-detail");
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(2);
   await expect(detailAgain.getByLabel("Account label").nth(1)).toHaveValue("Work");
@@ -192,27 +188,22 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(1);
   await detailAgain.getByRole("button", { name: "Uninstall", exact: true }).click();
   await expect(page.getByTestId("connection-detail")).toHaveCount(0);
-  const gmailRowEmpty = page
-    .getByTestId("featured-connectors")
-    .getByText("Gmail", { exact: true })
-    .locator("xpath=ancestor::*[.//button][1]");
-  await expect(gmailRowEmpty.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+  const gmailRowEmpty = page.getByTestId("connection-tile-gmail");
+  await expect(gmailRowEmpty.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "11b-connected-plugins-empty");
 
-  const linearRow = page
-    .getByText("Linear", { exact: true })
-    .locator("xpath=ancestor::*[.//button][1]");
+  const linearRow = page.getByTestId("connection-tile-linear");
   const connectPopup = page.waitForEvent("popup");
-  await linearRow.getByRole("button", { name: "Add", exact: true }).click();
+  await linearRow.getByRole("button", { name: "Connect", exact: true }).click();
   const popup = await connectPopup;
   await popup.close();
-  await expect(linearRow.getByRole("button", { name: "Added", exact: true })).toBeVisible();
-  await linearRow.getByRole("button", { name: "Added", exact: true }).click();
+  await expect(linearRow.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
+  await linearRow.getByRole("button", { name: "Manage", exact: true }).click();
   const linearDetail = page.getByTestId("connection-detail");
   await expect(linearDetail).toBeVisible();
   await linearDetail.getByRole("button", { name: "Uninstall", exact: true }).click();
   await expect(page.getByTestId("connection-detail")).toHaveCount(0);
-  await expect(linearRow.getByRole("button", { name: "Add", exact: true })).toBeVisible();
+  await expect(linearRow.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
 
   const advanced = page.getByTestId("integrations-advanced");
   await advanced.evaluate((element) => {

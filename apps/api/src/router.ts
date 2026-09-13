@@ -15,7 +15,7 @@ import {
   runJobKey,
   type SandboxProvider,
 } from "@rakazo/adapter-kit";
-import type { CustomerService, IntegrationProviderSettings } from "@rakazo/adapters";
+import type { IntegrationProviderSettings } from "@rakazo/adapters";
 import {
   acquireComputerExecutionLease,
   applyTeachingDesktopInput,
@@ -26,7 +26,6 @@ import {
   ComputerBusyError,
   type ComputerExecutionLease,
   type ConnectorRegistry,
-  CUSTOMER_PROVIDERS,
   cancelComputerRunWork,
   checkpointAndRecordComputerWorkspace,
   clearInactiveUserComputerControl,
@@ -101,6 +100,7 @@ import {
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
+  createCustomerRepos,
   createExternalConversationRepos,
   createGroupRepos,
   createRepos,
@@ -414,8 +414,6 @@ function mcpAssignmentDto(row: {
 }
 
 export interface RouterDeps {
-  customers?: CustomerService;
-  customerWebhookOrigin?: string;
   prisma: PrismaClient;
   events: ThreadEvents;
   auth: Auth;
@@ -489,11 +487,6 @@ export function createRouter(deps: RouterDeps) {
   const authed = os.use(async ({ context, next }) => {
     if (!context.actor) throw new ORPCError("UNAUTHORIZED");
     return next({ context: { ...context, actor: context.actor } });
-  });
-
-  const customerApi = authed.use(({ context, next }) => {
-    if (!deps.customers) throw new ORPCError("SERVICE_UNAVAILABLE");
-    return next({ context: { ...context, customers: deps.customers } });
   });
 
   return os.router({
@@ -4266,39 +4259,12 @@ export function createRouter(deps: RouterDeps) {
       },
     },
     customers: {
-      providers: customerApi.customers.providers.handler(() => CUSTOMER_PROVIDERS),
-      channels: customerApi.customers.channels.handler(async ({ context }) =>
-        (await context.customers.repos.channels(context.actor)).map((channel) => ({
-          ...channel,
-          ...(deps.customerWebhookOrigin
-            ? { webhookUrl: new URL(channel.webhookPath, deps.customerWebhookOrigin).href }
-            : {}),
-        })),
+      list: authed.customers.list.handler(({ context }) =>
+        createCustomerRepos(deps.prisma).list(context.actor),
       ),
-      list: customerApi.customers.list.handler(({ context }) =>
-        context.customers.repos.list(context.actor),
+      snapshot: authed.customers.snapshot.handler(({ context, input }) =>
+        createCustomerRepos(deps.prisma).snapshot(context.actor, input.id),
       ),
-      snapshot: customerApi.customers.snapshot.handler(({ context, input }) =>
-        context.customers.repos.snapshot(context.actor, input.id),
-      ),
-      connect: customerApi.customers.connect.handler(({ context, input }) =>
-        context.customers.connect(context.actor, input),
-      ),
-      setChannelEnabled: customerApi.customers.setChannelEnabled.handler(
-        async ({ context, input }) => {
-          await context.customers.setChannelEnabled(context.actor, input.id, input.enabled);
-          return { ok: true as const };
-        },
-      ),
-      setOwner: customerApi.customers.setOwner.handler(async ({ context, input }) => {
-        await context.customers.repos.setOwner(context.actor, input.id, input.owner);
-        return { ok: true as const };
-      }),
-      reply: customerApi.customers.reply.handler(async ({ context, input }) => {
-        await context.customers.repos.reply(context.actor, input.id, input.body, input.clientNonce);
-        await context.customers.schedule();
-        return { ok: true as const };
-      }),
     },
     externalConversations: {
       updatePolicy: authed.externalConversations.updatePolicy.handler(
