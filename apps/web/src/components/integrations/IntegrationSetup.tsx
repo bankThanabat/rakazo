@@ -6,7 +6,7 @@ import { useEffect, useId, useState } from "react";
 import { connectMcpOauth } from "../../lib/mcp-connect";
 import { rpc } from "../../lib/rpc";
 
-type Choice = "direct" | "composio" | "pipedream" | "executor";
+type Choice = "direct" | "composio" | "pipedream" | "open-connector" | "executor";
 
 export function IntegrationSetup({
   onDone,
@@ -43,12 +43,15 @@ export function IntegrationSetup({
     { id: "direct", label: t`Direct MCP` },
     { id: "composio", label: "Composio" },
     { id: "pipedream", label: "Pipedream" },
+    { id: "open-connector", label: "OpenConnector" },
     { id: "executor", label: "Executor" },
   ];
-  const managed = choice === "composio" || choice === "pipedream";
+  const managed = choice === "composio" || choice === "pipedream" || choice === "open-connector";
   const hasCredentials = Boolean(apiKey.trim());
   const credentialsReady =
-    hasCredentials && (choice !== "pipedream" || Boolean(clientId.trim() && projectId.trim()));
+    hasCredentials &&
+    (choice !== "pipedream" || Boolean(clientId.trim() && projectId.trim())) &&
+    (choice !== "open-connector" || Boolean(endpoint.trim()));
   const remoteResults = [
     ...new Map(
       results.flatMap((result) =>
@@ -87,13 +90,15 @@ export function IntegrationSetup({
       await rpc.integrationSetup.save(
         choice === "composio"
           ? { provider: "composio", apiKey }
-          : {
-              provider: "pipedream",
-              clientId,
-              clientSecret: apiKey,
-              projectId,
-              environment: "production",
-            },
+          : choice === "open-connector"
+            ? { provider: "open-connector", endpoint, apiKey }
+            : {
+                provider: "pipedream",
+                clientId,
+                clientSecret: apiKey,
+                projectId,
+                environment: "production",
+              },
       );
       setApiKey("");
       setState(await rpc.integrationSetup.get());
@@ -137,7 +142,10 @@ export function IntegrationSetup({
           className="overflow-hidden rounded-xl border border-border"
         >
           {choices
-            .filter(({ id }) => !managedOnly || id === "composio" || id === "pipedream")
+            .filter(
+              ({ id }) =>
+                !managedOnly || id === "composio" || id === "pipedream" || id === "open-connector",
+            )
             .map(({ id, label }) => (
               <button
                 key={id}
@@ -157,7 +165,7 @@ export function IntegrationSetup({
             ))}
         </fieldset>
       ) : null}
-      {choice === "composio" || choice === "pipedream" ? (
+      {managed ? (
         <>
           {configured ? (
             <p className="text-sm text-success">
@@ -166,6 +174,19 @@ export function IntegrationSetup({
           ) : null}
           {state?.canConfigure ? (
             <>
+              {choice === "open-connector" ? (
+                <label htmlFor={`${fieldId}-endpoint`} className="block text-sm">
+                  <Trans>Server URL</Trans>
+                  <Input
+                    id={`${fieldId}-endpoint`}
+                    className="mt-2"
+                    type="url"
+                    value={endpoint}
+                    onChange={(event) => setEndpoint(event.target.value)}
+                    autoComplete="off"
+                  />
+                </label>
+              ) : null}
               {choice === "pipedream" ? (
                 <>
                   <label htmlFor={`${fieldId}-client-id`} className="block text-sm">
@@ -191,7 +212,11 @@ export function IntegrationSetup({
                 </>
               ) : null}
               <label htmlFor={`${fieldId}-key`} className="block text-sm">
-                {choice === "composio" ? t`API key` : t`Client secret`}
+                {choice === "open-connector"
+                  ? t`Admin token`
+                  : choice === "composio"
+                    ? t`API key`
+                    : t`Client secret`}
                 <Input
                   id={`${fieldId}-key`}
                   className="mt-2"
@@ -206,7 +231,9 @@ export function IntegrationSetup({
                 href={
                   choice === "composio"
                     ? "https://dashboard.composio.dev"
-                    : "https://pipedream.com/docs/connect/mcp/developers"
+                    : choice === "open-connector"
+                      ? "https://github.com/oomol-lab/open-connector/blob/main/docs/programmatic-connections.md"
+                      : "https://pipedream.com/docs/connect/mcp/developers"
                 }
                 target="_blank"
                 rel="noreferrer"

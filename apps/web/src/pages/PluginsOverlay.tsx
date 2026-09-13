@@ -32,6 +32,7 @@ import {
 import { ChevronDown, ChevronLeft, ChevronUp, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IntegrationSetup } from "../components/integrations/IntegrationSetup";
+import { OpenConnectorCatalog } from "../components/integrations/OpenConnectorCatalog";
 import { optionalCatalogFeedProbe } from "../lib/optional-catalog-feed";
 import { rpc } from "../lib/rpc";
 
@@ -112,7 +113,7 @@ export function PluginsOverlay({
 
   async function refresh() {
     const [items, installs, rows, catalogFeed] = await Promise.all([
-      rpc.connections.catalog({}),
+      rpc.connections.catalog({ excludeConnectorIds: ["open-connector"] }),
       rpc.capabilities.list(),
       rpc.connections.list(),
       optionalCatalogFeedProbe(rpc.capabilities.catalogSearch({ query: "" })),
@@ -313,6 +314,7 @@ export function PluginsOverlay({
   }
 
   async function renameAccount(row: Connection) {
+    if (row.canManage === false) return;
     const displayName = (labelDrafts[row.id] ?? row.displayName).trim();
     if (!displayName || displayName === row.displayName) return;
     setPending(`rename:${row.id}`);
@@ -555,18 +557,20 @@ export function PluginsOverlay({
                 {item.name[0]}
               </div>
             )}
-            <div className="truncate text-[17px] font-medium text-foreground">{item.name}</div>
+            <div className="min-w-0 text-[17px] font-medium text-foreground">{item.name}</div>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            className="rounded-full"
-            size="sm"
-            disabled={uninstalling || connecting}
-            onClick={() => void uninstall(item)}
-          >
-            {uninstalling ? <Trans>Removing…</Trans> : <Trans>Uninstall</Trans>}
-          </Button>
+          {accounts.length > 0 && accounts.every((row) => row.canManage !== false) ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="rounded-full"
+              size="sm"
+              disabled={uninstalling || connecting}
+              onClick={() => void uninstall(item)}
+            >
+              {uninstalling ? <Trans>Removing…</Trans> : <Trans>Uninstall</Trans>}
+            </Button>
+          ) : null}
         </div>
 
         <Card data-testid="connection-accounts">
@@ -577,31 +581,36 @@ export function PluginsOverlay({
           </CardHeader>
           <CardContent className="space-y-3">
             {accounts.map((row) => (
-              <div key={row.id} className="flex items-center gap-2">
-                <Input
-                  value={labelDrafts[row.id] ?? row.displayName}
-                  aria-label={t`Account label`}
-                  className="h-9 rounded-lg px-3 text-[13px]"
-                  onChange={(event) =>
-                    setLabelDrafts((current) => ({ ...current, [row.id]: event.target.value }))
-                  }
-                  onBlur={() => void renameAccount(row)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.currentTarget.blur();
+              <div key={row.id} className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly={row.canManage === false}
+                    value={labelDrafts[row.id] ?? row.displayName}
+                    aria-label={t`Account label`}
+                    className="h-9 rounded-lg px-3 text-[13px]"
+                    onChange={(event) =>
+                      setLabelDrafts((current) => ({ ...current, [row.id]: event.target.value }))
                     }
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="h-9 shrink-0 rounded-full px-2 text-[12px]"
-                  size="sm"
-                  disabled={pending === row.id || uninstalling}
-                  onClick={() => void revokeAccount(row, item)}
-                >
-                  {pending === row.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
-                </Button>
+                    onBlur={() => void renameAccount(row)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                  {row.canManage !== false ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-9 shrink-0 rounded-full px-2 text-[12px]"
+                      size="sm"
+                      disabled={pending === row.id || uninstalling}
+                      onClick={() => void revokeAccount(row, item)}
+                    >
+                      {pending === row.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             ))}
             <Button
@@ -612,7 +621,13 @@ export function PluginsOverlay({
               disabled={connecting || uninstalling}
               onClick={() => void connect(item)}
             >
-              {connecting ? <Trans>Adding…</Trans> : <Trans>Add another</Trans>}
+              {connecting ? (
+                <Trans>Adding…</Trans>
+              ) : accounts.length ? (
+                <Trans>Add another</Trans>
+              ) : (
+                <Trans>Connect</Trans>
+              )}
             </Button>
           </CardContent>
         </Card>
@@ -815,6 +830,11 @@ export function PluginsOverlay({
                 </div>
               ) : null}
 
+              <OpenConnectorCatalog
+                connections={connections}
+                onRefresh={refresh}
+                onSetup={() => setSetupOpen(true)}
+              />
               <details
                 data-testid="integrations-advanced"
                 className="group mt-8"

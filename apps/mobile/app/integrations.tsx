@@ -21,6 +21,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { OpenConnectorCatalog } from "../components/integrations/OpenConnectorCatalog";
 import { rpc } from "../lib/api";
 import { mobileTokens } from "../lib/appearance";
 import { useI18n } from "../lib/i18n";
@@ -78,7 +79,9 @@ export default function Integrations() {
   }, [catalog, detailKey]);
 
   async function refresh() {
-    const catalogResult = await rpc<ConnectionCatalogItem[]>("connections/catalog");
+    const catalogResult = await rpc<ConnectionCatalogItem[]>("connections/catalog", {
+      excludeConnectorIds: ["open-connector"],
+    });
     setCatalog(catalogResult);
     setCatalogReady(true);
     try {
@@ -254,6 +257,7 @@ export default function Integrations() {
   }
 
   async function renameAccount(row: Connection) {
+    if (row.canManage === false) return;
     const displayName = (labelDrafts[row.id] ?? row.displayName).trim();
     if (!displayName || displayName === row.displayName) return;
     setPending(`rename:${row.id}`);
@@ -440,18 +444,20 @@ export default function Integrations() {
             >
               <Text style={styles.link}>{t("Back")}</Text>
             </Pressable>
-            <Text numberOfLines={1} style={styles.detailTitle}>
+            <Text numberOfLines={2} style={styles.detailTitle}>
               {item.name}
             </Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={t("Uninstall")}
-            disabled={uninstalling || connecting}
-            onPress={() => void uninstall(item)}
-          >
-            <Text style={styles.link}>{uninstalling ? t("Working…") : t("Uninstall")}</Text>
-          </Pressable>
+          {accounts.length > 0 && accounts.every((row) => row.canManage !== false) ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={t("Uninstall")}
+              disabled={uninstalling || connecting}
+              onPress={() => void uninstall(item)}
+            >
+              <Text style={styles.link}>{uninstalling ? t("Working…") : t("Uninstall")}</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.card}>
@@ -459,6 +465,7 @@ export default function Integrations() {
           {accounts.map((row) => (
             <View key={row.id} style={styles.accountRow}>
               <TextInput
+                editable={row.canManage !== false}
                 value={labelDrafts[row.id] ?? row.displayName}
                 onChangeText={(value) =>
                   setLabelDrafts((current) => ({ ...current, [row.id]: value }))
@@ -467,24 +474,32 @@ export default function Integrations() {
                 accessibilityLabel={t("Account label")}
                 style={styles.accountLabel}
               />
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("Remove {name}", { name: row.displayName })}
-                disabled={pending === row.id || uninstalling}
-                onPress={() => void revokeAccount(row)}
-              >
-                <Text style={styles.link}>{pending === row.id ? t("Working…") : t("Remove")}</Text>
-              </Pressable>
+              {row.canManage !== false ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Remove {name}", { name: row.displayName })}
+                  disabled={pending === row.id || uninstalling}
+                  onPress={() => void revokeAccount(row)}
+                >
+                  <Text style={styles.link}>
+                    {pending === row.id ? t("Working…") : t("Remove")}
+                  </Text>
+                </Pressable>
+              ) : null}
             </View>
           ))}
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={t("Add another {name}", { name: item.name })}
+            accessibilityLabel={
+              accounts.length ? t("Add another {name}", { name: item.name }) : t("Connect")
+            }
             disabled={connecting || uninstalling}
             onPress={() => void connect(item)}
             style={styles.cardButton}
           >
-            <Text style={styles.buttonLabel}>{connecting ? t("Working…") : t("Add another")}</Text>
+            <Text style={styles.buttonLabel}>
+              {connecting ? t("Working…") : accounts.length ? t("Add another") : t("Connect")}
+            </Text>
           </Pressable>
         </View>
 
@@ -604,6 +619,8 @@ export default function Integrations() {
                 <Text style={styles.buttonLabel}>{t("Show more")}</Text>
               </Pressable>
             ) : null}
+
+            <OpenConnectorCatalog connections={connections} onRefresh={refresh} />
 
             <Pressable
               accessibilityRole="button"

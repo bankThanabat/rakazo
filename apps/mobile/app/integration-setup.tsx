@@ -25,6 +25,7 @@ export default function IntegrationSetup() {
   const [key, setKey] = useState("");
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
+  const [endpoint, setEndpoint] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -42,9 +43,10 @@ export default function IntegrationSetup() {
     { id: "direct", label: t("Direct MCP") },
     { id: "composio", label: "Composio" },
     { id: "pipedream", label: "Pipedream" },
+    { id: "open-connector", label: "OpenConnector" },
     { id: "executor", label: "Executor" },
   ];
-  const managed = choice === "composio" || choice === "pipedream";
+  const managed = choice === "composio" || choice === "pipedream" || choice === "open-connector";
   const configured = state?.providers.find((provider) => provider.id === choice)?.configured;
   async function save() {
     setBusy(true);
@@ -54,13 +56,15 @@ export default function IntegrationSetup() {
         "integrationSetup/save",
         choice === "composio"
           ? { provider: "composio", apiKey: key }
-          : {
-              provider: "pipedream",
-              clientId,
-              clientSecret: key,
-              projectId,
-              environment: "production",
-            },
+          : choice === "open-connector"
+            ? { provider: "open-connector", apiKey: key, endpoint }
+            : {
+                provider: "pipedream",
+                clientId,
+                clientSecret: key,
+                projectId,
+                environment: "production",
+              },
       );
       setKey("");
       router.replace("/integrations");
@@ -104,11 +108,25 @@ export default function IntegrationSetup() {
           </Pressable>
         ))}
       </View>
-      {choice === "composio" || choice === "pipedream" ? (
+      {managed ? (
         <>
           {configured ? <Text style={styles.text}>{t("Connected")}</Text> : null}
           {state?.canConfigure ? (
             <>
+              {choice === "open-connector" ? (
+                <>
+                  <Text style={styles.text}>{t("Server URL")}</Text>
+                  <TextInput
+                    accessibilityLabel={t("Server URL")}
+                    value={endpoint}
+                    onChangeText={setEndpoint}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="url"
+                    style={styles.input}
+                  />
+                </>
+              ) : null}
               {choice === "pipedream" ? (
                 <>
                   <Text style={styles.text}>{t("Client ID")}</Text>
@@ -132,10 +150,20 @@ export default function IntegrationSetup() {
                 </>
               ) : null}
               <Text style={styles.text}>
-                {choice === "composio" ? t("API key") : t("Client secret")}
+                {choice === "open-connector"
+                  ? t("Admin token")
+                  : choice === "composio"
+                    ? t("API key")
+                    : t("Client secret")}
               </Text>
               <TextInput
-                accessibilityLabel={choice === "composio" ? t("API key") : t("Client secret")}
+                accessibilityLabel={
+                  choice === "open-connector"
+                    ? t("Admin token")
+                    : choice === "composio"
+                      ? t("API key")
+                      : t("Client secret")
+                }
                 value={key}
                 onChangeText={setKey}
                 secureTextEntry
@@ -147,7 +175,9 @@ export default function IntegrationSetup() {
                 void Linking.openURL(
                   choice === "composio"
                     ? "https://dashboard.composio.dev"
-                    : "https://pipedream.com/docs/connect/mcp/developers",
+                    : choice === "open-connector"
+                      ? "https://github.com/oomol-lab/open-connector/blob/main/docs/programmatic-connections.md"
+                      : "https://pipedream.com/docs/connect/mcp/developers",
                 );
               })}
             </>
@@ -189,7 +219,9 @@ export default function IntegrationSetup() {
           (managed &&
             state?.canConfigure &&
             !configured &&
-            (!key.trim() || (choice === "pipedream" && (!clientId.trim() || !projectId.trim())))),
+            (!key.trim() ||
+              (choice === "pipedream" && (!clientId.trim() || !projectId.trim())) ||
+              (choice === "open-connector" && !endpoint.trim()))),
       )}
       {button(t("Skip"), () => router.replace("/"), busy)}
     </ScrollView>

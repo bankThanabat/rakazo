@@ -1,4 +1,5 @@
 import type { AdapterContext, ManagedConnectorProvider } from "@rakazo/adapter-kit";
+import { IntegrationProviderConfigSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
@@ -111,5 +112,42 @@ describe("integration provider settings", () => {
     await settings.save({ provider: "composio", apiKey: "fake-warm-key" }, context);
     settings.warmDirectories();
     await vi.waitFor(() => expect(warm).toHaveBeenCalledOnce());
+  });
+});
+
+describe("OpenConnector settings", () => {
+  it("encrypts the admin token and resolves the server in a separate worker", async () => {
+    const f = fixture();
+    const config = {
+      provider: "open-connector" as const,
+      endpoint: "https://connector.example.test",
+      apiKey: "fake-admin-token",
+    };
+    await f.settings.save(config, context);
+    expect(JSON.stringify([...f.rows.values()])).not.toContain(config.apiKey);
+    const worker = new IntegrationProviderSettings(
+      f.prisma as unknown as PrismaClient,
+      f.secrets,
+      "test-identity",
+      {},
+      f.factory,
+    );
+    expect(await worker.resolve("open-connector")).toBe(f.adapter);
+    expect(f.factory).toHaveBeenLastCalledWith(config);
+  });
+  it.each([
+    "invalid",
+    "file:///tmp/connector",
+    "https://user:password@example.test",
+    "https://example.test?token=fake",
+    "https://example.test#fragment",
+  ])("rejects unsafe or malformed endpoint %s without throwing", (endpoint) => {
+    expect(
+      IntegrationProviderConfigSchema.safeParse({
+        provider: "open-connector",
+        endpoint,
+        apiKey: "fake-admin-token",
+      }).success,
+    ).toBe(false);
   });
 });
