@@ -3355,6 +3355,11 @@ msgstr "Submit"
 msgid "Supports thinking"
 msgstr "Supports thinking"
 
+#: src/pages/ModelSettingsOverlay.tsx:508
+#: src/pages/Onboarding.tsx:425
+msgid "Supports images"
+msgstr "Supports images"
+
 #: src/pages/shell/command-palette.tsx:90
 msgid "Switch bot"
 msgstr "Switch bot"
@@ -3879,3 +3884,35 @@ msgstr "Search channels"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "No integrations match your search."
 msgstr "No integrations match your search."
+
+#: src/pages/Onboarding.tsx:516
+msgid "Reasoning effort"
+msgstr "Reasoning effort"
+
+#: src/pages/Onboarding.tsx:517
+msgid "Default"
+msgstr "Default"
+
+#: src/pages/Onboarding.tsx:520
+msgid "Maximum output tokens"
+msgstr "Maximum output tokens"
+
+#: src/pages/Onboarding.tsx:523
+msgid "Context limit"
+msgstr "Context limit"
+
+#: src/pages/Onboarding.tsx:227
+msgid "Enter a whole number from 1 to {MAX_MODEL_MAX_TOKENS} for maximum output tokens."
+msgstr "Enter a whole number from 1 to {MAX_MODEL_MAX_TOKENS} for maximum output tokens."
+
+#: src/pages/Onboarding.tsx:234
+msgid "Enter a whole number from 1 to {MAX_MODEL_CONTEXT_WINDOW} for the context limit."
+msgstr "Enter a whole number from 1 to {MAX_MODEL_CONTEXT_WINDOW} for the context limit."
+
+#: src/pages/Onboarding.tsx:218
+msgid "Enter a whole number from 1 to 1000 for the image limit."
+msgstr "Enter a whole number from 1 to 1000 for the image limit."
+
+#: src/pages/Onboarding.tsx:529
+msgid "Maximum images per request"
+msgstr "Maximum images per request"

@@ -3355,6 +3355,11 @@ msgstr "सबमिट करें"
 msgid "Supports thinking"
 msgstr "सोचने की क्षमता का समर्थन करता है"
 
+#: src/pages/ModelSettingsOverlay.tsx:508
+#: src/pages/Onboarding.tsx:425
+msgid "Supports images"
+msgstr "छवियों का समर्थन"
+
 #: src/pages/shell/command-palette.tsx:90
 msgid "Switch bot"
 msgstr ""
@@ -3879,3 +3884,35 @@ msgstr "चैनल खोजें"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "No integrations match your search."
 msgstr "आपकी खोज से कोई इंटीग्रेशन मेल नहीं खाता।"
+
+#: src/pages/Onboarding.tsx:516
+msgid "Reasoning effort"
+msgstr "रीज़निंग प्रयास"
+
+#: src/pages/Onboarding.tsx:517
+msgid "Default"
+msgstr "डिफ़ॉल्ट"
+
+#: src/pages/Onboarding.tsx:520
+msgid "Maximum output tokens"
+msgstr "अधिकतम आउटपुट टोकन"
+
+#: src/pages/Onboarding.tsx:523
+msgid "Context limit"
+msgstr "कॉन्टेक्स्ट सीमा"
+
+#: src/pages/Onboarding.tsx:227
+msgid "Enter a whole number from 1 to {MAX_MODEL_MAX_TOKENS} for maximum output tokens."
+msgstr "अधिकतम आउटपुट टोकन के लिए 1 से {MAX_MODEL_MAX_TOKENS} के बीच कोई पूर्णांक दर्ज करें।"
+
+#: src/pages/Onboarding.tsx:234
+msgid "Enter a whole number from 1 to {MAX_MODEL_CONTEXT_WINDOW} for the context limit."
+msgstr "कॉन्टेक्स्ट सीमा के लिए 1 से {MAX_MODEL_CONTEXT_WINDOW} के बीच कोई पूर्णांक दर्ज करें।"
+
+#: src/pages/Onboarding.tsx:218
+msgid "Enter a whole number from 1 to 1000 for the image limit."
+msgstr "इमेज सीमा के लिए 1 से 1000 के बीच कोई पूर्णांक दर्ज करें।"
+
+#: src/pages/Onboarding.tsx:529
+msgid "Maximum images per request"
+msgstr "प्रति अनुरोध अधिकतम इमेज"

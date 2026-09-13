@@ -35,6 +35,7 @@ import {
   BotSecretName,
   BotSecretSubmission,
   isAttachmentImageMimeType,
+  OPENAI_COMPATIBLE_PROVIDER_ID,
 } from "@rakazo/contracts";
 import {
   type ActionApprovalRule,
@@ -223,6 +224,7 @@ import {
   IMAGE_RETURNING_COMPUTER_TOOLS,
   MODEL_CANNOT_SEE_MESSAGE,
   modelAcceptsImageInput,
+  modelIdSupportsImages,
 } from "./model-vision.js";
 import { toOAuthCredential } from "./pi-credentials.js";
 import {
@@ -746,6 +748,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
       scope.spaceId,
       credential,
       provider,
+      modelId,
       registerSecrets,
     );
     return {
@@ -754,7 +757,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
       apiKey: resolved.oauth ? undefined : resolved.apiKey,
       baseUrl: resolved.baseUrl,
       reasoning: resolved.reasoning,
-      thinkingLevel: null,
+      maxTokens: resolved.maxTokens,
+      contextWindow: resolved.contextWindow,
+      acceptsImages: resolved.acceptsImages,
+      maxImagesPerPrompt: resolved.maxImagesPerPrompt,
+      thinkingLevel: resolved.thinkingLevel ?? null,
       oauth: resolved.oauth
         ? { credential: resolved.oauth, persist: resolved.persistOAuth }
         : undefined,
@@ -807,6 +814,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         scope.spaceId,
         credential,
         provider,
+        id,
       );
       return {
         provider,
@@ -814,7 +822,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
         apiKey: resolved.oauth ? undefined : resolved.apiKey,
         baseUrl: resolved.baseUrl,
         reasoning: resolved.reasoning,
-        thinkingLevel,
+        maxTokens: resolved.maxTokens,
+        contextWindow: resolved.contextWindow,
+        acceptsImages: resolved.acceptsImages,
+        maxImagesPerPrompt: resolved.maxImagesPerPrompt,
+        thinkingLevel: thinkingLevel ?? resolved.thinkingLevel ?? null,
         oauth: resolved.oauth
           ? { credential: resolved.oauth, persist: resolved.persistOAuth }
           : undefined,
@@ -1345,6 +1357,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
           run.spaceId,
           credential,
           runModelProvider,
+          runModelId,
           (values) => runSecrets.push(...values),
         );
         runSecrets.push(...resolved.redact);
@@ -1387,7 +1400,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
         // vision-capable default was gated as "scripted" and lost its screenshot tools.
         const acceptsImages =
           deps.runtime.describe().capabilities.scripted ||
-          modelAcceptsImageInput(runModelProvider, runModelId);
+          modelAcceptsImageInput(runModelProvider, runModelId, resolved.acceptsImages);
         const groupContext = thread.groupId
           ? await loadGroupContext(deps.prisma, thread.groupId, { id: bot.id, name: bot.name })
           : undefined;
@@ -1853,6 +1866,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 run.spaceId,
                 reviewCredential,
                 checker.provider,
+                checker.model,
                 (values) => runSecrets.push(...values),
               );
               const judge = await runAutoReviewJudge({
@@ -3427,7 +3441,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 apiKey: resolved.oauth ? undefined : resolved.apiKey,
                 baseUrl: resolved.baseUrl,
                 reasoning: resolved.reasoning,
-                thinkingLevel,
+                maxTokens: resolved.maxTokens,
+                contextWindow: resolved.contextWindow,
+                acceptsImages: resolved.acceptsImages,
+                maxImagesPerPrompt: resolved.maxImagesPerPrompt,
+                thinkingLevel: thinkingLevel ?? resolved.thinkingLevel ?? null,
                 oauth: resolved.oauth
                   ? { credential: resolved.oauth, persist: resolved.persistOAuth }
                   : undefined,
@@ -4494,13 +4512,24 @@ async function resolveModelKey(
   deps: ExecutorDeps,
   userId: string,
   spaceId: string,
-  credential: { secretId: string; provider: string } | null,
+  credential: {
+    secretId: string;
+    provider: string;
+    defaultModel?: string | null;
+    supportsImages?: boolean;
+  } | null,
   provider: string,
+  modelId: string,
   registerSecrets?: (values: string[]) => void,
 ): Promise<{
   apiKey?: string;
   baseUrl?: string;
   reasoning?: boolean;
+  maxTokens?: number;
+  contextWindow?: number;
+  thinkingLevel?: AgentRunRequest["model"]["thinkingLevel"];
+  acceptsImages?: boolean;
+  maxImagesPerPrompt?: number;
   oauth?: AgentModelOAuthCredential;
   persistOAuth?: (credential: AgentModelOAuthCredential) => Promise<void>;
   redact: string[];
@@ -4536,11 +4565,31 @@ async function resolveModelKey(
       const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
       const baseUrl =
         resolved.secret.kind === "openai_compatible" ? resolved.secret.baseUrl : undefined;
+      const acceptsImages =
+        credential.provider === OPENAI_COMPATIBLE_PROVIDER_ID &&
+        resolved.secret.kind === "openai_compatible" &&
+        (modelIdSupportsImages(resolved.secret.visionModelIds, modelId) ||
+          // Legacy secrets have no per-model list, so keep their existing
+          // capability scoped to the model saved in the space preference.
+          (resolved.secret.visionModelIds === undefined &&
+            credential.supportsImages === true &&
+            credential.defaultModel?.trim() === modelId.trim()));
       return {
         apiKey: resolved.apiKey,
         baseUrl,
         reasoning:
           resolved.secret.kind === "openai_compatible" ? resolved.secret.reasoning : undefined,
+        maxTokens:
+          resolved.secret.kind === "openai_compatible" ? resolved.secret.maxTokens : undefined,
+        contextWindow:
+          resolved.secret.kind === "openai_compatible" ? resolved.secret.contextWindow : undefined,
+        thinkingLevel:
+          resolved.secret.kind === "openai_compatible" ? resolved.secret.thinkingLevel : undefined,
+        acceptsImages,
+        maxImagesPerPrompt:
+          resolved.secret.kind === "openai_compatible"
+            ? resolved.secret.maxImagesPerPrompt
+            : undefined,
         oauth,
         persistOAuth: oauth
           ? async (next) => {

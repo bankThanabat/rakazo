@@ -256,6 +256,7 @@ model UserModelCredential {
   provider    String
   label       String
   secretId    String
+  supportsImages Boolean              @default(false)
   createdAt   DateTime               @default(now())
   updatedAt   DateTime               @updatedAt
   preferences SpaceModelPreference[]

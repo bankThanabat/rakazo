@@ -3355,6 +3355,11 @@ msgstr "확인"
 msgid "Supports thinking"
 msgstr "사고 모드 지원"
 
+#: src/pages/ModelSettingsOverlay.tsx:508
+#: src/pages/Onboarding.tsx:425
+msgid "Supports images"
+msgstr "이미지 지원"
+
 #: src/pages/shell/command-palette.tsx:90
 msgid "Switch bot"
 msgstr ""
@@ -3879,3 +3884,35 @@ msgstr "채널 검색"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "No integrations match your search."
 msgstr "검색과 일치하는 연동이 없습니다."
+
+#: src/pages/Onboarding.tsx:516
+msgid "Reasoning effort"
+msgstr "추론 강도"
+
+#: src/pages/Onboarding.tsx:517
+msgid "Default"
+msgstr "기본값"
+
+#: src/pages/Onboarding.tsx:520
+msgid "Maximum output tokens"
+msgstr "최대 출력 토큰 수"
+
+#: src/pages/Onboarding.tsx:523
+msgid "Context limit"
+msgstr "컨텍스트 한도"
+
+#: src/pages/Onboarding.tsx:227
+msgid "Enter a whole number from 1 to {MAX_MODEL_MAX_TOKENS} for maximum output tokens."
+msgstr "최대 출력 토큰 수는 1에서 {MAX_MODEL_MAX_TOKENS} 사이의 정수로 입력하세요."
+
+#: src/pages/Onboarding.tsx:234
+msgid "Enter a whole number from 1 to {MAX_MODEL_CONTEXT_WINDOW} for the context limit."
+msgstr "컨텍스트 한도는 1에서 {MAX_MODEL_CONTEXT_WINDOW} 사이의 정수로 입력하세요."
+
+#: src/pages/Onboarding.tsx:218
+msgid "Enter a whole number from 1 to 1000 for the image limit."
+msgstr "이미지 한도는 1에서 1000 사이의 정수로 입력하세요."
+
+#: src/pages/Onboarding.tsx:529
+msgid "Maximum images per request"
+msgstr "요청당 최대 이미지 수"

@@ -3355,6 +3355,11 @@ msgstr "Gönder"
 msgid "Supports thinking"
 msgstr "Düşünmeyi destekler"
 
+#: src/pages/ModelSettingsOverlay.tsx:508
+#: src/pages/Onboarding.tsx:425
+msgid "Supports images"
+msgstr "Görüntüleri destekler"
+
 #: src/pages/shell/command-palette.tsx:90
 msgid "Switch bot"
 msgstr ""
@@ -3879,3 +3884,35 @@ msgstr "Kanal ara"
 #: src/pages/CustomerChannelsPanel.tsx
 msgid "No integrations match your search."
 msgstr "Aramanızla eşleşen entegrasyon yok."
+
+#: src/pages/Onboarding.tsx:516
+msgid "Reasoning effort"
+msgstr "Akıl yürütme düzeyi"
+
+#: src/pages/Onboarding.tsx:517
+msgid "Default"
+msgstr "Varsayılan"
+
+#: src/pages/Onboarding.tsx:520
+msgid "Maximum output tokens"
+msgstr "Maksimum çıktı token sayısı"
+
+#: src/pages/Onboarding.tsx:523
+msgid "Context limit"
+msgstr "Bağlam sınırı"
+
+#: src/pages/Onboarding.tsx:227
+msgid "Enter a whole number from 1 to {MAX_MODEL_MAX_TOKENS} for maximum output tokens."
+msgstr "Maksimum çıktı token sayısı için 1 ile {MAX_MODEL_MAX_TOKENS} arasında bir tam sayı girin."
+
+#: src/pages/Onboarding.tsx:234
+msgid "Enter a whole number from 1 to {MAX_MODEL_CONTEXT_WINDOW} for the context limit."
+msgstr "Bağlam sınırı için 1 ile {MAX_MODEL_CONTEXT_WINDOW} arasında bir tam sayı girin."
+
+#: src/pages/Onboarding.tsx:218
+msgid "Enter a whole number from 1 to 1000 for the image limit."
+msgstr "Görüntü sınırı için 1 ile 1000 arasında bir tam sayı girin."
+
+#: src/pages/Onboarding.tsx:529
+msgid "Maximum images per request"
+msgstr "İstek başına maksimum görüntü sayısı"
