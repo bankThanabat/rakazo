@@ -34,6 +34,7 @@ import {
 import { Check, ChevronDown, ChevronLeft, ChevronUp, Search, Settings2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { IntegrationSetup } from "../components/integrations/IntegrationSetup";
+import { OpenConnectorCatalog } from "../components/integrations/OpenConnectorCatalog";
 import { optionalCatalogFeedProbe } from "../lib/optional-catalog-feed";
 import { rpc } from "../lib/rpc";
 
@@ -114,7 +115,7 @@ export function PluginsOverlay({
 
   async function refresh() {
     const [items, installs, rows, catalogFeed] = await Promise.all([
-      rpc.connections.catalog({}),
+      rpc.connections.catalog({ excludeConnectorIds: ["open-connector"] }),
       rpc.capabilities.list(),
       rpc.connections.list(),
       optionalCatalogFeedProbe(rpc.capabilities.catalogSearch({ query: "" })),
@@ -323,6 +324,7 @@ export function PluginsOverlay({
   }
 
   async function renameAccount(row: Connection) {
+    if (row.canManage === false) return;
     const displayName = (labelDrafts[row.id] ?? row.displayName).trim();
     if (!displayName || displayName === row.displayName) return;
     setPending(`rename:${row.id}`);
@@ -515,7 +517,7 @@ export function PluginsOverlay({
             )}
             <div className="min-w-0 text-[17px] font-medium text-foreground">{item.name}</div>
           </div>
-          {accounts.length > 0 ? (
+          {accounts.length > 0 && accounts.every((row) => row.canManage !== false) ? (
             <Button
               type="button"
               variant="secondary"
@@ -540,6 +542,7 @@ export function PluginsOverlay({
               <div key={row.id} className="space-y-3">
                 <div className="flex items-center gap-2">
                   <Input
+                    readOnly={row.canManage === false}
                     value={labelDrafts[row.id] ?? row.displayName}
                     aria-label={t`Account label`}
                     className="h-9 rounded-lg px-3 text-[13px]"
@@ -553,16 +556,18 @@ export function PluginsOverlay({
                       }
                     }}
                   />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="h-9 shrink-0 rounded-full px-2 text-[12px]"
-                    size="sm"
-                    disabled={pending === row.id || uninstalling}
-                    onClick={() => void revokeAccount(row, item)}
-                  >
-                    {pending === row.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
-                  </Button>
+                  {row.canManage !== false ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-9 shrink-0 rounded-full px-2 text-[12px]"
+                      size="sm"
+                      disabled={pending === row.id || uninstalling}
+                      onClick={() => void revokeAccount(row, item)}
+                    >
+                      {pending === row.id ? <Trans>Removing…</Trans> : <Trans>Remove</Trans>}
+                    </Button>
+                  ) : null}
                 </div>
               </div>
             ))}
@@ -757,6 +762,11 @@ export function PluginsOverlay({
                 ) : null}
               </div>
 
+              <OpenConnectorCatalog
+                connections={connections}
+                onRefresh={refresh}
+                onSetup={() => setSetupOpen(true)}
+              />
               <details
                 data-testid="integrations-advanced"
                 className="group mt-8"

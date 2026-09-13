@@ -76,6 +76,7 @@ import {
 import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import {
   appendEventInTransaction,
+  connectionAccessWhere,
   createSpaceForMember,
   createThreadMessageInTransaction,
   effectiveMemoryScope,
@@ -1104,7 +1105,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
             : Promise.resolve(undefined),
           deps.prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
           deps.prisma.connection.findMany({
-            where: { userId: run.userId, spaceId: run.spaceId },
+            where: connectionAccessWhere(run),
             select: {
               id: true,
               connectorId: true,

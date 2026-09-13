@@ -1,0 +1,158 @@
+diff --git a/src/oauth/oauth-flow-service.ts b/src/oauth/oauth-flow-service.ts
+index 23bd19d1..0f21561b 100644
+--- a/src/oauth/oauth-flow-service.ts
++++ b/src/oauth/oauth-flow-service.ts
+@@ -161,6 +161,10 @@ export class OAuthFlowService {
+     };
+   }
+ 
++  async cancelConnectionRequest(id: string, owner: string): Promise<void> {
++    await this.requests.cancel(id, owner);
++  }
++
+   async getConnectionRequest(id: string, owner: string): Promise<ConnectionRequest | undefined> {
+     return this.requests.get(id, owner);
+   }
+diff --git a/src/server/api/auth.ts b/src/server/api/auth.ts
+index 1a05285f..bfbf795a 100644
+--- a/src/server/api/auth.ts
++++ b/src/server/api/auth.ts
+@@ -307,6 +307,9 @@ function readBearerCredential(context: Context): string {
+ 
+ function isConnectionManagementPath(path: string): boolean {
+   return (
+-    path === "/v1/connections" || path.startsWith("/v1/connections/") || path.startsWith("/v1/connection-requests/")
++    path === "/v1/connection-capabilities" ||
++    path === "/v1/connections" ||
++    path.startsWith("/v1/connections/") ||
++    path.startsWith("/v1/connection-requests/")
+   );
+ }
+diff --git a/src/server/api/connection-routes.test.ts b/src/server/api/connection-routes.test.ts
+index 05218464..a110d122 100644
+--- a/src/server/api/connection-routes.test.ts
++++ b/src/server/api/connection-routes.test.ts
+@@ -409,3 +409,57 @@ it("connects Slack using granted scopes from the nested user token response", as
+   expect(connection.scopes).toEqual(["channels:read", "users:read"]);
+   expect(fetcher).toHaveBeenCalledTimes(2);
+ });
++
++describe("scoped OAuth requests", () => {
++  it("separates concurrent authorizations and cancels only the selected scope", async () => {
++    const { app, call, database } = await setup(undefined, { adminToken: "admin", runtimeToken: "runtime" });
++    const scoped = (path: string, scope: string, method = "GET", body?: unknown) =>
++      app.request(path, {
++        method,
++        headers: { authorization: "Bearer admin", "content-type": "application/json", "x-oo-connection-scope": scope },
++        body: body === undefined ? undefined : JSON.stringify(body),
++      });
++    const first = (await (await scoped("/v1/connections/example/connect", "team-one", "POST", {})).json()).data;
++    const second = (await (await scoped("/v1/connections/example/connect", "team-two", "POST", {})).json()).data;
++    const firstPath = `/v1/connection-requests/${first.connectionRequestId}`;
++    const secondPath = `/v1/connection-requests/${second.connectionRequestId}`;
++    expect((await scoped(firstPath, "team-two")).status).toBe(404);
++    await scoped(firstPath, "team-two", "DELETE");
++    expect((await (await scoped(firstPath, "team-one")).json()).data.status).toBe("initiated");
++    await scoped(firstPath, "team-one", "DELETE");
++    expect((await call(`/oauth/callback?state=${first.stateHandle}&code=code`)).status).not.toBe(200);
++    expect((await call(`/oauth/callback?state=${second.stateHandle}&code=code`)).status).toBe(200);
++    expect((await (await scoped(secondPath, "team-two")).json()).data.status).toBe("connected");
++    expect(await database.connectionStore.list()).toHaveLength(1);
++    expect((await call("/v1/connection-capabilities", undefined, "runtime")).status).toBe(401);
++    expect((await (await call("/v1/connection-capabilities")).json()).data).toEqual({
++      scopedRequests: true,
++      cancelRequests: true,
++    });
++  });
++  it("prevents an in-flight token exchange from recreating a cancelled account", async () => {
++    let release!: () => void;
++    let started!: () => void;
++    const entered = new Promise<void>((resolve) => {
++      started = resolve;
++    });
++    const gate = new Promise<void>((resolve) => {
++      release = resolve;
++    });
++    const { app, database, call } = await setup(async () => {
++      started();
++      await gate;
++      return { accessToken: "fake-access", tokenType: "Bearer", metadata: {} };
++    });
++    const headers = { "content-type": "application/json", "x-oo-connection-scope": "account-one" };
++    const request = (
++      await (await app.request("/v1/connections/example/connect", { method: "POST", headers, body: "{}" })).json()
++    ).data;
++    const callback = call(`/oauth/callback?state=${request.stateHandle}&code=code`);
++    await entered;
++    await app.request(`/v1/connection-requests/${request.connectionRequestId}`, { method: "DELETE", headers });
++    release();
++    await callback;
++    expect(await database.connectionStore.list()).toHaveLength(0);
++  });
++});
+diff --git a/src/server/api/connection-routes.ts b/src/server/api/connection-routes.ts
+index dbced602..2583279a 100644
+--- a/src/server/api/connection-routes.ts
++++ b/src/server/api/connection-routes.ts
+@@ -23,7 +23,19 @@ interface ConnectionRoutesOptions {
+ export function createConnectionRoutes({ connections, oauthFlow }: ConnectionRoutesOptions): Hono {
+   const app = new Hono();
+   // The local runtime has one administrator principal, including its bearer and browser sessions.
+-  const owner = "local-admin";
++  const requestOwner = (context: { req: { header(name: string): string | undefined } }) => {
++    const scope = context.req.header("x-oo-connection-scope");
++    if (scope && !/^[a-zA-Z0-9_-]{1,128}$/.test(scope))
++      throw new HttpRequestError("invalid_input", "Invalid connection scope.");
++    return scope ? `local-admin:${scope}` : "local-admin";
++  };
++  app.get("/connection-capabilities", (context) =>
++    writeRuntimeSuccess(context, { scopedRequests: true, cancelRequests: true }),
++  );
++  app.delete("/connection-requests/:connectionRequestId", async (context) => {
++    await oauthFlow.cancelConnectionRequest(context.req.param("connectionRequestId"), requestOwner(context));
++    return writeRuntimeSuccess(context, { cancelled: true });
++  });
+   app.onError((error, context) => {
+     if (
+       error instanceof ConnectionError ||
+@@ -47,7 +59,10 @@ export function createConnectionRoutes({ connections, oauthFlow }: ConnectionRou
+     );
+   });
+   app.get("/connection-requests/:connectionRequestId", async (context) => {
+-    const request = await oauthFlow.getConnectionRequest(context.req.param("connectionRequestId"), owner);
++    const request = await oauthFlow.getConnectionRequest(
++      context.req.param("connectionRequestId"),
++      requestOwner(context),
++    );
+     if (!request)
+       return writeRuntimeFailure(context, {
+         status: 404,
+@@ -67,7 +82,7 @@ export function createConnectionRoutes({ connections, oauthFlow }: ConnectionRou
+         await oauthFlow.startConnectionRequest({
+           ...input,
+           service: target?.service ?? context.req.param("service")!,
+-          owner,
++          owner: requestOwner(context),
+           target,
+         }),
+       );
+diff --git a/src/server/storage/connection-request-store.ts b/src/server/storage/connection-request-store.ts
+index ae694ef8..3663281c 100644
+--- a/src/server/storage/connection-request-store.ts
++++ b/src/server/storage/connection-request-store.ts
+@@ -74,6 +74,15 @@ export class ConnectionRequestStore {
+     ]);
+   }
+ 
++  async cancel(id: string, owner: string): Promise<void> {
++    await this.transaction([
++      {
++        sql: `update connection_requests set phase = 'completed', status = 'failed', error_code = 'cancelled', error_message = 'Authorization cancelled.', value = null, updated_at = ? where id = ? and owner = ? and phase in ('pending', 'processing')`,
++        values: [Date.now(), id, owner],
++      },
++    ]);
++  }
++
+   async get(id: string, owner: string): Promise<ConnectionRequest | undefined> {
+     const now = Date.now();
+     const [[row]] = await this.transaction([

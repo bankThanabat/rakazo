@@ -1,3 +1,4 @@
+import type { ConnectorAuthInput, ConnectorSetup } from "@rakazo/contracts";
 import type {
   AdapterContext,
   AdapterDescriptor,
@@ -169,9 +170,14 @@ export interface ConnectorProvider {
 export interface ConnectionAuthProvider {
   describe(): AdapterDescriptor<{ oauth: boolean }>;
   begin(
-    request: { provider: string; redirectUrl: string },
+    request: {
+      provider: string;
+      redirectUrl: string;
+      credential?: string;
+      auth?: ConnectorAuthInput;
+    },
     context: AdapterContext,
-  ): Promise<{ authorizationUrl: string | null; state: string }>;
+  ): Promise<{ authorizationUrl: string | null; state: string; scope?: "user" | "team" }>;
   complete(
     request: { state: string; code?: string },
     context: AdapterContext,
@@ -187,6 +193,30 @@ export interface ManagedConnectorProvider
   listConnectedExternalIds(context: AdapterContext): Promise<string[]>;
   connectionReady(context: AdapterContext, externalId: string): Promise<boolean>;
   warmDirectory?(): Promise<void>;
+  listActions?(
+    provider: string,
+    context: AdapterContext,
+  ): Promise<Array<{ name: string; description: string }>>;
+  setup?(provider: string, context: AdapterContext): Promise<ConnectorSetup>;
+  connectionStatus?(
+    ref: string,
+    context: AdapterContext,
+  ): Promise<{ reconnectRequired?: boolean; authorizationUrl?: string }>;
+  pollConnection?(
+    state: string,
+    context: AdapterContext,
+  ): Promise<{ connectionRef: string } | null | undefined>;
+  configureOAuth?(
+    provider: string,
+    values: Record<string, string>,
+    context: AdapterContext,
+  ): Promise<void>;
+  cancelAuthorization?(ref: string, context: AdapterContext): Promise<{ connected: boolean }>;
+  reconnect?(
+    ref: string,
+    auth: ConnectorAuthInput,
+    context: AdapterContext,
+  ): Promise<{ authorizationUrl: string | null }>;
 }
 
 export interface MemoryStore {

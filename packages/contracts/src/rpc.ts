@@ -1,6 +1,7 @@
 import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
+import { ConnectorAuthInputSchema, ConnectorSetupSchema } from "./connector-auth.js";
 import { CustomerConversationSchema, CustomerSnapshotSchema } from "./customer.js";
 import {
   ActionApprovalRuleSchema,
@@ -604,8 +605,30 @@ export const appContract = {
     save: oc.input(IntegrationProviderConfigSchema).output(z.object({ ok: z.literal(true) })),
   },
   connections: {
+    setup: oc
+      .input(z.object({ connectorId: z.string(), provider: z.string() }))
+      .output(ConnectorSetupSchema),
+    configureOAuth: oc
+      .input(
+        z.object({
+          connectorId: z.string(),
+          provider: z.string(),
+          values: z.record(z.string(), z.string().max(65536)),
+        }),
+      )
+      .output(z.object({ ok: z.literal(true) })),
+    cancel: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
+    reconnect: oc
+      .input(z.object({ connectionId: Id, auth: ConnectorAuthInputSchema }))
+      .output(z.object({ authorizationUrl: z.string().nullable() })),
     catalog: oc
-      .input(z.object({ query: z.string().optional(), connectorId: z.string().optional() }))
+      .input(
+        z.object({
+          query: z.string().optional(),
+          connectorId: z.string().optional(),
+          excludeConnectorIds: z.array(z.string()).optional(),
+        }),
+      )
       .output(z.array(ConnectionCatalogItemSchema)),
     list: oc.output(z.array(ConnectionSchema)),
     begin: oc
@@ -614,6 +637,8 @@ export const appContract = {
           connectorId: z.string().default("composio"),
           provider: z.string(),
           displayName: z.string(),
+          credential: z.string().trim().min(1).max(16384).optional(),
+          auth: ConnectorAuthInputSchema.optional(),
         }),
       )
       .output(z.object({ connectionId: Id, authorizationUrl: z.string().nullable() })),

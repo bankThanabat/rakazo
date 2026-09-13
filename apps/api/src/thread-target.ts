@@ -19,6 +19,7 @@ import {
 } from "@rakazo/core";
 import {
   appendEventInTransaction,
+  connectionAccessWhere,
   createGroupRepos,
   createRepos,
   createThreadMessageInTransaction,
@@ -87,7 +88,7 @@ function splitMentionTargets(mentions: MentionTargetInput[] | undefined) {
   };
 }
 
-async function resolveOwnedConnectorDisplayNames(
+async function resolveAccessibleConnectorDisplayNames(
   tx: Prisma.TransactionClient,
   actor: Actor,
   connectionIds: string[],
@@ -96,8 +97,7 @@ async function resolveOwnedConnectorDisplayNames(
   const rows = await tx.connection.findMany({
     where: {
       id: { in: connectionIds },
-      spaceId: actor.spaceId,
-      userId: actor.userId,
+      ...connectionAccessWhere(actor),
       status: "connected",
     },
     select: { id: true, displayName: true },
@@ -611,7 +611,7 @@ export async function sendThreadMessage(
           target.botId,
           input.artifactIds,
         );
-        const connectorNames = await resolveOwnedConnectorDisplayNames(
+        const connectorNames = await resolveAccessibleConnectorDisplayNames(
           tx,
           actor,
           mentionTargets.connectorMentionIds,
@@ -724,7 +724,7 @@ export async function sendThreadMessage(
         memberBotIds,
         input.artifactIds,
       );
-      const connectorNames = await resolveOwnedConnectorDisplayNames(
+      const connectorNames = await resolveAccessibleConnectorDisplayNames(
         tx,
         actor,
         mentionTargets.connectorMentionIds,

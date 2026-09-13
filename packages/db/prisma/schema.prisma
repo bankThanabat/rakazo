@@ -777,6 +777,7 @@ model Connection {
   spaceId     String
   space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   userId      String
+  scope       String   @default("user")
   connectorId String   @default("composio")
   provider    String
   displayName String
@@ -788,6 +789,7 @@ model Connection {
   updatedAt   DateTime @updatedAt
 
   @@index([spaceId, userId, connectorId])
+  @@index([spaceId, scope])
   @@map("connections")
 }
 
