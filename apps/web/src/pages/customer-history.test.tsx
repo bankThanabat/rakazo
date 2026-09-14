@@ -119,7 +119,7 @@ it("shows action outcomes from the displayed historical page", async () => {
             createdAt: "2026-01-01",
           },
         ]
-      : [],
+      : undefined,
   }));
   await act(async () =>
     root.render(<CustomerThread id="case" onOpenNavigation={() => undefined} />),

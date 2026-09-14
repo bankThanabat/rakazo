@@ -223,7 +223,7 @@ export default function CustomerThread() {
           </View>
         )}
       />
-      {!!current?.actions.length && (
+      {!!current?.actions?.length && (
         <Pressable
           accessibilityRole="button"
           style={{ padding: 12 }}

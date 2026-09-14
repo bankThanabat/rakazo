@@ -328,7 +328,7 @@ export function CustomerThread({
             ) : null}
           </div>
         ))}
-        {!!displayed?.actions.length && (
+        {!!displayed?.actions?.length && (
           <details className="text-sm text-muted-foreground">
             <summary>
               <Trans>Action history</Trans>
