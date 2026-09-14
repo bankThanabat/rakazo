@@ -29,7 +29,7 @@ export function mountModelBridge(
     if (origin && !trustedOrigin(origin)) throw new ModelBridgeError(403, "Origin is not allowed");
     const current = await actorFor(c);
     if (!current) throw new ModelBridgeError(401, "Sign in to Rakazo");
-    return current;
+    return { userId: current.userId, spaceId: current.spaceId };
   }
   async function json(c: Context, maxBytes: number) {
     if (!c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {

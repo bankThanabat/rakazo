@@ -14,13 +14,30 @@ This adds a connection path. It does not replace OpenRAG login, its API authenti
 
    The response contains `id`, `apiKey`, `model`, and `basePath`. `apiKey` is a new bridge capability, not the subscription OAuth token. It is returned only at creation. No additional provider login occurs.
 
-2. In OpenRAG, open **Edit in Langflow**. Add an **OpenAI Compatible** model provider with the Rakazo API origin plus the returned `basePath`, for example `https://rakazo.example.test/api/model-bridge/v1`. Use the returned bridge `apiKey` in its API-key field. Select the returned model for the intended flow's language-model input. Keep other flows and the embedding provider unchanged.
+2. For the pinned OpenRAG customer stack, configure its chat gateway with the returned model and bridge key. Use the existing generic `custom_openai` provider, with `api_base` set to the Rakazo API origin plus `basePath`. The authenticated OpenRAG `POST /onboarding` request accepts:
 
-   On older bundled Langflow versions without the OpenAI Compatible registry entry, use an OpenAI language-model component with the same API base, API key, and model name, and connect its language-model output to the Agent's custom model input. Use Chat Completions, not the Responses API. OpenRAG's standard OpenAI settings alone may not expose a custom base URL.
+   ```json
+   {
+     "llm_provider": "custom_openai",
+     "llm_model": "saved-model-id",
+     "provider_credentials": {
+       "custom_openai": {
+         "api_base": "https://rakazo.example.test/api/model-bridge/v1",
+         "api_key": "bridge-key-placeholder"
+       }
+     }
+   }
+   ```
+
+   To expose this provider in OpenRAG's UI, extend its `src/config/model_providers.yaml` through `OPENRAG_MODEL_PROVIDERS_CONFIG`, adding `custom_openai` with the granted model and the applicable run mode. Restart OpenRAG after changing the provider catalogue. Configure embeddings separately, for example with an existing local Ollama connection. The bridge serves chat only.
+
+   Managed customer flows use the shipped OpenRAG LLM component. OpenRAG keeps the bridge key and injects short-lived callback tokens into Langflow. Apply the [customer-stack source patch](self-host/customer-v1.md#install-the-compatible-sources) and rebuild Langflow so the shipped customer-tools component is registered while custom-code restrictions remain enabled. Publish customer behavior through Rakazo to create a new flow revision.
+
+   For a standalone Langflow flow, an OpenAI-compatible model component can call the bridge directly with the same base URL, bridge key, and model. Select Chat Completions and omit `seed`; the bridge rejects unsupported parameters.
 
 3. Verify discovery with `GET <base>/models` using `Authorization: Bearer <bridge-key>`. It returns only the granted model. Start a fresh OpenRAG conversation to use the changed flow.
 
-OpenRAG documents editing its embedded [Langflow flows](https://docs.openr.ag/agents/). Current Langflow documents the [OpenAI Compatible provider](https://docs.langflow.org/bundles-openai-compatible), including host allowlisting for private endpoints. For containers, the base URL must reach Rakazo from the Langflow container; `localhost` refers to that container. Restrict any required Langflow host allowlist to the Rakazo host. Send bridge keys over HTTPS outside a trusted local connection.
+OpenRAG documents editing its embedded [Langflow flows](https://docs.openr.ag/agents/). Current Langflow documents the [OpenAI Compatible provider](https://docs.langflow.org/bundles-openai-compatible), including host allowlisting for private endpoints. The base URL must reach Rakazo from the process making the model request: the OpenRAG backend for managed flows, or Langflow for a direct connection. In a container, `localhost` refers to that container. Restrict any required Langflow host allowlist to the Rakazo host. Send bridge keys over HTTPS outside a trusted local connection.
 
 If a Langflow installation only permits one generic compatible-provider entry, use a separate model component for this path instead of overwriting an existing provider. Store each user's bridge key separately; a global provider in a shared Langflow workspace would make that user's subscription available to other flows with access to it.
 
