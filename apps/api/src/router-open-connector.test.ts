@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { RPCHandler } from "@orpc/server/fetch";
 import type { Actor } from "@rakazo/contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -150,6 +151,22 @@ it("lists team connections and discovers tools for teammates while keeping manag
       createdAt: new Date("2026-01-01"),
     },
   ];
+  const channel = {
+    id: "customer-channel",
+    connectionId: "team-account",
+    userId: "teammate",
+    spaceId: actor.spaceId,
+    shared: false,
+    enabled: true,
+    startedAt: new Date("2026-01-01"),
+    bot: { archivedAt: null },
+    binding: JSON.parse(
+      readFileSync(
+        new URL("../../../docs/self-host/customer-bindings.json", import.meta.url),
+        "utf8",
+      ),
+    ).line,
+  };
   // Evaluate Prisma's scalar/OR filters against mixed-owner, mixed-team rows.
   function matches(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
     return Object.entries(where).every(([key, value]) =>
@@ -165,12 +182,25 @@ it("lists team connections and discovers tools for teammates while keeping manag
       update: vi.fn(),
       updateMany: vi.fn(),
     },
+    customerChannel: {
+      findMany: vi.fn(async ({ where }) => {
+        const { connectionId, enabled, startedAt, bot, ...scope } = where;
+        return matches(channel, scope) &&
+          connectionId.in.includes(channel.connectionId) &&
+          channel.enabled === enabled &&
+          channel.startedAt !== startedAt.not &&
+          channel.bot.archivedAt === bot.archivedAt
+          ? [channel]
+          : [];
+      }),
+    },
     $transaction: async (callback: (tx: unknown) => Promise<unknown>) => callback(db),
   };
   const handler = new RPCHandler(
     createRouter({
       prisma: db,
       connectors: { managed: () => fixture.adapter },
+      env: { apiUrl: "https://public.example.test" },
     } as unknown as RouterDeps),
   );
   const teammate = { ...actor, userId: "teammate" };
@@ -185,9 +215,20 @@ it("lists team connections and discovers tools for teammates while keeping manag
     );
     return { status: response.status, body: await response.json() };
   }
-  expect((await rpc("list")).body.json).toEqual([
-    expect.objectContaining({ id: "team-account", canManage: false }),
+  const connections = (await rpc("list")).body.json;
+  expect(connections).toEqual([
+    expect.objectContaining({
+      id: "team-account",
+      canManage: false,
+      webhookUrl: "https://public.example.test/api/customer-events/customer-channel",
+    }),
   ]);
+  expect(JSON.stringify(connections)).not.toContain("LINE_CHANNEL_SECRET_RECORD");
+  expect((await rpc("list", {}, actor)).body.json[0]).not.toHaveProperty("webhookUrl");
+  channel.shared = true;
+  expect((await rpc("list", {}, actor)).body.json[0].webhookUrl).toBe(
+    "https://public.example.test/api/customer-events/customer-channel",
+  );
   expect(
     (await rpc("tools", { connectorId: "open-connector", provider: "sample" })).body.json,
   ).toEqual([expect.objectContaining({ name: "sample.send" })]);
@@ -228,6 +269,7 @@ it("restores pending authorization only for its creator without a remote catalog
     createRouter({
       prisma: { connection: { findMany: async () => [row] } },
       connectors: { managed: () => fixture.adapter },
+      env: { apiUrl: "https://public.example.test" },
     } as unknown as RouterDeps),
   );
   fixture.fetcher.mockClear();

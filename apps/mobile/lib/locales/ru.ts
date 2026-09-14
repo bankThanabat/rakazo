@@ -667,4 +667,8 @@ export const RU_MESSAGES: Record<string, string> = {
   "Setup guide": "Руководство по настройке",
   "Take over": "Взять на себя",
   "Webhook URL": "URL вебхука",
+  "Copy webhook URL": "Скопировать URL вебхука",
+  "Set up incoming messages": "Настроить приём сообщений",
+  "Choose an assistant to continue in chat.": "Выберите помощника, чтобы продолжить в чате.",
+  "Create an assistant first.": "Сначала создайте помощника.",
 };

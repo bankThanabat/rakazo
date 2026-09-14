@@ -44,6 +44,7 @@ import {
   isComputerScreenUnavailable,
   isSandboxGoneError,
   isScratchpadStatus,
+  listConnectionWebhooks,
   listPiCatalog,
   listScratchpadItems,
   McpOAuthBroker,
@@ -53,6 +54,7 @@ import {
   type PiOAuthLogins,
   planLiveConnectionSync,
   prepareApiInstall,
+  prepareCustomerWebhookSetup,
   prepareGraphqlInstall,
   probeOpenAiCompatibleModels,
   provisionComputer,
@@ -437,6 +439,7 @@ export interface RouterDeps {
   /** Present when the external messaging surface is enabled. */
   messaging?: { enabled: boolean; providers: string[]; openSignup: boolean };
   env: {
+    apiUrl?: string;
     agentRuntime: string;
     defaultProvider: string;
     defaultModel: string;
@@ -3264,6 +3267,20 @@ export function createRouter(deps: RouterDeps) {
       }),
     },
     connections: {
+      setupIncoming: authed.connections.setupIncoming.handler(async ({ context, input }) => {
+        if (!deps.integrationSettings) throw new ORPCError("SERVICE_UNAVAILABLE");
+        const { text, ...assistant } = await prepareCustomerWebhookSetup(
+          { prisma: deps.prisma, integrations: deps.integrationSettings },
+          context.actor,
+          input,
+        );
+        await sendStaffMessage(context.actor, {
+          botId: assistant.botId,
+          text,
+          clientNonce: input.clientNonce,
+        });
+        return assistant;
+      }),
       setup: authed.connections.setup.handler(async ({ context, input }) => {
         const provider = deps.connectors.managed(input.connectorId);
         if (input.connectorId !== "open-connector" || !provider?.setup)
@@ -3403,6 +3420,11 @@ export function createRouter(deps: RouterDeps) {
         const rows = await deps.prisma.connection.findMany({
           where: connectionAccessWhere(context.actor),
         });
+        const webhookUrls = await listConnectionWebhooks(
+          { prisma: deps.prisma, apiUrl: deps.env.apiUrl },
+          context.actor,
+          rows,
+        );
         return Promise.all(
           rows.map(async (row) => {
             const provider =
@@ -3424,6 +3446,7 @@ export function createRouter(deps: RouterDeps) {
               authorizationUrl:
                 row.userId === context.actor.userId ? state.authorizationUrl : undefined,
               id: row.id,
+              webhookUrl: webhookUrls.get(row.id),
               canManage: row.userId === context.actor.userId,
               connectorId: row.connectorId,
               provider: row.provider,

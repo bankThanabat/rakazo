@@ -7,7 +7,8 @@ import {
   filterConnectionCatalogItems,
   humanizeToolName,
 } from "@rakazo/core";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -152,14 +153,18 @@ export default function Integrations() {
     }
   }
 
-  useEffect(() => {
-    void refresh().catch((reason) => {
-      setCatalogReady(false);
-      setCatalogError(reason instanceof Error ? reason.message : t("Could not load integrations"));
-    });
-    void loadLastBotId().then(setLastBotId);
-    return () => connectionAttempt.current?.abort();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      void refresh().catch((reason) => {
+        setCatalogReady(false);
+        setCatalogError(
+          reason instanceof Error ? reason.message : t("Could not load integrations"),
+        );
+      });
+      void loadLastBotId().then(setLastBotId);
+      return () => connectionAttempt.current?.abort();
+    }, []),
+  );
 
   useEffect(() => {
     if (!detailKey) {

@@ -1,10 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { JobPublisher } from "@rakazo/adapter-kit";
-import { CustomerBindingSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { CustomerMessageLimitError, createCustomerInbox } from "@rakazo/db";
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerField, customerPage } from "./customer-mapping.js";
+import { customerWebhookBinding, liveCustomerWebhookChannel } from "./customer-webhooks.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -52,14 +52,13 @@ export function createCustomerIngress(deps: {
   const connector = createCustomerConnector(deps);
   async function load(channelId: string) {
     const channel = await deps.prisma.customerChannel.findFirst({
-      where: { id: channelId, enabled: true, bot: { archivedAt: null } },
+      where: { id: channelId, ...liveCustomerWebhookChannel },
     });
     if (!channel?.connectionId || !channel.startedAt)
       throw new Error("Customer channel is unavailable");
     await connector.connection(channel, channel.connectionId);
-    const binding = CustomerBindingSchema.parse(channel.binding);
-    if (binding.receive.mode !== "webhook" || !binding.receive.webhook)
-      throw new Error("Webhook is unavailable");
+    const webhook = customerWebhookBinding(channel.binding);
+    if (!webhook) throw new Error("Webhook is unavailable");
     async function secret(id: string) {
       const row = await deps.prisma.secret.findFirst({
         where: {
@@ -71,7 +70,7 @@ export function createCustomerIngress(deps: {
       if (!row) throw new Error("Webhook credential is unavailable");
       return deps.secrets.load(row.ciphertext, row.id);
     }
-    return { channel, binding, verification: binding.receive.webhook, secret };
+    return { channel, ...webhook, secret };
   }
   return {
     async challenge(channelId: string, token: string) {

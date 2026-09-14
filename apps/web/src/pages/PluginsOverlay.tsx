@@ -76,10 +76,12 @@ export function PluginsOverlay({
   onClose,
   onOpenMcp,
   activeBotId,
+  onOpenAssistant,
 }: {
   onClose: () => void;
   onOpenMcp?: () => void;
   activeBotId?: string;
+  onOpenAssistant: (assistant: { botId: string; name: string }) => void;
 }) {
   const { t } = useLingui();
   const [setupOpen, setSetupOpen] = useState(false);
@@ -763,6 +765,8 @@ export function PluginsOverlay({
               </div>
 
               <OpenConnectorCatalog
+                activeBotId={activeBotId}
+                onOpenAssistant={onOpenAssistant}
                 connections={connections}
                 onRefresh={refresh}
                 onSetup={() => setSetupOpen(true)}

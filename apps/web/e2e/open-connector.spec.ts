@@ -19,6 +19,7 @@ for (const viewport of [
     });
     const accounts: Connection[] = [];
     const started: Record<string, unknown>[] = [];
+    const incomingRequests: Record<string, unknown>[] = [];
     const catalog = [
       {
         connectorId: "open-connector",
@@ -115,7 +116,12 @@ for (const viewport of [
         result = { connectionId: row.id, authorizationUrl: null };
       } else if (path === "connections/complete")
         result = accounts.find((row) => row.id === input.connectionId);
-      else if (path === "connections/revoke") {
+      else if (path === "bots/list")
+        result = [{ id: "setup-assistant", name: "Support assistant" }];
+      else if (path === "connections/setupIncoming") {
+        incomingRequests.push(input);
+        result = { botId: "setup-assistant", name: "Support assistant" };
+      } else if (path === "connections/revoke") {
         accounts.find((row) => row.id === input.connectionId)!.status = "revoked";
         result = { ok: true };
       } else if (path === "connections/tools")
@@ -150,6 +156,37 @@ for (const viewport of [
     await captureScreenshot(page, testInfo, `openconnector-api-key-auth-${viewport.width}`);
     await page.getByRole("button", { name: "Connect account", exact: true }).click();
     await expect(page.getByLabel("Account label")).toHaveValue("Sample app");
+    const webhookUrl = page.getByRole("textbox", { name: "Webhook URL", exact: true });
+    await expect(webhookUrl).toHaveCount(0);
+    await page.getByRole("button", { name: "Set up incoming messages", exact: true }).click();
+    await expect(page.getByRole("combobox", { name: "Assistant", exact: true })).toHaveValue(
+      "setup-assistant",
+    );
+    await captureScreenshot(page, testInfo, `openconnector-incoming-setup-${viewport.width}`);
+    await page.getByRole("button", { name: "Continue in chat", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Support assistant", exact: true }),
+    ).toBeVisible();
+    expect(incomingRequests).toEqual([
+      {
+        connectionId: accounts[0]!.id,
+        botId: "setup-assistant",
+        clientNonce: expect.any(String),
+      },
+    ]);
+    // Emulate approved customer_connect completion in the assistant chat.
+    accounts[0]!.webhookUrl =
+      "https://public-api.example.test/api/customer-events/customer-channel-1";
+    await page.getByRole("button", { name: "Back to integrations", exact: true }).click();
+    await page.getByRole("button", { name: "Browse apps", exact: true }).click();
+    await page.getByRole("button", { name: "Sample app, Manage", exact: true }).click();
+    await expect(webhookUrl).toHaveValue(accounts[0]!.webhookUrl!);
+    await expect(webhookUrl).toHaveAttribute("readonly", "");
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(accounts[0]!.webhookUrl);
+    await captureScreenshot(page, testInfo, `openconnector-webhook-${viewport.width}`);
     expect(started[0]).toMatchObject({
       connectorId: "open-connector",
       provider: "sample",
@@ -165,6 +202,7 @@ for (const viewport of [
     await page.getByLabel("Secret", { exact: true }).fill("fake-custom-secret");
     await page.getByRole("button", { name: "Connect account", exact: true }).click();
     await expect(page.getByLabel("Account label")).toHaveValue("Future app");
+    await expect(webhookUrl).toHaveCount(0);
     expect(started[1]).toMatchObject({
       provider: "future-app",
       auth: {

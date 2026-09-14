@@ -7,6 +7,8 @@ import type {
   IntegrationSetupState,
 } from "@rakazo/contracts";
 import { CONNECTION_CATALOG_PAGE_SIZE, waitForConnectionAuthorization } from "@rakazo/core";
+import * as Clipboard from "expo-clipboard";
+import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,8 +23,10 @@ import {
 } from "react-native";
 import { rpc } from "../../lib/api";
 import { mobileTokens } from "../../lib/appearance";
+import { newClientNonce } from "../../lib/client-nonce";
 import { useI18n } from "../../lib/i18n";
-import { native, useThemedStyles } from "../../lib/native";
+import { presentMessageActionSheet } from "../../lib/message-action-sheet";
+import { native, useResolvedAppearance, useThemedStyles } from "../../lib/native";
 import { ConnectorIcon } from "../connector-icon";
 
 function Fields({
@@ -71,6 +75,8 @@ export function OpenConnectorCatalog({
   onRefresh: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
+  const router = useRouter();
+  const colorScheme = useResolvedAppearance();
   const styles = useThemedStyles(createStyles);
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState<ConnectionCatalogItem[]>([]);
@@ -98,6 +104,35 @@ export function OpenConnectorCatalog({
     (row) => row.connectorId === "open-connector" && row.status !== "revoked",
   );
   const selectedAccounts = accounts.filter((row) => row.provider === selected?.slug);
+  async function setupIncoming(connectionId: string) {
+    await run(async () => {
+      const bots = await rpc<Array<{ id: string; name: string }>>("bots/list");
+      if (!bots.length) throw new Error(t("Create an assistant first."));
+      const clientNonce = newClientNonce();
+      presentMessageActionSheet({
+        title: t("Choose an assistant to continue in chat."),
+        cancel: t("Cancel"),
+        more: t("More"),
+        colorScheme,
+        actions: bots.map((bot) => ({
+          text: bot.name,
+          onPress: () => {
+            void run(async () => {
+              const assistant = await rpc<{ botId: string; name: string }>(
+                "connections/setupIncoming",
+                {
+                  connectionId,
+                  botId: bot.id,
+                  clientNonce,
+                },
+              );
+              router.push({ pathname: "/thread", params: assistant });
+            });
+          },
+        })),
+      });
+    });
+  }
   function choose(auth: ConnectorAuthMethod) {
     setMethod(auth);
     setValues({});
@@ -386,6 +421,21 @@ export function OpenConnectorCatalog({
                   })}
                   {button(t("Disconnect"), () => disconnect(row))}
                 </View>
+              ) : null}
+              {row.webhookUrl ? (
+                <View style={styles.group}>
+                  <Text style={styles.text}>{t("Webhook URL")}</Text>
+                  <Text selectable style={styles.secondary}>
+                    {row.webhookUrl}
+                  </Text>
+                  {button(t("Copy webhook URL"), () => {
+                    void run(async () => {
+                      await Clipboard.setStringAsync(row.webhookUrl!);
+                    });
+                  })}
+                </View>
+              ) : row.status === "connected" ? (
+                button(t("Set up incoming messages"), () => void setupIncoming(row.id))
               ) : null}
             </View>
           ))}

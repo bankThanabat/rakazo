@@ -4030,3 +4030,32 @@ msgstr ""
 #: src/pages/CustomerInbox.tsx
 msgid "Resume AI"
 msgstr "AI 응답 재개"
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:539
+msgid "Copied"
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:534
+msgid "Could not copy. Select and copy the URL manually."
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:594
+msgid "Assistant"
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:613
+msgid "Continue in chat"
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:265
+#: src/components/integrations/OpenConnectorCatalog.tsx:279
+msgid "Could not start setup. Try again."
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:257
+msgid "Create an assistant first."
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:631
+msgid "Set up incoming messages"
+msgstr ""
