@@ -648,4 +648,8 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Setup guide": "设置指南",
   "Take over": "接管",
   "Webhook URL": "Webhook 网址",
+  "Copy webhook URL": "复制 Webhook 网址",
+  "Set up incoming messages": "设置消息接收",
+  "Choose an assistant to continue in chat.": "选择助手以在聊天中继续。",
+  "Create an assistant first.": "请先创建助手。",
 };

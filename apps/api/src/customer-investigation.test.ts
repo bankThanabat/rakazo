@@ -32,9 +32,16 @@ beforeEach(() => {
 });
 function fixture() {
   const prisma = {
-    spaceMember: { count: vi.fn(async () => 1) },
+    spaceMember: {
+      count: vi.fn(async () => 1),
+      findFirst: vi.fn(async () => ({ spaceId: actor.spaceId })),
+    },
+    connection: {
+      findFirst: vi.fn(async () => ({ id: "line-account", providerRef: "fake-reference" })),
+    },
     customerConversation: { findFirst: vi.fn(async () => ({ channel: { botId: "case-bot" } })) },
     bot: {
+      findFirst: vi.fn(async () => ({ id: "case-bot", name: "Support" })),
       findMany: vi.fn(async () => [
         { id: "unrelated", name: "Other" },
         { id: "case-bot", name: "Support" },
@@ -44,7 +51,9 @@ function fixture() {
     deploymentSettings: { findUnique: vi.fn(async () => null) },
   };
   const env = { agentRuntime: "scripted" };
-  const handler = new RPCHandler(createRouter({ prisma, env } as unknown as RouterDeps));
+  const handler = new RPCHandler(
+    createRouter({ prisma, env, integrationSettings: {} } as unknown as RouterDeps),
+  );
   const request = (identity: Actor | null = actor) =>
     handler.handle(
       new Request("http://localhost/rpc/customers/investigate", {
@@ -56,8 +65,64 @@ function fixture() {
       }),
       { prefix: "/rpc", context: { actor: identity } },
     );
-  return { prisma, env, request };
+  const setupIncoming = () =>
+    handler.handle(
+      new Request("https://staff.example.test/rpc/connections/setupIncoming", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          json: {
+            connectionId: "line-account",
+            botId: "case-bot",
+            clientNonce: "setup-nonce",
+            text: "untrusted replacement",
+          },
+        }),
+      }),
+      { prefix: "/rpc", context: { actor } },
+    );
+  return { prisma, env, request, setupIncoming };
 }
+
+it("starts incoming-message setup for the chosen account through staff admission without activating a channel", async () => {
+  const f = fixture();
+  const { response } = await f.setupIncoming();
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ json: { botId: "case-bot", name: "Support" } });
+  const input = dispatch.send.mock.calls[0]![3];
+  expect(input).toMatchObject({ botId: "case-bot", clientNonce: "setup-nonce" });
+  expect(input.text).toContain('connection "line-account"');
+  expect(input.text).toContain("existing owner approval flow");
+  expect(input.text).not.toContain("untrusted replacement");
+  expect(dispatch.teaching).toHaveBeenCalledWith(f.prisma, actor.spaceId, "case-bot");
+  expect(f.prisma.connection.findFirst).toHaveBeenCalledWith({
+    where: {
+      spaceId: actor.spaceId,
+      OR: [{ userId: actor.userId }, { scope: "team" }],
+      id: "line-account",
+      connectorId: "open-connector",
+      status: "connected",
+    },
+  });
+  expect(f.prisma.bot.findFirst).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        id: "case-bot",
+        userId: actor.userId,
+        spaceId: actor.spaceId,
+        archivedAt: null,
+        thread: { isNot: null },
+      },
+    }),
+  );
+});
+
+it.each(["connection", "bot"] as const)("rejects setup for an inaccessible %s", async (model) => {
+  const f = fixture();
+  f.prisma[model].findFirst.mockResolvedValue(null as never);
+  expect((await f.setupIncoming()).response.status).toBeGreaterThanOrEqual(400);
+  expect(dispatch.send).not.toHaveBeenCalled();
+});
 
 it("sends a server-prepared case request through the normal staff admission checks", async () => {
   const f = fixture();

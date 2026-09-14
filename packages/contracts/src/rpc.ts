@@ -640,6 +640,9 @@ export const appContract = {
       )
       .output(z.array(ConnectionCatalogItemSchema)),
     list: oc.output(z.array(ConnectionSchema)),
+    setupIncoming: oc
+      .input(z.object({ connectionId: Id, botId: Id, clientNonce: z.string().min(1).max(200) }))
+      .output(z.object({ botId: Id, name: z.string() })),
     begin: oc
       .input(
         z.object({

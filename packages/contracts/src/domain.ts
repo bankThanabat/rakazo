@@ -559,6 +559,7 @@ export type MemoryDocument = z.infer<typeof MemoryDocumentSchema>;
 
 export const ConnectionSchema = z.object({
   id: Id,
+  webhookUrl: z.string().url().optional(),
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),
   authorizationUrl: z.string().url().optional(),

@@ -8,8 +8,12 @@ import type {
 } from "./client.js";
 import { IsolationError } from "./scope.js";
 
+export const customerChannelAccessWhere = (actor: Pick<Actor, "userId" | "spaceId">) => ({
+  spaceId: actor.spaceId,
+  OR: [{ userId: actor.userId }, { shared: true }],
+});
 const customerScope = (actor: Pick<Actor, "userId" | "spaceId">) => ({
-  channel: { spaceId: actor.spaceId, OR: [{ userId: actor.userId }, { shared: true }] },
+  channel: customerChannelAccessWhere(actor),
 });
 export async function requireCustomerAccess(
   prisma: PrismaClient,

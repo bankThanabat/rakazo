@@ -37,6 +37,10 @@ export * from "./cursor-cloud-agent.js";
 export { createCustomerBusinessTools } from "./customer-business-tools.js";
 export * from "./customer-conversations.js";
 export { createCustomerIngress } from "./customer-ingress.js";
+export {
+  listConnectionWebhooks,
+  prepareCustomerWebhookSetup,
+} from "./customer-webhooks.js";
 export * from "./daytona-emulator.js";
 export * from "./daytona-sandbox.js";
 export * from "./deployment-model.js";

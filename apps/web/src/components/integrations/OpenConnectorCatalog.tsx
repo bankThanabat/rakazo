@@ -11,10 +11,14 @@ export function OpenConnectorCatalog({
   connections,
   onRefresh,
   onSetup,
+  activeBotId,
+  onOpenAssistant,
 }: {
   connections: Connection[];
   onRefresh: () => Promise<unknown>;
   onSetup: () => void;
+  activeBotId?: string;
+  onOpenAssistant: (assistant: { botId: string; name: string }) => void;
 }) {
   const { t } = useLingui();
   const formId = useId();
@@ -44,6 +48,13 @@ export function OpenConnectorCatalog({
   const [tools, setTools] = useState<Array<{ name: string; description: string }>>([]);
   const [toolQuery, setToolQuery] = useState("");
   const [removing, setRemoving] = useState<string | null>(null);
+  const [copiedWebhook, setCopiedWebhook] = useState<string | null>(null);
+  const [incomingSetup, setIncomingSetup] = useState<{
+    connectionId: string;
+    bots: Array<{ id: string; name: string }>;
+    botId: string;
+    clientNonce: string;
+  } | null>(null);
   const controller = useRef<AbortController | null>(null);
   const accounts = connections.filter(
     (row) => row.connectorId === "open-connector" && row.status !== "revoked",
@@ -71,6 +82,7 @@ export function OpenConnectorCatalog({
     }
   }
   async function detail(item: ConnectionCatalogItem) {
+    setIncomingSetup(null);
     controller.current?.abort();
     setAttempt(null);
     setPending(false);
@@ -115,6 +127,7 @@ export function OpenConnectorCatalog({
     }
   }, [selected]);
   function back() {
+    setIncomingSetup(null);
     returnFocus.current = selected?.slug ?? null;
     controller.current?.abort();
     setSelected(null);
@@ -232,6 +245,38 @@ export function OpenConnectorCatalog({
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t`Could not save OAuth setup.`);
+    } finally {
+      setPending(false);
+    }
+  }
+  async function setupIncoming(connectionId: string) {
+    setPending(true);
+    setError(null);
+    try {
+      const bots = await rpc.bots.list();
+      if (!bots.length) throw new Error(t`Create an assistant first.`);
+      setIncomingSetup({
+        connectionId,
+        bots,
+        botId: bots.find((bot) => bot.id === activeBotId)?.id ?? bots[0]!.id,
+        clientNonce: crypto.randomUUID(),
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t`Could not start setup. Try again.`);
+    } finally {
+      setPending(false);
+    }
+  }
+  async function continueIncomingSetup() {
+    if (!incomingSetup) return;
+    setPending(true);
+    setError(null);
+    try {
+      const { connectionId, botId, clientNonce } = incomingSetup;
+      const assistant = await rpc.connections.setupIncoming({ connectionId, botId, clientNonce });
+      onOpenAssistant(assistant);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t`Could not start setup. Try again.`);
     } finally {
       setPending(false);
     }
@@ -509,6 +554,84 @@ export function OpenConnectorCatalog({
                   </>
                 ) : null}
               </div>
+              {row.webhookUrl ? (
+                <div className="space-y-1">
+                  <label htmlFor={`${formId}-${row.id}-webhook`} className="text-sm">
+                    <Trans>Webhook URL</Trans>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id={`${formId}-${row.id}-webhook`}
+                      value={row.webhookUrl}
+                      readOnly
+                      className="min-w-0 flex-1"
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(row.webhookUrl!);
+                          setCopiedWebhook(row.webhookUrl!);
+                        } catch {
+                          setError(t`Could not copy. Select and copy the URL manually.`);
+                        }
+                      }}
+                    >
+                      {copiedWebhook === row.webhookUrl ? (
+                        <Trans>Copied</Trans>
+                      ) : (
+                        <Trans>Copy</Trans>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              ) : row.status === "connected" ? (
+                incomingSetup?.connectionId === row.id ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <NativeSelect
+                      aria-label={t`Assistant`}
+                      value={incomingSetup.botId}
+                      disabled={pending}
+                      onChange={(event) =>
+                        setIncomingSetup({ ...incomingSetup, botId: event.target.value })
+                      }
+                    >
+                      {incomingSetup.bots.map((bot) => (
+                        <NativeSelectOption key={bot.id} value={bot.id}>
+                          {bot.name}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => void continueIncomingSetup()}
+                    >
+                      <Trans>Continue in chat</Trans>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => setIncomingSetup(null)}
+                    >
+                      <Trans>Cancel</Trans>
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => void setupIncoming(row.id)}
+                  >
+                    <Trans>Set up incoming messages</Trans>
+                  </Button>
+                )
+              ) : null}
               {removing === row.id ? (
                 <div className="space-y-2 text-sm">
                   <p>

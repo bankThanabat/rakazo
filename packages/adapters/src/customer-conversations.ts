@@ -33,6 +33,7 @@ import {
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerInput, customerPage } from "./customer-mapping.js";
 import { OpenRagCustomerRuntime } from "./customer-runtime.js";
+import { customerWebhookUrl } from "./customer-webhooks.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { parseModelSecret } from "./pi-oauth.js";
 import type { EncryptedSecretStore } from "./secrets.js";
@@ -819,7 +820,7 @@ export function createCustomerConversations(deps: {
             name: channel.name,
             ...(input.binding.receive.mode === "webhook"
               ? {
-                  webhookUrl: `${(deps.apiUrl ?? "http://127.0.0.1:3100").replace(/\/$/, "")}/api/customer-events/${channel.id}`,
+                  webhookUrl: customerWebhookUrl(deps.apiUrl, channel.id),
                 }
               : {}),
           };
