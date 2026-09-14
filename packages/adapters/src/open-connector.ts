@@ -273,7 +273,10 @@ export class OpenConnector implements ManagedConnectorProvider {
           context,
           {
             method: "POST",
-            headers: { "x-oo-connector-alias": current.alias ?? ref },
+            headers: {
+              "x-oo-connector-alias": current.alias ?? ref,
+              "Idempotency-Key": resolved.call.executionId,
+            },
             body: JSON.stringify({ input: resolved.call.args }),
           },
           current.token,

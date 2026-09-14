@@ -101,6 +101,7 @@ import {
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
   connectionAccessWhere,
+  createCustomerInbox,
   createCustomerRepos,
   createExternalConversationRepos,
   createGroupRepos,
@@ -4415,6 +4416,22 @@ export function createRouter(deps: RouterDeps) {
       },
     },
     customers: {
+      reply: authed.customers.reply.handler(async ({ context, input }) => {
+        await createCustomerInbox(deps.prisma).reply(context.actor, input);
+        // Persistence succeeded; reconciliation recovers a temporarily unavailable queue.
+        await deps.jobs
+          .enqueue({
+            name: "customer.process",
+            payload: { conversationId: input.id },
+            replaceKey: `customer.process:${input.id}`,
+          })
+          .catch(() => undefined);
+        return { ok: true as const };
+      }),
+      setOwner: authed.customers.setOwner.handler(async ({ context, input }) => {
+        await createCustomerInbox(deps.prisma).setOwner(context.actor, input.id, input.owner);
+        return { ok: true as const };
+      }),
       list: authed.customers.list.handler(({ context }) =>
         createCustomerRepos(deps.prisma).list(context.actor),
       ),

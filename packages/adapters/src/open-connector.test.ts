@@ -67,6 +67,10 @@ describe("OpenConnector accounts", () => {
         data: { sentMessages: [{ id: "message-1" }] },
       },
     ]);
+    const actionRequest = f.fetcher.mock.calls.find(([url]) =>
+      String(url).includes("/v1/actions/"),
+    );
+    expect(new Headers(actionRequest?.[1]?.headers).get("Idempotency-Key")).toBe("execution-1");
     expect(f.sent).toEqual([
       { alias: state, input: call().args, token: expect.stringMatching(/^fake-runtime-token-/) },
     ]);

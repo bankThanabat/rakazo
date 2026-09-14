@@ -489,7 +489,8 @@ export interface VoiceTranscribeRequest {
 }
 
 export interface BackgroundJobPayloads {
-  "customer.process": Record<string, never>;
+  "customer.process": { conversationId?: string };
+  "customer.poll": { channelId: string };
   "run.continue": { runId: string };
   "routine.wakeup": { routineId: string; scheduledFor: string };
   "computer.sleep": { computerId: string };

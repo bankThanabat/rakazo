@@ -6,6 +6,7 @@ import {
   SecretHttpRequest,
 } from "@rakazo/contracts";
 import { z } from "zod";
+import { customerTools } from "./customer-tools.js";
 
 export const DELEGATION_TOOL_NAMES = new Set([
   "run_subagent",
@@ -17,6 +18,7 @@ export const DELEGATION_TOOL_NAMES = new Set([
 ]);
 
 export const builtinAgentTools: ConnectorTool[] = [
+  ...customerTools,
   {
     name: "computer_observe",
     description:

@@ -370,6 +370,7 @@ model Bot {
   botSecrets BotSecret[]
 
   externalConversations ExternalConversation[]
+  customerBehavior      CustomerBehavior?
   customerChannels      CustomerChannel[]
 
   @@unique([spaceId, spawnKey])
@@ -1304,6 +1305,20 @@ model IntegrationProviderConfig {
   @@map("integration_provider_configs")
 }
 
+model CustomerBehavior {
+  actions Json @default("[]")
+  botId        String   @id
+  bot          Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  credentialId String
+  knowledgeFilterId String?
+  flowId       String
+  instructions String   @db.Text
+  revision     Int      @default(1)
+  updatedAt    DateTime @updatedAt
+
+  @@map("customer_behaviors")
+}
+
 model CustomerChannel {
   id            String                 @id @default(cuid())
   spaceId       String
@@ -1317,12 +1332,21 @@ model CustomerChannel {
   instructions  String                 @default("") @db.Text
   ciphertext    String
   enabled       Boolean                @default(true)
+  connectionId  String?                @unique
+  binding       Json?
+  cursor        Json?
+  startedAt     DateTime?
+  nextPollAt    DateTime?
+  pollError     String?
+  pollToken     String?
+  pollUntil     DateTime?
   conversations CustomerConversation[]
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 
   @@unique([provider, accountId])
   @@index([spaceId, userId])
+  @@index([nextPollAt])
   @@map("customer_channels")
 }
 
@@ -1351,7 +1375,25 @@ model CustomerConversation {
   @@map("customer_conversations")
 }
 
+model CustomerToolCall {
+  messageId String
+  message CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  callId String
+  requestHash String
+  status String
+  result Json?
+  createdAt DateTime @default(now())
+  @@id([messageId, callId])
+  @@unique([messageId, requestHash])
+  @@map("customer_tool_calls")
+}
+
 model CustomerMessage {
+  senderId String?
+  executionPolicyHash String?
+  executionKeyHash String?
+  executionUntil DateTime?
+  toolCalls CustomerToolCall[]
   id             String               @id @default(cuid())
   conversationId String
   conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
@@ -1362,6 +1404,9 @@ model CustomerMessage {
   mediaUrl       String?
   status         String               @default("received")
   generation     Int                  @default(0)
+  inReplyToSeq Int?
+  behaviorRevision Int?
+  sentAt         DateTime?
   providerHandle String?
   sendAttempts   Int                  @default(0)
   nextAttemptAt  DateTime?

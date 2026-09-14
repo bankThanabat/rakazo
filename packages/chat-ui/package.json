@@ -6,7 +6,8 @@
   "exports": {
     "./native": "./src/markdown.native.tsx",
     "./web": "./src/markdown.web.tsx",
-    "./async-state": "./src/async-state.ts"
+    "./async-state": "./src/async-state.ts",
+    "./customer-actions": "./src/customer-actions.ts"
   },
   "scripts": {
     "check": "tsc --noEmit -p tsconfig.json",

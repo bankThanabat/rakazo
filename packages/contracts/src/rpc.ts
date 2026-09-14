@@ -2,7 +2,12 @@ import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
 import { ConnectorAuthInputSchema, ConnectorSetupSchema } from "./connector-auth.js";
-import { CustomerConversationSchema, CustomerSnapshotSchema } from "./customer.js";
+import {
+  CustomerConversationSchema,
+  CustomerOwnerInput,
+  CustomerReplyInput,
+  CustomerSnapshotSchema,
+} from "./customer.js";
 import {
   ActionApprovalRuleSchema,
   ActionAutoReviewSettingsSchema,
@@ -778,6 +783,8 @@ export const appContract = {
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
   },
   customers: {
+    reply: oc.input(CustomerReplyInput).output(z.object({ ok: z.literal(true) })),
+    setOwner: oc.input(CustomerOwnerInput).output(z.object({ ok: z.literal(true) })),
     list: oc.output(z.array(CustomerConversationSchema)),
     snapshot: oc.input(z.object({ id: Id })).output(CustomerSnapshotSchema),
   },

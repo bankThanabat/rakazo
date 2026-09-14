@@ -8,7 +8,7 @@ import type {
 } from "./client.js";
 import { IsolationError } from "./scope.js";
 
-const customerScope = (actor: Actor) => ({
+const customerScope = (actor: Pick<Actor, "userId" | "spaceId">) => ({
   channel: { spaceId: actor.spaceId, userId: actor.userId },
 });
 export function customerConversationDto(
@@ -18,6 +18,7 @@ export function customerConversationDto(
     ...row,
     provider: row.channel.provider,
     channelName: row.channel.name,
+    canReply: row.channel.enabled && Boolean(row.channel.connectionId && row.channel.binding),
     preview: row.messages.at(-1)?.body ?? "",
     updatedAt: row.updatedAt.toISOString(),
   });
@@ -25,7 +26,7 @@ export function customerConversationDto(
 
 export function createCustomerRepos(prisma: PrismaClient) {
   return {
-    async list(actor: Actor) {
+    async list(actor: Pick<Actor, "userId" | "spaceId">) {
       const rows = await prisma.customerConversation.findMany({
         where: customerScope(actor),
         include: { channel: true, messages: { orderBy: { seq: "desc" }, take: 1 } },
@@ -34,7 +35,10 @@ export function createCustomerRepos(prisma: PrismaClient) {
       });
       return rows.map(customerConversationDto);
     },
-    async snapshot(actor: Actor, id: string): Promise<CustomerSnapshot> {
+    async snapshot(
+      actor: Pick<Actor, "userId" | "spaceId">,
+      id: string,
+    ): Promise<CustomerSnapshot> {
       const row = await prisma.customerConversation.findFirst({
         where: { id, ...customerScope(actor) },
         include: { channel: true, messages: { orderBy: { seq: "desc" }, take: 200 } },
