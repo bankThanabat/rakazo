@@ -114,7 +114,13 @@ export class ExpoPushProvider implements NotificationProvider {
           body: message.body,
           collapseId: message.threadId,
           tag: message.threadId,
-          data: { kind: message.kind, botId: message.botId, threadId: message.threadId },
+          data: {
+            kind: message.kind,
+            botId: message.botId,
+            threadId: message.threadId,
+            customerConversationId: message.customerConversationId,
+            ...(message.customerConversationId ? { spaceId: context.spaceId } : {}),
+          },
         }),
         signal,
       });

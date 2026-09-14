@@ -1,0 +1,20 @@
+# Overlay the locked OpenRAG source compose.
+services:
+  openrag-backend:
+    environment:
+      OPENRAG_RBAC_ENFORCE: "true"
+      OPENRAG_BACKEND_ROUTER_ENABLE: "true"
+      UVICORN_WORKERS: "1"
+      CACHE_BACKEND: memory
+    networks:
+      default: {}
+      support:
+        aliases: [rakazo-support-rag]
+  langflow:
+    networks:
+      default: {}
+      support: {}
+networks:
+  support:
+    external: true
+    name: rakazo-support

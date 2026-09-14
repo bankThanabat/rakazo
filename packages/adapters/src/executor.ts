@@ -34,7 +34,6 @@ import {
   BotSecretName,
   BotSecretSubmission,
   isAttachmentImageMimeType,
-  OPENAI_COMPATIBLE_PROVIDER_ID,
 } from "@rakazo/contracts";
 import {
   type ActionApprovalRule,
@@ -299,6 +298,8 @@ const READ_ONLY_AGENT_TOOLS = new Set([
   "customer_inspect",
   "customer_activity",
   "customer_snapshot",
+  "customer_search",
+  "customer_knowledge",
   "computer_observe",
   "list_files",
   "read_file",
@@ -2106,14 +2107,13 @@ export function createRunExecutor(deps: ExecutorDeps) {
               return deps.customers.activity(run, bot.id, from, until);
             }
             if (name === "customer_snapshot") {
-              const owned = await deps.prisma.customerConversation.findFirst({
-                where: {
-                  id: String(args.id),
-                  channel: { botId: bot.id, userId: run.userId, spaceId: run.spaceId },
-                },
-              });
-              if (!owned) throw new Error("Customer conversation not found");
-              return createCustomerRepos(deps.prisma).snapshot(run, owned.id);
+              return createCustomerRepos(deps.prisma).snapshot(
+                run,
+                String(args.id),
+                typeof args.before === "number" && Number.isInteger(args.before) && args.before > 0
+                  ? args.before
+                  : undefined,
+              );
             }
             return finish(
               await deps.customers.manage(run, bot.id, name.slice("customer_".length), args),

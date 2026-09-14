@@ -146,7 +146,10 @@ async function main() {
   // One provider instance so emulator launches and polls share the same Map.
   const cloudAgent = createCloudAgentConnection();
   const customers = createCustomerConversations({
+    webOrigin: process.env.WEB_ORIGIN,
+    notifications: new ExpoPushProvider(dataDir),
     apiUrl: process.env.API_URL ?? "http://127.0.0.1:3100",
+    apiInternalUrl: process.env.API_INTERNAL_URL || process.env.API_URL,
     prisma,
     integrations: integrationSettings,
     secrets,

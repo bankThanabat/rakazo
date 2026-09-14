@@ -41,6 +41,8 @@ describe("emulated sendblue platform inbound", () => {
       type: "message",
       provider: "sendblue",
       handle: "handle-dm-1",
+      receiptId: undefined,
+      sentAt: Date.parse("2026-01-01T00:00:00Z"),
       threadId: expect.stringMatching(/^sendblue:/),
       isDirect: true,
       from: "+15551234567",

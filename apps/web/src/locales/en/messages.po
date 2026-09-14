@@ -3916,3 +3916,117 @@ msgstr "Enter a whole number from 1 to 1000 for the image limit."
 #: src/pages/Onboarding.tsx:529
 msgid "Maximum images per request"
 msgstr "Maximum images per request"
+
+#: src/pages/CustomerInbox.tsx:356
+msgid "Action history"
+msgstr "Action history"
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:351
+#: src/pages/CustomerInbox.tsx:72
+msgid "All"
+msgstr "All"
+
+#: src/pages/CustomerInbox.tsx:248
+msgid "Ask assistant"
+msgstr "Ask assistant"
+
+#: src/pages/CustomerInbox.tsx:275
+msgid "Assign to me"
+msgstr "Assign to me"
+
+#: src/pages/SupportWidget.tsx:132
+msgid "Close support"
+msgstr "Close support"
+
+#: src/pages/SupportWidget.tsx:211
+msgid "Could not connect. Try again."
+msgstr "Could not connect. Try again."
+
+#: src/pages/CustomerInbox.tsx:391
+msgid "Could not save. Try again."
+msgstr "Could not save. Try again."
+
+#: src/pages/CustomerInbox.tsx:286
+msgid "Could not update case"
+msgstr "Could not update case"
+
+#: src/pages/CustomerInbox.tsx:307
+#: src/pages/SupportWidget.tsx:166
+msgid "Earlier messages"
+msgstr "Earlier messages"
+
+#: src/pages/CustomerInbox.tsx:54
+msgid "Filter conversations"
+msgstr "Filter conversations"
+
+#: src/pages/SupportWidget.tsx:141
+msgid "How can we help?"
+msgstr "How can we help?"
+
+#: src/pages/CustomerInbox.tsx:312
+msgid "Latest messages"
+msgstr "Latest messages"
+
+#: src/pages/SupportWidget.tsx:237
+msgid "Message support"
+msgstr "Message support"
+
+#: src/pages/CustomerInbox.tsx:121
+msgid "Next"
+msgstr "Next"
+
+#: src/pages/SupportWidget.tsx:113
+msgid "Open support"
+msgstr "Open support"
+
+#: src/pages/CustomerInbox.tsx:337
+msgid "parts sent"
+msgstr "parts sent"
+
+#: src/pages/CustomerInbox.tsx:116
+msgid "Previous"
+msgstr "Previous"
+
+#: src/pages/CustomerInbox.tsx:376
+msgid "Reply…"
+msgstr "Reply…"
+
+#: src/pages/CustomerInbox.tsx:237
+msgid "Resolve"
+msgstr "Resolve"
+
+#: src/pages/CustomerInbox.tsx:71
+msgid "Resolved"
+msgstr "Resolved"
+
+#: src/pages/SupportWidget.tsx:225
+msgid "Start a new conversation"
+msgstr "Start a new conversation"
+
+#: src/pages/SupportWidget.tsx:127
+msgid "Support"
+msgstr "Support"
+
+#: src/pages/SupportWidget.tsx:203
+msgid "Talk to a person"
+msgstr "Talk to a person"
+
+#: src/pages/CustomerInbox.tsx:103
+msgid "Unread"
+msgstr "Unread"
+
+#: src/pages/CustomerInbox.tsx:260
+msgid "Use draft"
+msgstr "Use draft"
+
+#: src/pages/SupportWidget.tsx:185
+msgid "Waiting for support"
+msgstr "Waiting for support"
+
+#: src/pages/SupportWidget.tsx:209
+msgid "Your session expired."
+msgstr "Your session expired."
+
+#: src/pages/CustomerInbox.tsx
+msgid "Resume AI"
+msgstr "Resume AI"

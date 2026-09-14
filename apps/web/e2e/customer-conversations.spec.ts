@@ -22,7 +22,7 @@ test("connected customer conversation supports takeover, reply, and resume", asy
   const messages = [
     {
       id: "incoming",
-      seq: 1,
+      seq: 201,
       role: "customer",
       body: conversation.preview,
       mediaUrl: null,
@@ -33,8 +33,32 @@ test("connected customer conversation supports takeover, reply, and resume", asy
   await page.route("**/rpc/customers/list", (route) =>
     route.fulfill({ json: { json: [conversation] } }),
   );
-  await page.route("**/rpc/customers/snapshot", (route) =>
-    route.fulfill({ json: { json: { conversation, messages } } }),
+  await page.route("**/rpc/customers/snapshot", (route) => {
+    const historical = Boolean(route.request().postDataJSON().json.before);
+    return route.fulfill({
+      json: {
+        json: {
+          conversation,
+          messages: historical
+            ? [{ ...messages[0], id: "earlier", seq: 1, body: "Earlier support request." }]
+            : messages,
+          before: historical ? null : 201,
+          actions: historical
+            ? [
+                {
+                  name: "Order lookup",
+                  status: "completed",
+                  createdAt: conversation.updatedAt,
+                  outcome: "Confirmed historical order",
+                },
+              ]
+            : [],
+        },
+      },
+    });
+  });
+  await page.route("**/rpc/customers/updateCase", (route) =>
+    route.fulfill({ json: { json: { ok: true } } }),
   );
   await page.route("**/rpc/customers/setOwner", async (route) => {
     conversation.owner = route.request().postDataJSON().json.owner;
@@ -46,7 +70,7 @@ test("connected customer conversation supports takeover, reply, and resume", asy
     expect(input.nonce).toBeTruthy();
     messages.push({
       id: "outgoing",
-      seq: 2,
+      seq: 202,
       role: "staff",
       body: input.body,
       mediaUrl: null,
@@ -68,7 +92,14 @@ test("connected customer conversation supports takeover, reply, and resume", asy
     page.getByText("Yes, the promotion is available tonight.", { exact: true }),
   ).toBeVisible();
   await captureScreenshot(page, testInfo, "customer-conversation-takeover");
-  await page.getByRole("button", { name: "Resume staff", exact: true }).click();
+  await page.getByRole("button", { name: "Earlier messages", exact: true }).click();
+  await expect(page.getByText("Earlier support request.", { exact: true })).toBeVisible();
+  await page.getByText("Action history", { exact: true }).click();
+  await expect(page.getByText("Confirmed historical order", { exact: true })).toBeVisible();
+  await captureScreenshot(page, testInfo, "customer-historical-action");
+  await page.getByRole("button", { name: "Latest messages", exact: true }).click();
+  await expect(page.getByText("Confirmed historical order", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Resume AI", exact: true }).click();
   await expect(composer).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Take over", exact: true })).toBeVisible();
 });

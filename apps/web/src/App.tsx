@@ -16,6 +16,7 @@ import { IntegrationSetupPage } from "./pages/IntegrationSetup";
 import { LocalSettingsPage } from "./pages/LocalSettings";
 import { McpOAuthCallbackPage } from "./pages/McpOAuthCallback";
 import { ShellPage } from "./pages/Shell";
+import { SupportWidget } from "./pages/SupportWidget";
 
 const AuthPage = lazy(() =>
   import("./pages/Auth").then((module) => ({ default: module.AuthPage })),
@@ -31,6 +32,7 @@ const WelcomePage = lazy(() =>
 );
 
 export function App() {
+  if (window.location.pathname.startsWith("/support/")) return <SupportWidget />;
   if (window.location.pathname === LOCAL_SETTINGS_PAGE) return <LocalSettingsPage />;
   return <SessionApp />;
 }

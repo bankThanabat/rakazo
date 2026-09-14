@@ -1,0 +1,18 @@
+services:
+  api:
+    environment:
+      API_INTERNAL_URL: http://rakazo-support-api:3100
+    networks:
+      default: {}
+      support:
+        aliases: [rakazo-support-api]
+  worker:
+    environment:
+      API_INTERNAL_URL: http://rakazo-support-api:3100
+    networks:
+      default: {}
+      support: {}
+networks:
+  support:
+    external: true
+    name: rakazo-support

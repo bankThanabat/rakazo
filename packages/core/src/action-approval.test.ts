@@ -29,6 +29,8 @@ describe("toolRequiresApproval", () => {
     expect(toolRequiresExplicitApproval("create_space")).toBe(true);
     expect(toolRequiresExplicitApproval("customer_connect")).toBe(true);
     expect(toolRequiresExplicitApproval("customer_configure")).toBe(true);
+    for (const name of ["customer_website", "customer_channel", "customer_delete"])
+      expect(toolRequiresExplicitApproval(name)).toBe(true);
     expect(toolRequiresApproval("customer_instructions", false)).toBe(false);
     expect(toolRequiresExplicitApproval("archive_bot")).toBe(false);
   });

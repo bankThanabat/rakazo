@@ -1,0 +1,14 @@
+[
+  {
+    "name": "OpenRAG",
+    "path": "apps/openrag",
+    "revision": "54162929970cce963ce6f51e4effb13715ab9c0b",
+    "patch": "patches/customer-stack/openrag.patch",
+    "sha256": "6ac6c01ae0328c71f27e21ec2b4408e77624a2ac676c98e3584c52ba0e9bf11a"
+  },
+  {
+    "name": "OpenConnector",
+    "path": "infra/open-connector",
+    "revision": "d0a06b8ccc6a176380d2fa41c9ff208b71224885"
+  }
+]

@@ -37,6 +37,9 @@ const EXPLICIT_APPROVAL_BUILTIN_TOOLS = new Set([
   "create_space",
   "customer_connect",
   "customer_configure",
+  "customer_website",
+  "customer_channel",
+  "customer_delete",
 ]);
 
 const UNATTENDED_SAFE_BUILTIN_TOOLS = new Set([

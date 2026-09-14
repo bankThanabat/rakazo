@@ -3,7 +3,9 @@ import * as z from "zod";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
 import { ConnectorAuthInputSchema, ConnectorSetupSchema } from "./connector-auth.js";
 import {
+  CustomerCaseInput,
   CustomerConversationSchema,
+  CustomerListInput,
   CustomerOwnerInput,
   CustomerReplyInput,
   CustomerSnapshotSchema,
@@ -139,6 +141,8 @@ const threadSendInput = threadTarget
       });
     }
   });
+
+export type ThreadSendInput = z.infer<typeof threadSendInput>;
 
 export const appContract = {
   health: oc.output(z.object({ ok: z.literal(true), version: z.string() })),
@@ -783,10 +787,16 @@ export const appContract = {
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
   },
   customers: {
+    investigate: oc
+      .input(z.object({ id: Id, clientNonce: z.string().min(1).max(200) }))
+      .output(z.object({ botId: Id, name: z.string() })),
+    updateCase: oc.input(CustomerCaseInput).output(z.object({ ok: z.literal(true) })),
     reply: oc.input(CustomerReplyInput).output(z.object({ ok: z.literal(true) })),
     setOwner: oc.input(CustomerOwnerInput).output(z.object({ ok: z.literal(true) })),
-    list: oc.output(z.array(CustomerConversationSchema)),
-    snapshot: oc.input(z.object({ id: Id })).output(CustomerSnapshotSchema),
+    list: oc.input(CustomerListInput).output(z.array(CustomerConversationSchema)),
+    snapshot: oc
+      .input(z.object({ id: Id, before: z.number().int().positive().optional() }))
+      .output(CustomerSnapshotSchema),
   },
   externalConversations: {
     updatePolicy: oc

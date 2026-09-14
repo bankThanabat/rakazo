@@ -530,6 +530,7 @@ export interface ArtifactPut {
 }
 
 export interface NotificationMessage {
+  customerConversationId?: string;
   kind: "completion" | "failure" | "help" | "takeover";
   title: string;
   body: string;

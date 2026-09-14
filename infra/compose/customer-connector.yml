@@ -1,0 +1,10 @@
+services:
+  connector:
+    networks:
+      default: {}
+      support:
+        aliases: [rakazo-support-connector]
+networks:
+  support:
+    external: true
+    name: rakazo-support

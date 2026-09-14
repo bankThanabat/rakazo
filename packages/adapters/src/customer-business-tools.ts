@@ -3,7 +3,7 @@ import type { CustomerRuntime } from "@rakazo/adapter-kit";
 import { CustomerActionGrantSchema } from "@rakazo/contracts";
 import { stableJsonValue } from "@rakazo/core/node/approval-effect-key";
 import type { PrismaClient } from "@rakazo/db";
-import { Prisma } from "@rakazo/db";
+import { handoffCustomer, Prisma } from "@rakazo/db";
 import { z } from "zod";
 import type { createCustomerConnector } from "./customer-connector.js";
 import { customerField, customerInput } from "./customer-mapping.js";
@@ -54,7 +54,7 @@ export function validateCustomerGrants(value: unknown) {
   const actions = grants(value);
   if (
     new Set(actions.map((a) => a.name)).size !== actions.length ||
-    actions.some((a) => a.name === "search_knowledge")
+    actions.some((a) => ["search_knowledge", "request_human"].includes(a.name))
   )
     throw new Error("Customer action names must be unique");
   for (const action of actions) {
@@ -70,6 +70,8 @@ export function validateCustomerGrants(value: unknown) {
         throw new Error("A customer ownership check must precede writes");
       if (step.check?.equals === "$customerId" && step.effect === "read") scoped = true;
     }
+    if (action.audience === "customer" && !scoped)
+      throw new Error("Customer data requires an ownership check before returning results");
   }
   return actions;
 }
@@ -110,13 +112,13 @@ export function createCustomerBusinessTools(deps: {
       conversation.leaseUntil <= new Date() ||
       !channel?.enabled ||
       channel.bot.archivedAt ||
-      !channel.connectionId ||
+      (channel.provider !== "web" && !channel.connectionId) ||
       !channel.bot.customerBehavior ||
       row.executionPolicyHash !== customerPolicyHash(channel.bot.customerBehavior) ||
       !timingSafeEqual(hash(token), Buffer.from(row.executionKeyHash, "hex"))
     )
       throw denied();
-    await deps.connector.connection(channel, channel.connectionId);
+    if (channel.provider !== "web") await deps.connector.connection(channel, channel.connectionId!);
     return { message: row, conversation, channel, behavior: channel.bot.customerBehavior };
   }
   return {
@@ -138,6 +140,17 @@ export function createCustomerBusinessTools(deps: {
             additionalProperties: false,
           },
         });
+      tools.push({
+        name: "request_human",
+        description:
+          "Transfer this conversation to a human. Use when the customer requests a person, information is insufficient, or an action cannot be safely completed. This stops automatic replies and alerts staff.",
+        inputSchema: {
+          type: "object",
+          properties: { reason: { type: "string", minLength: 1, maxLength: 500 } },
+          required: ["reason"],
+          additionalProperties: false,
+        },
+      });
       return { tools };
     },
     async execute(token: string, raw: unknown) {
@@ -172,13 +185,24 @@ export function createCustomerBusinessTools(deps: {
             throw new Error("Customer action outcome is uncertain; do not replay");
           return { found: true, result: prior.result };
         }
-        await tx.customerToolCall.create({ data: { ...key, requestHash, status: "executing" } });
+        if ((await tx.customerToolCall.count({ where: { messageId: key.messageId } })) >= 16)
+          throw new Error("Customer action limit reached");
+        await tx.customerToolCall.create({
+          data: { ...key, name: call.name, requestHash, status: "executing" },
+        });
         return { found: false, result: null };
       });
       if (cached.found) return cached.result;
       try {
         let result: unknown;
-        if (call.name === "search_knowledge") {
+        if (call.name === "request_human") {
+          const { reason } = z
+            .object({ reason: z.string().trim().min(1).max(500) })
+            .strict()
+            .parse(call.arguments);
+          await prisma.$transaction((tx) => handoffCustomer(tx, scope.conversation.id, reason));
+          result = { handedOff: true };
+        } else if (call.name === "search_knowledge") {
           if (!scope.behavior.knowledgeFilterId) throw denied();
           const { query } = z
             .object({ query: z.string().trim().min(1).max(4000) })

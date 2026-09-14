@@ -56,6 +56,7 @@ describe.skipIf(!enabled)(
     let owners: Array<Awaited<ReturnType<typeof provisionMessagingIdentity>>>;
     let feeds: Map<string, unknown[]>;
     let reply: ReturnType<typeof vi.fn<CustomerRuntime["reply"]>>;
+    let search: ReturnType<typeof vi.fn<NonNullable<CustomerRuntime["search"]>>>;
     let failSend: boolean;
     let flowOrdinal = 0;
     let businessHandler: ((action: string, input: Record<string, unknown>) => unknown) | undefined;
@@ -108,6 +109,7 @@ describe.skipIf(!enabled)(
           });
       }
       reply = vi.fn(async (request) => `reply from ${request.flowId}`);
+      search = vi.fn(async () => ({ results: [] }));
       service = createCustomerConversations({
         prisma: db.prisma,
         secrets: f.secrets,
@@ -115,7 +117,7 @@ describe.skipIf(!enabled)(
           "open-connector": f.adapter,
         }),
         jobs: { enqueue: vi.fn(async () => undefined) } as unknown as JobPublisher,
-        runtime: () => ({ reply, publish: async () => `flow-${++flowOrdinal}` }),
+        runtime: () => ({ reply, search, publish: async () => `flow-${++flowOrdinal}` }),
       });
     });
     afterEach(async () => {
@@ -197,6 +199,185 @@ describe.skipIf(!enabled)(
         where: { channelId: fixture.channel.id },
       });
     }
+    it("keeps polling other customers and checkpoints after a sender exceeds their quota", async () => {
+      const a = await setup();
+      await db.prisma.customerChannel.update({
+        where: { id: a.channel.id },
+        data: { hourlyCustomerLimit: 1 },
+      });
+      await receive(a, [
+        incoming("01"),
+        incoming("02"),
+        { ...incoming("03", "other-thread"), user: "other-customer" },
+      ]);
+      expect(
+        await db.prisma.customerMessage.findMany({
+          where: { conversation: { channelId: a.channel.id } },
+          orderBy: { externalId: "asc" },
+          select: { externalId: true },
+        }),
+      ).toEqual([{ externalId: "in:01" }, { externalId: "in:03" }]);
+      expect(
+        await db.prisma.customerChannel.findUnique({ where: { id: a.channel.id } }),
+      ).toMatchObject({ cursor: "next", pollError: null });
+    });
+    it("shares cases only with live space members and revokes access when made private", async () => {
+      const a = await setup();
+      const b = await setup();
+      const conversation = await receive(a);
+      const teammate = { userId: b.owner.userId, spaceId: a.owner.spaceId };
+      const { organizationId } = await db.prisma.space.findUniqueOrThrow({
+        where: { id: a.owner.spaceId },
+      });
+      await db.prisma.member.create({
+        data: {
+          id: randomUUID(),
+          organizationId,
+          userId: teammate.userId,
+          role: "member",
+          createdAt: new Date(),
+        },
+      });
+      const repos = createCustomerRepos(db.prisma);
+      await expect(repos.snapshot(teammate, conversation.id)).rejects.toThrow();
+      await service.manage(a.owner, a.owner.botId, "channel", { id: a.channel.id, shared: true });
+      expect((await repos.snapshot(teammate, conversation.id)).conversation.id).toBe(
+        conversation.id,
+      );
+      await createCustomerInbox(db.prisma).updateCase(teammate, {
+        id: conversation.id,
+        assigneeId: teammate.userId,
+        read: true,
+      });
+      expect((await repos.snapshot(teammate, conversation.id)).conversation).toMatchObject({
+        assigneeId: teammate.userId,
+        unread: false,
+      });
+      await service.manage(a.owner, a.owner.botId, "channel", { id: a.channel.id, shared: false });
+      await expect(repos.snapshot(teammate, conversation.id)).rejects.toThrow();
+      await expect(
+        createCustomerInbox(db.prisma).reply(teammate, {
+          id: conversation.id,
+          body: "Private",
+          nonce: randomUUID(),
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("uses the selected case's approved knowledge for a teammate and rechecks sharing", async () => {
+      const a = await setup();
+      const b = await setup();
+      const conversation = await receive(a);
+      const teammate = { userId: b.owner.userId, spaceId: a.owner.spaceId };
+      const { organizationId } = await db.prisma.space.findUniqueOrThrow({
+        where: { id: a.owner.spaceId },
+      });
+      await db.prisma.member.create({
+        data: {
+          id: randomUUID(),
+          organizationId,
+          userId: teammate.userId,
+          role: "member",
+          createdAt: new Date(),
+        },
+      });
+      const bot = await db.prisma.bot.create({
+        data: {
+          ...teammate,
+          name: "Staff assistant",
+          color: "blue",
+          thread: { create: teammate },
+        },
+      });
+      await service.manage(a.owner, a.owner.botId, "configure", {
+        credentialId: a.credential.id,
+        instructions: "Public rules",
+        knowledgeFilterId: "case-sources",
+      });
+      await service.manage(teammate, bot.id, "configure", {
+        credentialId: b.credential.id,
+        instructions: "Other rules",
+        knowledgeFilterId: "other-sources",
+      });
+      const input = { id: conversation.id, query: "Return policy" };
+      const repos = createCustomerRepos(db.prisma);
+      await expect(repos.prepareInvestigation(teammate, conversation.id)).rejects.toThrow();
+      await expect(service.manage(teammate, bot.id, "knowledge", input)).rejects.toThrow();
+      expect(search).not.toHaveBeenCalled();
+      await service.manage(a.owner, a.owner.botId, "channel", { id: a.channel.id, shared: true });
+      expect(await repos.prepareInvestigation(teammate, conversation.id)).toMatchObject({
+        botId: bot.id,
+        text: expect.stringContaining(JSON.stringify(conversation.id)),
+      });
+      await service.manage(teammate, bot.id, "knowledge", input);
+      expect(search).toHaveBeenCalledWith(
+        expect.objectContaining({ knowledgeFilterId: "case-sources" }),
+      );
+      await service.manage(a.owner, a.owner.botId, "channel", { id: a.channel.id, shared: false });
+      await expect(repos.prepareInvestigation(teammate, conversation.id)).rejects.toThrow();
+      await expect(service.manage(teammate, bot.id, "knowledge", input)).rejects.toThrow();
+      expect(search).toHaveBeenCalledTimes(1);
+    });
+
+    it("prefers the case's own assistant over an unrelated first assistant", async () => {
+      const a = await setup();
+      const conversation = await receive(a);
+      await db.prisma.bot.create({
+        data: {
+          spaceId: a.owner.spaceId,
+          userId: a.owner.userId,
+          name: "Unrelated assistant",
+          color: "blue",
+          createdAt: new Date(0),
+          thread: { create: { spaceId: a.owner.spaceId, userId: a.owner.userId } },
+        },
+      });
+      const prepared = await createCustomerRepos(db.prisma).prepareInvestigation(
+        a.owner,
+        conversation.id,
+      );
+      expect(prepared.botId).toBe(a.owner.botId);
+      expect(prepared.text).toContain("customer_knowledge with this case id");
+      expect(prepared.text).toContain("Do not send a customer reply");
+      expect(prepared.text).not.toContain(conversation.name);
+    });
+
+    it("deletes only resolved idle cases and expires their visitor capabilities", async () => {
+      const a = await setup();
+      const { channelId } = (await service.manage(a.owner, a.owner.botId, "website", {
+        name: "Support",
+        origins: ["https://shop.example.test"],
+      })) as { channelId: string };
+      const conversation = await db.prisma.customerConversation.create({
+        data: {
+          channelId,
+          externalThreadId: "visitor",
+          customerId: "visitor",
+          name: "Visitor",
+          visitorSessions: {
+            create: {
+              tokenHash: "fake-hash",
+              origin: "https://shop.example.test",
+              expiresAt: new Date(Date.now() + 60000),
+            },
+          },
+        },
+      });
+      await expect(
+        service.manage(a.owner, a.owner.botId, "delete", { id: conversation.id }),
+      ).rejects.toThrow();
+      await createCustomerInbox(db.prisma).updateCase(a.owner, {
+        id: conversation.id,
+        state: "resolved",
+      });
+      await service.manage(a.owner, a.owner.botId, "delete", { id: conversation.id });
+      expect(
+        await db.prisma.customerVisitorSession.count({
+          where: { conversationId: conversation.id },
+        }),
+      ).toBe(0);
+    });
+
     it("runs two apps and two staff through the same pipeline without leaking history or credentials", async () => {
       const a = await setup();
       const b = await setup("another-messenger");
@@ -234,6 +415,128 @@ describe.skipIf(!enabled)(
       expect(
         (await service.activity(a.owner, a.owner.botId, since, new Date("2100-01-01"))).replies,
       ).toBe(1);
+    });
+
+    it("renews multipart delivery leases while competing workers reconcile", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      const format = binding();
+      format.send.textLimit = { max: 4, unit: "characters" };
+      await db.prisma.customerChannel.update({
+        where: { id: a.channel.id },
+        data: { binding: format },
+      });
+      reply.mockResolvedValueOnce("abcdefghijklmnop");
+      const contenders: Promise<void>[] = [];
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        sendStarted = () => {
+          vi.setSystemTime(Date.now() + 90000);
+          contenders.push(service.process(c.id));
+        };
+        await service.process(c.id);
+        await Promise.all(contenders);
+        expect(sends).toHaveLength(4);
+        expect(
+          await db.prisma.customerMessage.findFirst({
+            where: { conversationId: c.id, role: "bot" },
+          }),
+        ).toMatchObject({ status: "sent", sentParts: 4 });
+        expect(
+          await db.prisma.customerConversation.findUnique({ where: { id: c.id } }),
+        ).toMatchObject({ owner: "bot", needsHuman: false });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("splits Unicode replies into durable ordered sends without losing text", async () => {
+      const f = await setup();
+      const conversation = await receive(f);
+      const body = "สวัสดี 🙂 ".repeat(500);
+      reply.mockResolvedValueOnce(body);
+      await service.process(conversation.id);
+      const texts = sends.flatMap((send) => (send.input as { texts: string[] }).texts);
+      expect(texts.join("")).toBe(body);
+      expect(texts.every((text) => new TextEncoder().encode(text).length <= 1000)).toBe(true);
+      const outbound = await db.prisma.customerMessage.findFirstOrThrow({
+        where: { conversationId: conversation.id, role: "bot" },
+      });
+      expect(outbound).toMatchObject({ status: "sent", sentParts: texts.length });
+    });
+
+    it("a model handoff stops generation and sends a single acknowledgement", async () => {
+      const f = await setup();
+      const conversation = await receive(f);
+      reply.mockImplementationOnce(async (request) => {
+        await service.tools.execute(request.executionContext!.token, {
+          name: "request_human",
+          callId: "handoff",
+          arguments: { reason: "Customer asks for a person" },
+        });
+        return "This model continuation must not be delivered";
+      });
+      await service.process(conversation.id);
+      await service.process(conversation.id);
+      expect(
+        await db.prisma.customerConversation.findUnique({ where: { id: conversation.id } }),
+      ).toMatchObject({ owner: "staff", needsHuman: true });
+      expect(sends).toHaveLength(1);
+      expect(JSON.stringify(sends)).not.toContain("model continuation");
+      expect(
+        await db.prisma.customerToolCall.findFirst({ where: { name: "request_human" } }),
+      ).toMatchObject({ status: "completed" });
+    });
+
+    it("resolved cases reopen, preserve unread state, and reject stale drafts", async () => {
+      const f = await setup();
+      const conversation = await receive(f);
+      const inbox = createCustomerInbox(db.prisma);
+      await inbox.updateCase(f.owner, { id: conversation.id, state: "resolved", read: true });
+      expect((await createCustomerRepos(db.prisma).list(f.owner))[0]).toMatchObject({
+        state: "resolved",
+        unread: false,
+      });
+      await inbox.receive(f.channel.id, {
+        externalId: "followup",
+        externalThreadId: "thread",
+        customerId: "customer",
+        name: "Customer",
+        body: "Another question",
+      });
+      expect((await createCustomerRepos(db.prisma).list(f.owner))[0]).toMatchObject({
+        state: "open",
+        unread: true,
+        needsHuman: true,
+      });
+      await expect(
+        service.manage(f.owner, f.owner.botId, "draft", {
+          id: conversation.id,
+          body: "Outdated",
+          expectedSeq: 1,
+        }),
+      ).rejects.toThrow("changed");
+    });
+
+    it("website conversations use the same runtime without a connector account", async () => {
+      const f = await setup();
+      const result = (await service.manage(f.owner, f.owner.botId, "website", {
+        name: "Website",
+        origins: ["https://shop.example.test"],
+      })) as { channelId: string };
+      const id = await createCustomerInbox(db.prisma).receive(result.channelId, {
+        externalId: "web-one",
+        externalThreadId: "visitor",
+        customerId: "visitor",
+        name: "Visitor",
+        body: "Hello",
+      });
+      await service.process(id);
+      expect(
+        await db.prisma.customerMessage.findFirst({ where: { conversationId: id, role: "bot" } }),
+      ).toMatchObject({ status: "sent" });
+      expect(sends).toHaveLength(0);
+      expect(reply).toHaveBeenCalledTimes(1);
     });
     it("deduplicates polls and concurrent input, serializes turns, and retains prior delivered replies", async () => {
       const a = await setup();
@@ -448,6 +751,40 @@ describe.skipIf(!enabled)(
       expect(await db.prisma.customerMessage.count({ where: { conversationId: c.id } })).toBe(1);
       await service.process(c.id);
       expect(sends).toHaveLength(1);
+      await db.prisma.customerChannel.update({
+        where: { id: a.channel.id },
+        data: { hourlyCustomerLimit: 1 },
+      });
+      const batch = JSON.stringify({
+        account: "account",
+        messages: [
+          { ...incoming("quota"), at: new Date(Date.now() + 1000).toISOString() },
+          {
+            ...incoming("subsequent", "another-thread"),
+            user: "another-customer",
+            at: new Date(Date.now() + 1000).toISOString(),
+          },
+        ],
+      });
+      await expect(
+        ingress.receive(
+          a.channel.id,
+          new Headers({
+            "x-line-signature": createHmac("sha256", "fake-webhook-key")
+              .update(batch)
+              .digest("base64"),
+          }),
+          batch,
+        ),
+      ).resolves.toEqual({ ok: true });
+      expect(
+        await db.prisma.customerMessage.count({
+          where: {
+            conversation: { channelId: a.channel.id },
+            externalId: "in:subsequent",
+          },
+        }),
+      ).toBe(1);
       await service.manage(a.owner, a.owner.botId, "disconnect", { channelId: a.channel.id });
       await expect(ingress.receive(a.channel.id, headers, raw)).rejects.toThrow();
     });
@@ -551,7 +888,7 @@ describe.skipIf(!enabled)(
       reply.mockImplementationOnce(async (request) => {
         token = request.executionContext!.token;
         expect(await service.tools.list(token)).toMatchObject({
-          tools: [{ name: "refund_order" }],
+          tools: [{ name: "refund_order" }, { name: "request_human" }],
         });
         await expect(
           service.tools.execute(token, {
@@ -597,6 +934,75 @@ describe.skipIf(!enabled)(
           where: { message: { conversationId: c.id }, status: "completed" },
         }),
       ).toBe(1);
+    });
+
+    it("checks current eligibility again before a repeat write in a later customer turn", async () => {
+      const catalog = f.providers[0]!.actions;
+      for (const suffix of ["order", "refund"])
+        catalog.push({
+          ...catalog[0]!,
+          id: `sample.${suffix}`,
+          inputSchema: { type: "object", properties: {}, additionalProperties: true },
+        });
+      const a = await setup();
+      let refunds = 0;
+      businessHandler = (action) => {
+        if (action.endsWith(".order"))
+          return { id: "owned-record", customerId: "customer", refundable: refunds === 0 };
+        refunds++;
+        return { refunded: true };
+      };
+      await service.manage(a.owner, a.owner.botId, "configure", {
+        credentialId: a.credential.id,
+        instructions: "Check ownership and current refund eligibility",
+        actions: [
+          {
+            name: "refund_order",
+            description: "Refund an eligible owned order",
+            connectionId: a.account.id,
+            inputSchema: { type: "object", properties: {} },
+            steps: [
+              {
+                name: "owner",
+                action: "sample.order",
+                input: {},
+                effect: "read",
+                check: { path: ["customerId"], equals: "$customerId" },
+              },
+              {
+                name: "eligible",
+                action: "sample.order",
+                input: { id: "$steps.owner.id" },
+                effect: "read",
+                check: { path: ["refundable"], equals: true },
+              },
+              {
+                name: "refund",
+                action: "sample.refund",
+                input: { id: "$steps.eligible.id" },
+                effect: "write",
+              },
+            ],
+          },
+        ],
+      });
+      reply.mockImplementation(async (request) => {
+        await service.tools.execute(request.executionContext!.token, {
+          name: "refund_order",
+          callId: "refund",
+          arguments: {},
+        });
+        return "Refund confirmed";
+      });
+      const c = await receive(a);
+      await service.process(c.id);
+      expect(refunds).toBe(1);
+      await receive(a, [incoming("second")]);
+      await service.process(c.id);
+      expect(refunds).toBe(1);
+      expect(
+        await db.prisma.customerConversation.findUnique({ where: { id: c.id } }),
+      ).toMatchObject({ owner: "staff", needsHuman: true });
     });
 
     it("authorizes group actions as the current sender, not the first participant", async () => {

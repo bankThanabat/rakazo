@@ -1,19 +1,28 @@
 import { randomUUID } from "node:crypto";
-import type { CustomerRuntime, JobPublisher } from "@rakazo/adapter-kit";
+import type { CustomerRuntime, JobPublisher, NotificationProvider } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import {
   CustomerBehaviorInput,
   CustomerBindingSchema,
+  CustomerChannelSettingsInput,
   CustomerConnectInput,
+  CustomerDraftInput,
   CustomerInstructionsInput,
+  CustomerKnowledgeInput,
+  CustomerListInput,
+  CustomerWebsiteInput,
 } from "@rakazo/contracts";
+import { customerReplyParts } from "@rakazo/core";
 import type { CustomerChannel, PrismaClient } from "@rakazo/db";
 import {
+  CustomerMessageLimitError,
   connectionAccessWhere,
   createCustomerInbox,
+  createCustomerRepos,
   IsolationError,
   invalidateCustomerConversations,
   Prisma,
+  requireCustomerAccess,
 } from "@rakazo/db";
 import {
   createCustomerBusinessTools,
@@ -30,6 +39,11 @@ import type { EncryptedSecretStore } from "./secrets.js";
 
 export type CustomerConversationService = ReturnType<typeof createCustomerConversations>;
 const leaseMs = 120_000;
+const liveChannel = {
+  enabled: true,
+  OR: [{ connectionId: { not: null } }, { provider: "web" }],
+  bot: { archivedAt: null },
+};
 
 export function createCustomerConversations(deps: {
   prisma: PrismaClient;
@@ -37,7 +51,10 @@ export function createCustomerConversations(deps: {
   secrets: EncryptedSecretStore;
   jobs: JobPublisher;
   apiUrl?: string;
+  apiInternalUrl?: string;
+  webOrigin?: string;
   runtime?: (config: { baseUrl: string; apiKey?: string }) => CustomerRuntime;
+  notifications?: NotificationProvider;
 }) {
   const { prisma } = deps;
   const inbox = createCustomerInbox(prisma);
@@ -142,8 +159,13 @@ export function createCustomerConversations(deps: {
           }))
         )
           return;
-        const id = await inbox.receive(channel.id, message, token);
-        await processJob(id);
+        try {
+          const id = await inbox.receive(channel.id, message, token);
+          await processJob(id);
+        } catch (error) {
+          // Quota rejections must not pin a shared account's receive cursor.
+          if (!(error instanceof CustomerMessageLimitError)) throw error;
+        }
       }
       await prisma.customerChannel.updateMany({
         where: { id: channel.id, pollToken: token },
@@ -174,7 +196,7 @@ export function createCustomerConversations(deps: {
     const claimed = await prisma.customerConversation.updateMany({
       where: {
         id: conversationId,
-        channel: { enabled: true, connectionId: { not: null }, bot: { archivedAt: null } },
+        channel: liveChannel,
         OR: [{ leaseUntil: null }, { leaseUntil: { lte: new Date() } }],
       },
       data: { leaseToken: token, leaseUntil: new Date(Date.now() + leaseMs) },
@@ -210,12 +232,14 @@ export function createCustomerConversations(deps: {
         });
         return;
       }
-      const binding = CustomerBindingSchema.parse(row.channel.binding);
+      const binding =
+        row.channel.provider === "web" ? null : CustomerBindingSchema.parse(row.channel.binding);
       const behavior = row.channel.bot.customerBehavior;
       let outbound = message;
       if (message.role === "customer") {
         if (!behavior) throw new Error("Customer behavior has not been configured");
-        await connection(row.channel, row.channel.connectionId!);
+        if (row.channel.provider !== "web")
+          await connection(row.channel, row.channel.connectionId!);
         const config = await runtimeConfig(row.channel, behavior.credentialId);
         const execution = customerExecutionKey(message.id);
         const running = await prisma.$transaction(async (tx) => {
@@ -259,7 +283,7 @@ export function createCustomerConversations(deps: {
           instructions: behavior.instructions,
           conversationId,
           executionContext: {
-            endpoint: `${(deps.apiUrl ?? "http://127.0.0.1:3100").replace(/\/$/, "")}/api/customer-tools`,
+            endpoint: `${(deps.apiInternalUrl ?? deps.apiUrl ?? "http://127.0.0.1:3100").replace(/\/$/, "")}/api/customer-tools`,
             token: execution.token,
           },
           messages: history
@@ -316,7 +340,7 @@ export function createCustomerConversations(deps: {
             channel: { enabled: true },
             ...(outbound.role === "bot" ? { owner: "bot" } : {}),
           },
-          data: { updatedAt: new Date() },
+          data: { updatedAt: new Date(), leaseUntil: new Date(Date.now() + leaseMs) },
         });
         if (!current.count) return false;
         return (
@@ -329,31 +353,67 @@ export function createCustomerConversations(deps: {
         );
       });
       if (!dispatch) return;
-      await action(
-        row.channel,
-        binding.send,
-        {
-          threadId: row.externalThreadId,
-          customerId: outbound.senderId ?? row.customerId,
-          body: outbound.body,
-          messageId: outbound.id,
-        },
-        `customer.send:${outbound.id}`,
-      );
+      const parts = binding
+        ? customerReplyParts(outbound.body, binding.send.textLimit)
+        : [outbound.body];
+      for (let index = outbound.sentParts; index < parts.length; index++) {
+        // Recheck between parts so takeover can stop the next external send.
+        if (
+          !(
+            await prisma.customerConversation.updateMany({
+              where: { ...fence, generation: row.generation, channel: liveChannel },
+              data: { leaseUntil: new Date(Date.now() + leaseMs) },
+            })
+          ).count
+        ) {
+          await prisma.customerMessage.updateMany({
+            where: { id: outbound.id, status: "sending", conversation: fence },
+            data: { status: "cancelled" },
+          });
+          return;
+        }
+        if (binding)
+          await action(
+            row.channel,
+            binding.send,
+            {
+              threadId: row.externalThreadId,
+              customerId: outbound.senderId ?? row.customerId,
+              body: parts[index],
+              messageId: `${outbound.id}:${index}`,
+            },
+            `customer.send:${outbound.id}:${index}`,
+          );
+        await prisma.customerMessage.updateMany({
+          where: { id: outbound.id, status: "sending", conversation: fence },
+          data: { sentParts: index + 1 },
+        });
+      }
       await prisma.customerMessage.updateMany({
-        where: { id: outbound.id, status: "sending" },
+        where: { id: outbound.id, status: "sending", conversation: fence },
         data: { status: "sent", sentAt: new Date() },
       });
     } catch {
       if (activeMessage)
         await prisma.customerMessage.updateMany({
-          where: { id: activeMessage, status: { in: ["queued", "processing", "sending"] } },
-          data: { status: "failed" },
+          where: {
+            id: activeMessage,
+            status: { in: ["queued", "processing", "sending"] },
+            conversation: fence,
+          },
+          data: { status: "failed", errorCode: "execution_uncertain" },
         });
       await prisma.$transaction(async (tx) => {
         const changed = await tx.customerConversation.updateMany({
           where: { ...fence, generation },
-          data: { needsHuman: true, owner: "staff", generation: { increment: 1 } },
+          data: {
+            needsHuman: true,
+            notifiedGeneration: -1,
+            owner: "staff",
+            handoffReason:
+              "Delivery or execution failed. Check the action outcome before retrying.",
+            generation: { increment: 1 },
+          },
         });
         if (changed.count)
           await tx.customerMessage.updateMany({
@@ -394,7 +454,7 @@ export function createCustomerConversations(deps: {
         });
       const conversations = await prisma.customerConversation.findMany({
         where: {
-          channel: { enabled: true, connectionId: { not: null }, bot: { archivedAt: null } },
+          channel: liveChannel,
           messages: { some: { status: { in: ["queued", "processing", "sending"] } } },
           OR: [{ leaseUntil: null }, { leaseUntil: { lte: new Date() } }],
         },
@@ -403,6 +463,72 @@ export function createCustomerConversations(deps: {
         select: { id: true },
       });
       for (const conversation of conversations) await processJob(conversation.id);
+      if (deps.notifications) {
+        const attention = await prisma.customerConversation.findMany({
+          where: { needsHuman: true, notifiedGeneration: -1, channel: liveChannel },
+          include: { channel: true },
+          orderBy: { updatedAt: "asc" },
+          take: 100,
+        });
+        for (const row of attention) {
+          const members = (
+            await prisma.spaceMember.findMany({
+              where: {
+                spaceId: row.channel.spaceId,
+                ...(!row.channel.shared ? { userId: row.channel.userId } : {}),
+              },
+              select: { userId: true },
+            })
+          ).map((m) => m.userId);
+          const users =
+            row.assigneeId && members.includes(row.assigneeId) ? [row.assigneeId] : members;
+          try {
+            for (const userId of users)
+              await deps.notifications.send(
+                {
+                  kind: "help",
+                  title: "Customer needs attention",
+                  body: "Open the customer inbox to follow up.",
+                  botId: row.channel.botId,
+                  threadId: row.id,
+                  customerConversationId: row.id,
+                },
+                {
+                  userId,
+                  spaceId: row.channel.spaceId,
+                  operationId: `customer.alert:${row.id}:${row.generation}:${row.lastCustomerSeq}`,
+                  traceId: row.id,
+                  signal: AbortSignal.timeout(10000),
+                },
+              );
+            await prisma.customerConversation.updateMany({
+              where: {
+                id: row.id,
+                generation: row.generation,
+                lastCustomerSeq: row.lastCustomerSeq,
+              },
+              data: { notifiedGeneration: row.generation },
+            });
+          } catch {
+            /* Durable attention state is retried by reconciliation. */
+          }
+        }
+      }
+      await prisma.customerVisitorSession.deleteMany({ where: { expiresAt: { lte: new Date() } } });
+      for (const channel of await prisma.customerChannel.findMany({
+        where: { retentionDays: { not: null } },
+        select: { id: true, retentionDays: true },
+      })) {
+        await prisma.customerConversation.deleteMany({
+          where: {
+            channelId: channel.id,
+            state: "resolved",
+            leaseUntil: null,
+            updatedAt: { lt: new Date(Date.now() - channel.retentionDays! * 86400000) },
+            messages: { none: { status: { in: ["queued", "processing", "sending"] } } },
+          },
+        });
+      }
     },
     async manage(
       actor: Pick<Actor, "userId" | "spaceId">,
@@ -414,11 +540,138 @@ export function createCustomerConversations(deps: {
         where: { id: botId, spaceId: actor.spaceId, userId: actor.userId, archivedAt: null },
       });
       if (!bot) throw new IsolationError();
+      if (operation === "search")
+        return createCustomerRepos(prisma).list(actor, CustomerListInput.parse(args));
+      if (operation === "delete") {
+        const id = String((args as { id?: unknown }).id ?? "");
+        await requireCustomerAccess(prisma, actor, id);
+        const removed = await prisma.customerConversation.deleteMany({
+          where: {
+            id,
+            channel: { userId: actor.userId, spaceId: actor.spaceId },
+            state: "resolved",
+            leaseUntil: null,
+            messages: { none: { status: { in: ["queued", "processing", "sending"] } } },
+          },
+        });
+        if (!removed.count)
+          throw new Error(
+            "Only the channel owner can delete a resolved case after pending work finishes",
+          );
+        return {
+          deleted: true,
+          scope: "Rakazo transcript, tool ledger and visitor sessions",
+          externalRecords:
+            "Provider records, backups and external service logs follow their own retention policies",
+        };
+      }
+      if (operation === "knowledge") {
+        const input = CustomerKnowledgeInput.parse(args);
+        const channel = input.id
+          ? (await requireCustomerAccess(prisma, actor, input.id)).channel
+          : { ...actor, botId };
+        if (
+          !(await prisma.spaceMember.count({
+            where: {
+              spaceId: channel.spaceId,
+              userId: channel.userId,
+            },
+          }))
+        )
+          throw new IsolationError();
+        const behavior = await prisma.customerBehavior.findUniqueOrThrow({
+          where: { botId: channel.botId },
+        });
+        if (!behavior.knowledgeFilterId)
+          throw new Error("No approved customer knowledge is configured");
+        const runtime = await runtimeFor(channel, behavior.credentialId);
+        if (!runtime.search) throw new Error("Knowledge search is unavailable");
+        return runtime.search({
+          query: input.query,
+          knowledgeFilterId: behavior.knowledgeFilterId,
+          signal: AbortSignal.timeout(20000),
+        });
+      }
+      if (operation === "draft") {
+        const input = CustomerDraftInput.parse(args);
+        await requireCustomerAccess(prisma, actor, input.id);
+        const changed = await prisma.customerConversation.updateMany({
+          where: {
+            id: input.id,
+            nextSeq: input.expectedSeq,
+            channel: { spaceId: actor.spaceId, OR: [{ userId: actor.userId }, { shared: true }] },
+          },
+          data: { draftText: input.body, draftForSeq: input.expectedSeq },
+        });
+        if (!changed.count)
+          throw new Error("The conversation changed. Read it again before drafting.");
+        return { saved: true, sent: false };
+      }
+      if (operation === "website") {
+        const input = CustomerWebsiteInput.parse({ ...(args as object), botId });
+        const origins = input.origins.map((value) => {
+          const url = new URL(value);
+          if (
+            url.username ||
+            url.password ||
+            (url.protocol !== "https:" &&
+              !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname)))
+          )
+            throw new Error("Use an HTTPS website origin");
+          if (url.pathname !== "/" || url.search || url.hash)
+            throw new Error("Use a website origin without a path");
+          return url.origin;
+        });
+        if (!(await prisma.customerBehavior.findUnique({ where: { botId } })))
+          throw new Error("Configure customer behavior first");
+        const channel = await prisma.$transaction(async (tx) => {
+          const updated = await tx.customerChannel.upsert({
+            where: { provider_accountId: { provider: "web", accountId: botId } },
+            create: {
+              botId,
+              userId: actor.userId,
+              spaceId: actor.spaceId,
+              provider: "web",
+              accountId: botId,
+              name: input.name,
+              ciphertext: "",
+              websiteOrigins: origins,
+              startedAt: new Date(),
+            },
+            update: { name: input.name, websiteOrigins: origins },
+          });
+          await tx.customerVisitorSession.deleteMany({
+            where: { conversation: { channelId: updated.id }, origin: { notIn: origins } },
+          });
+          return updated;
+        });
+        const web = (deps.webOrigin ?? "").replace(/\/$/, "");
+        return {
+          channelId: channel.id,
+          path: `/support/${channel.id}`,
+          embed: `<script src="${web}/support-widget.js" data-channel="${channel.id}" defer></script>`,
+          instructions:
+            "Install on an approved website. Use the public Rakazo web origin for the script URL.",
+        };
+      }
+      if (operation === "channel") {
+        const { id, ...settings } = CustomerChannelSettingsInput.parse(args);
+        await prisma.$transaction(async (tx) => {
+          const changed = await tx.customerChannel.updateMany({
+            where: { id, botId, userId: actor.userId, spaceId: actor.spaceId },
+            data: settings,
+          });
+          if (!changed.count) throw new IsolationError();
+          if (settings.enabled === false || settings.shared === false)
+            await invalidateCustomerConversations(tx, { channelId: id }, "staff");
+        });
+        return { ok: true };
+      }
       if (operation === "inspect")
         return {
           behavior: await prisma.customerBehavior.findUnique({ where: { botId } }),
           channels: await prisma.customerChannel.findMany({
-            where: { botId, connectionId: { not: null } },
+            where: { botId },
             select: {
               id: true,
               name: true,
@@ -427,6 +680,11 @@ export function createCustomerConversations(deps: {
               enabled: true,
               binding: true,
               pollError: true,
+              shared: true,
+              websiteOrigins: true,
+              dailyMessageLimit: true,
+              hourlyCustomerLimit: true,
+              retentionDays: true,
             },
           }),
           connections: await prisma.connection.findMany({
@@ -459,6 +717,7 @@ export function createCustomerConversations(deps: {
         const flowId = await runtime.publish({
           staffId: botId,
           instructions: input.instructions,
+          knowledgeFilterId: input.knowledgeFilterId ?? undefined,
           signal: AbortSignal.timeout(30_000),
         });
         // Publish first. A failed publication leaves the active revision untouched.
@@ -600,6 +859,27 @@ export function createCustomerConversations(deps: {
         from: from.toISOString(),
         until: until.toISOString(),
         replies: await prisma.customerMessage.count({ where }),
+        failed: await prisma.customerMessage.count({
+          where: {
+            conversation: { channel: { spaceId: actor.spaceId, userId: actor.userId, botId } },
+            status: "failed",
+            createdAt: { gte: from, lt: until },
+          },
+        }),
+        waiting: await prisma.customerConversation.count({
+          where: {
+            channel: { spaceId: actor.spaceId, userId: actor.userId, botId },
+            needsHuman: true,
+          },
+        }),
+        actions: await prisma.customerToolCall.count({
+          where: {
+            message: {
+              conversation: { channel: { spaceId: actor.spaceId, userId: actor.userId, botId } },
+            },
+            createdAt: { gte: from, lt: until },
+          },
+        }),
         messages: await prisma.customerMessage.findMany({
           where: {
             conversation: { channel: { spaceId: actor.spaceId, userId: actor.userId, botId } },

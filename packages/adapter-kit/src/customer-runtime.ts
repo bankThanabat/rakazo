@@ -3,6 +3,7 @@ export interface CustomerRuntime {
   publish?(request: {
     staffId: string;
     instructions: string;
+    knowledgeFilterId?: string;
     signal: AbortSignal;
   }): Promise<string>;
   search?(request: {

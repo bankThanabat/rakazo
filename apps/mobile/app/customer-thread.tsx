@@ -1,7 +1,9 @@
 import { useCustomerActions } from "@rakazo/chat-ui/customer-actions";
 import type { CustomerSnapshot } from "@rakazo/contracts";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Linking,
@@ -22,12 +24,25 @@ export default function CustomerThread() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const tokens = useMobileTokens();
   const { t } = useI18n();
+  const router = useRouter();
+  const [before, setBefore] = useState<number>();
   const polling = useFocusedPolling(
-    () => rpc<CustomerSnapshot>("customers/snapshot", { id: conversationId }),
-    conversationId,
+    () => rpc<CustomerSnapshot>("customers/snapshot", { id: conversationId, before }),
+    `${conversationId}:${before}`,
     1500,
   );
   const current = polling.data?.conversation.id === conversationId ? polling.data : undefined;
+  async function updateCase(input: object) {
+    try {
+      await rpc("customers/updateCase", { id: conversationId, ...input });
+      polling.refresh();
+    } catch {
+      Alert.alert(t("Could not update case"));
+    }
+  }
+  useEffect(() => {
+    if (current) void updateCase({ read: true });
+  }, [conversationId, current?.messages.at(-1)?.id]);
   const actions = useCustomerActions({
     id: conversationId,
     nonce: newClientNonce,
@@ -63,6 +78,90 @@ export default function CustomerThread() {
             : undefined,
         }}
       />
+      <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 }}>
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={() =>
+            void updateCase({
+              state: current?.conversation.state === "resolved" ? "open" : "resolved",
+            })
+          }
+        >
+          <Text style={{ color: tokens.foreground }}>
+            {current?.conversation.state === "resolved" ? t("Reopen") : t("Resolve")}
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={async () => {
+            try {
+              const me = await rpc<{ userId: string }>("me");
+              await updateCase({ assigneeId: me.userId });
+            } catch {
+              Alert.alert(t("Could not update case"));
+            }
+          }}
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Assign to me")}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={async () => {
+            try {
+              const assistant = await rpc<{ botId: string; name: string }>(
+                "customers/investigate",
+                {
+                  id: conversationId,
+                  clientNonce: newClientNonce(),
+                },
+              );
+              router.push({ pathname: "/thread", params: assistant });
+            } catch {
+              Alert.alert(t("Could not open assistant"));
+            }
+          }}
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Ask assistant")}</Text>
+        </Pressable>
+        {current?.conversation.draft && (
+          <Pressable
+            accessibilityRole="button"
+            style={{ padding: 12 }}
+            onPress={() => {
+              actions.setBody(current.conversation.draft!);
+              void actions.setOwner("staff");
+            }}
+          >
+            <Text style={{ color: tokens.foreground }}>{t("Use draft")}</Text>
+          </Pressable>
+        )}
+      </View>
+      {current?.conversation.handoffReason && (
+        <Text style={{ color: tokens.mutedForeground, padding: 16 }}>
+          {current.conversation.handoffReason}
+        </Text>
+      )}
+      {current?.before && (
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={() => setBefore(current.before!)}
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Earlier messages")}</Text>
+        </Pressable>
+      )}
+      {before && (
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={() => setBefore(undefined)}
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Latest messages")}</Text>
+        </Pressable>
+      )}
       {current?.conversation.canReply ? (
         <Pressable
           accessibilityRole="button"
@@ -73,7 +172,7 @@ export default function CustomerThread() {
           style={{ padding: 16, alignSelf: "flex-end" }}
         >
           <Text style={{ color: tokens.foreground }}>
-            {current.conversation.owner === "bot" ? t("Take over") : t("Resume staff")}
+            {current.conversation.owner === "bot" ? t("Take over") : t("Resume AI")}
           </Text>
         </Pressable>
       ) : null}
@@ -124,6 +223,25 @@ export default function CustomerThread() {
           </View>
         )}
       />
+      {!!current?.actions.length && (
+        <Pressable
+          accessibilityRole="button"
+          style={{ padding: 12 }}
+          onPress={() =>
+            Alert.alert(
+              t("Action history"),
+              current.actions
+                .map(
+                  (action) =>
+                    `${action.name}: ${action.status}${action.outcome ? `\n${action.outcome}` : ""}`,
+                )
+                .join("\n"),
+            )
+          }
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Action history")}</Text>
+        </Pressable>
+      )}
       {current?.conversation.canReply && current.conversation.owner === "staff" ? (
         <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, padding: 16 }}>
           <TextInput

@@ -3916,3 +3916,117 @@ msgstr "请输入 1 到 1000 之间的整数作为图像限制。"
 #: src/pages/Onboarding.tsx:529
 msgid "Maximum images per request"
 msgstr "每次请求的最大图像数"
+
+#: src/pages/CustomerInbox.tsx:356
+msgid "Action history"
+msgstr ""
+
+#: src/components/integrations/OpenConnectorCatalog.tsx:351
+#: src/pages/CustomerInbox.tsx:72
+msgid "All"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:248
+msgid "Ask assistant"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:275
+msgid "Assign to me"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:132
+msgid "Close support"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:211
+msgid "Could not connect. Try again."
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:391
+msgid "Could not save. Try again."
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:286
+msgid "Could not update case"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:307
+#: src/pages/SupportWidget.tsx:166
+msgid "Earlier messages"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:54
+msgid "Filter conversations"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:141
+msgid "How can we help?"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:312
+msgid "Latest messages"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:237
+msgid "Message support"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:121
+msgid "Next"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:113
+msgid "Open support"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:337
+msgid "parts sent"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:116
+msgid "Previous"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:376
+msgid "Reply…"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:237
+msgid "Resolve"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:71
+msgid "Resolved"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:225
+msgid "Start a new conversation"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:127
+msgid "Support"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:203
+msgid "Talk to a person"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:103
+msgid "Unread"
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx:260
+msgid "Use draft"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:185
+msgid "Waiting for support"
+msgstr ""
+
+#: src/pages/SupportWidget.tsx:209
+msgid "Your session expired."
+msgstr ""
+
+#: src/pages/CustomerInbox.tsx
+msgid "Resume AI"
+msgstr "恢复 AI 回复"
