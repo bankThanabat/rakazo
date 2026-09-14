@@ -1,6 +1,14 @@
 import type { Actor } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "./client.js";
+import { requireCustomerAccess } from "./customers.js";
 import { IsolationError } from "./scope.js";
+
+/** A deliberate rejection, not a retryable receive failure. */
+export class CustomerMessageLimitError extends Error {
+  constructor() {
+    super("Customer message limit reached");
+  }
+}
 
 async function lockConversation(tx: Prisma.TransactionClient, id: string) {
   await tx.$queryRaw`SELECT id FROM customer_conversations WHERE id = ${id} FOR UPDATE`;
@@ -12,8 +20,16 @@ async function lockConversation(tx: Prisma.TransactionClient, id: string) {
   return row;
 }
 
-function requireLive(channel: { enabled: boolean; connectionId: string | null; binding: unknown }) {
-  if (!channel.enabled || !channel.connectionId || !channel.binding)
+function requireLive(channel: {
+  enabled: boolean;
+  provider: string;
+  connectionId: string | null;
+  binding: unknown;
+}) {
+  if (
+    !channel.enabled ||
+    (channel.provider !== "web" && (!channel.connectionId || !channel.binding))
+  )
     throw new Error("This conversation is archived");
 }
 
@@ -34,6 +50,33 @@ export async function invalidateCustomerConversations(
   });
 }
 
+/** Transfer ownership and queue one acknowledgement in the same transaction. */
+export async function handoffCustomer(tx: Prisma.TransactionClient, id: string, reason: string) {
+  const row = await lockConversation(tx, id);
+  if (row.owner === "staff" && row.needsHuman) return;
+  await invalidateCustomerConversations(tx, { id }, "staff");
+  const next = await tx.customerConversation.update({
+    where: { id },
+    data: {
+      needsHuman: true,
+      notifiedGeneration: -1,
+      handoffReason: reason.slice(0, 500),
+      state: "open",
+      nextSeq: { increment: 1 },
+    },
+  });
+  await tx.customerMessage.create({
+    data: {
+      conversationId: id,
+      seq: next.nextSeq,
+      role: "system",
+      status: "queued",
+      generation: next.generation,
+      body: "A support agent will follow up here.",
+    },
+  });
+}
+
 export function createCustomerInbox(prisma: PrismaClient) {
   return {
     async receive(
@@ -44,12 +87,13 @@ export function createCustomerInbox(prisma: PrismaClient) {
         customerId: string;
         name: string;
         body: string;
+        unsupported?: boolean;
       },
       pollToken?: string,
       configurationTime?: Date,
     ) {
       return prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT id FROM customer_channels WHERE id = ${channelId} FOR SHARE`;
+        await tx.$queryRaw`SELECT id FROM customer_channels WHERE id = ${channelId} FOR UPDATE`;
         const channel = await tx.customerChannel.findUniqueOrThrow({ where: { id: channelId } });
         requireLive(channel);
         if (configurationTime && channel.updatedAt.getTime() !== configurationTime.getTime())
@@ -70,15 +114,39 @@ export function createCustomerInbox(prisma: PrismaClient) {
         });
         const locked = await lockConversation(tx, conversation.id);
         const externalId = `in:${input.externalId}`;
-        if (
-          await tx.customerMessage.findUnique({
-            where: { conversationId_externalId: { conversationId: locked.id, externalId } },
-          })
-        )
+        const duplicate = await tx.customerMessage.findUnique({
+          where: { conversationId_externalId: { conversationId: locked.id, externalId } },
+        });
+        if (duplicate) {
+          if (duplicate.body !== input.body || duplicate.senderId !== input.customerId)
+            throw new Error("Message identifier was already used");
           return locked.id;
+        }
+        const now = new Date();
+        const day = new Date(now);
+        day.setUTCHours(0, 0, 0, 0);
+        const daily = await tx.customerMessage.count({
+          where: { role: "customer", createdAt: { gte: day }, conversation: { channelId } },
+        });
+        const hourly = await tx.customerMessage.count({
+          where: {
+            role: "customer",
+            senderId: input.customerId,
+            createdAt: { gte: new Date(now.getTime() - 3600000) },
+            conversation: { channelId },
+          },
+        });
+        if (daily >= channel.dailyMessageLimit || hourly >= channel.hourlyCustomerLimit)
+          throw new CustomerMessageLimitError();
         const next = await tx.customerConversation.update({
           where: { id: locked.id },
-          data: { nextSeq: { increment: 1 }, name: input.name },
+          data: {
+            nextSeq: { increment: 1 },
+            lastCustomerSeq: locked.nextSeq + 1,
+            state: "open",
+            name: input.name,
+            ...(locked.owner === "staff" ? { needsHuman: true, notifiedGeneration: -1 } : {}),
+          },
         });
         await tx.customerMessage.create({
           data: {
@@ -92,13 +160,23 @@ export function createCustomerInbox(prisma: PrismaClient) {
             generation: next.generation,
           },
         });
+        if (input.unsupported)
+          await handoffCustomer(
+            tx,
+            next.id,
+            "Customer sent a non-text message. View it in the original channel.",
+          );
         return next.id;
       });
     },
     async setOwner(actor: Pick<Actor, "userId" | "spaceId">, id: string, owner: "bot" | "staff") {
+      await requireCustomerAccess(prisma, actor, id);
       await prisma.$transaction(async (tx) => {
         const row = await lockConversation(tx, id);
-        if (row.channel.spaceId !== actor.spaceId || row.channel.userId !== actor.userId)
+        if (
+          row.channel.spaceId !== actor.spaceId ||
+          (!row.channel.shared && row.channel.userId !== actor.userId)
+        )
           throw new IsolationError();
         requireLive(row.channel);
         if (row.owner === owner) return;
@@ -112,7 +190,13 @@ export function createCustomerInbox(prisma: PrismaClient) {
             throw new Error("Wait for the staff reply to finish sending");
           await tx.customerConversation.update({
             where: { id },
-            data: { owner, needsHuman: false, generation: { increment: 1 } },
+            data: {
+              owner,
+              needsHuman: false,
+              handoffReason: null,
+              state: "open",
+              generation: { increment: 1 },
+            },
           });
         }
       });
@@ -121,9 +205,13 @@ export function createCustomerInbox(prisma: PrismaClient) {
       actor: Pick<Actor, "userId" | "spaceId">,
       input: { id: string; body: string; nonce: string },
     ) {
+      await requireCustomerAccess(prisma, actor, input.id);
       await prisma.$transaction(async (tx) => {
         let row = await lockConversation(tx, input.id);
-        if (row.channel.spaceId !== actor.spaceId || row.channel.userId !== actor.userId)
+        if (
+          row.channel.spaceId !== actor.spaceId ||
+          (!row.channel.shared && row.channel.userId !== actor.userId)
+        )
           throw new IsolationError();
         requireLive(row.channel);
         const externalId = `staff:${input.nonce}`;
@@ -140,7 +228,12 @@ export function createCustomerInbox(prisma: PrismaClient) {
         }
         const next = await tx.customerConversation.update({
           where: { id: row.id },
-          data: { nextSeq: { increment: 1 } },
+          data: {
+            nextSeq: { increment: 1 },
+            needsHuman: false,
+            state: "open",
+            assigneeId: actor.userId,
+          },
         });
         await tx.customerMessage.create({
           data: {
@@ -153,6 +246,45 @@ export function createCustomerInbox(prisma: PrismaClient) {
             status: "queued",
           },
         });
+      });
+    },
+    async updateCase(
+      actor: Pick<Actor, "userId" | "spaceId">,
+      input: {
+        id: string;
+        state?: "open" | "resolved";
+        assigneeId?: string | null;
+        read?: boolean;
+      },
+    ) {
+      await requireCustomerAccess(prisma, actor, input.id);
+      await prisma.$transaction(async (tx) => {
+        const row = await lockConversation(tx, input.id);
+        if (
+          row.channel.spaceId !== actor.spaceId ||
+          (!row.channel.shared && row.channel.userId !== actor.userId)
+        )
+          throw new IsolationError();
+        if (
+          input.assigneeId &&
+          ((!row.channel.shared && input.assigneeId !== row.channel.userId) ||
+            !(await tx.spaceMember.count({
+              where: { spaceId: actor.spaceId, userId: input.assigneeId },
+            })))
+        )
+          throw new IsolationError();
+        if (input.state === "resolved")
+          await invalidateCustomerConversations(tx, { id: row.id }, "staff");
+        await tx.customerConversation.update({
+          where: { id: row.id },
+          data: { state: input.state, assigneeId: input.assigneeId },
+        });
+        if (input.read)
+          await tx.customerConversationRead.upsert({
+            where: { conversationId_userId: { conversationId: row.id, userId: actor.userId } },
+            create: { conversationId: row.id, userId: actor.userId, seq: row.lastCustomerSeq },
+            update: { seq: row.lastCustomerSeq },
+          });
       });
     },
   };

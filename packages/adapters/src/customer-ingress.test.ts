@@ -18,6 +18,7 @@ describe("real messaging payload contracts", () => {
         { type: "follow" },
         {
           webhookEventId: "event",
+          type: "message",
           source: { userId: "customer" },
           message: { type: "text", text: "Offer?" },
           timestamp: at,

@@ -1320,29 +1320,34 @@ model CustomerBehavior {
 }
 
 model CustomerChannel {
-  id            String                 @id @default(cuid())
-  spaceId       String
-  space         Space                  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
-  userId        String
-  botId         String
-  bot           Bot                    @relation(fields: [botId], references: [id], onDelete: Cascade)
-  provider      String
-  accountId     String
-  name          String
-  instructions  String                 @default("") @db.Text
-  ciphertext    String
-  enabled       Boolean                @default(true)
-  connectionId  String?                @unique
-  binding       Json?
-  cursor        Json?
-  startedAt     DateTime?
-  nextPollAt    DateTime?
-  pollError     String?
-  pollToken     String?
-  pollUntil     DateTime?
-  conversations CustomerConversation[]
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
+  id                  String                 @id @default(cuid())
+  spaceId             String
+  space               Space                  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId              String
+  botId               String
+  bot                 Bot                    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  provider            String
+  accountId           String
+  name                String
+  instructions        String                 @default("") @db.Text
+  ciphertext          String
+  enabled             Boolean                @default(true)
+  shared              Boolean                @default(false)
+  websiteOrigins      String[]               @default([])
+  dailyMessageLimit   Int                    @default(1000)
+  hourlyCustomerLimit Int                    @default(30)
+  retentionDays       Int?
+  connectionId        String?                @unique
+  binding             Json?
+  cursor              Json?
+  startedAt           DateTime?
+  nextPollAt          DateTime?
+  pollError           String?
+  pollToken           String?
+  pollUntil           DateTime?
+  conversations       CustomerConversation[]
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
 
   @@unique([provider, accountId])
   @@index([spaceId, userId])
@@ -1351,23 +1356,32 @@ model CustomerChannel {
 }
 
 model CustomerConversation {
-  id               String            @id @default(cuid())
-  channelId        String
-  channel          CustomerChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  customerId       String
-  externalThreadId String
-  name             String
-  avatarUrl        String?
-  profileRefreshAt DateTime          @default(now())
-  owner            String            @default("bot")
-  needsHuman       Boolean           @default(false)
-  generation       Int               @default(0)
-  nextSeq          Int               @default(0)
-  leaseUntil       DateTime?
-  leaseToken       String?
-  messages         CustomerMessage[]
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id                 String                     @id @default(cuid())
+  channelId          String
+  channel            CustomerChannel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  customerId         String
+  externalThreadId   String
+  name               String
+  avatarUrl          String?
+  profileRefreshAt   DateTime                   @default(now())
+  owner              String                     @default("bot")
+  needsHuman         Boolean                    @default(false)
+  state              String                     @default("open")
+  assigneeId         String?
+  handoffReason      String?
+  draftText          String?
+  draftForSeq        Int?
+  notifiedGeneration Int                        @default(-1)
+  lastCustomerSeq    Int                        @default(0)
+  reads              CustomerConversationRead[]
+  visitorSessions    CustomerVisitorSession[]
+  generation         Int                        @default(0)
+  nextSeq            Int                        @default(0)
+  leaseUntil         DateTime?
+  leaseToken         String?
+  messages           CustomerMessage[]
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
 
   @@unique([channelId, externalThreadId])
   @@index([profileRefreshAt])
@@ -1376,44 +1390,69 @@ model CustomerConversation {
 }
 
 model CustomerToolCall {
-  messageId String
-  message CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  callId String
+  name        String          @default("")
+  messageId   String
+  message     CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  callId      String
   requestHash String
-  status String
-  result Json?
-  createdAt DateTime @default(now())
+  status      String
+  result      Json?
+  createdAt   DateTime        @default(now())
+
   @@id([messageId, callId])
   @@unique([messageId, requestHash])
   @@map("customer_tool_calls")
 }
 
 model CustomerMessage {
-  senderId String?
+  senderId            String?
   executionPolicyHash String?
-  executionKeyHash String?
-  executionUntil DateTime?
-  toolCalls CustomerToolCall[]
-  id             String               @id @default(cuid())
-  conversationId String
-  conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  seq            Int
-  externalId     String?
-  role           String
-  body           String               @db.Text
-  mediaUrl       String?
-  status         String               @default("received")
-  generation     Int                  @default(0)
-  inReplyToSeq Int?
-  behaviorRevision Int?
-  sentAt         DateTime?
-  providerHandle String?
-  sendAttempts   Int                  @default(0)
-  nextAttemptAt  DateTime?
-  createdAt      DateTime             @default(now())
+  executionKeyHash    String?
+  executionUntil      DateTime?
+  toolCalls           CustomerToolCall[]
+  id                  String               @id @default(cuid())
+  conversationId      String
+  conversation        CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  seq                 Int
+  externalId          String?
+  role                String
+  body                String               @db.Text
+  mediaUrl            String?
+  status              String               @default("received")
+  generation          Int                  @default(0)
+  inReplyToSeq        Int?
+  behaviorRevision    Int?
+  sentAt              DateTime?
+  providerHandle      String?
+  sendAttempts        Int                  @default(0)
+  sentParts           Int                  @default(0)
+  errorCode           String?
+  nextAttemptAt       DateTime?
+  createdAt           DateTime             @default(now())
 
   @@unique([conversationId, externalId])
   @@unique([conversationId, seq])
   @@index([status, createdAt])
   @@map("customer_messages")
+}
+
+model CustomerConversationRead {
+  conversationId String
+  conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String
+  seq            Int                  @default(0)
+
+  @@id([conversationId, userId])
+  @@map("customer_conversation_reads")
+}
+
+model CustomerVisitorSession {
+  tokenHash      String               @id
+  conversationId String
+  conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  origin         String
+  expiresAt      DateTime
+
+  @@index([expiresAt], map: "customer_visitor_sessions_expiry")
+  @@map("customer_visitor_sessions")
 }

@@ -86,6 +86,7 @@ import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { mountCustomerHttp } from "./customer-http.js";
+import { mountCustomerWebsite } from "./customer-website.js";
 import { type AppEnv, loadEnv } from "./env.js";
 import { mountLocalSettings } from "./local-settings.js";
 import {
@@ -337,7 +338,10 @@ export async function createApp(
   });
   const shutdown = new AbortController();
   const customers = createCustomerConversations({
+    webOrigin: env.webOrigin,
+    notifications,
     apiUrl: env.apiUrl,
+    apiInternalUrl: process.env.API_INTERNAL_URL || env.apiUrl,
     prisma,
     integrations: integrationSettings,
     secrets,
@@ -456,6 +460,8 @@ export async function createApp(
   });
   const app = new Hono();
   app.use("*", requestLogging(logger));
+  // Visitor capabilities have per-channel origins and never use employee cookies.
+  mountCustomerWebsite(app, { prisma, jobs, webOrigin: env.webOrigin });
   app.use(
     "*",
     cors({

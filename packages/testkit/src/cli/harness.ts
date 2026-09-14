@@ -95,6 +95,7 @@ async function main() {
             "packages/testkit/src/eval-customer-support.postgres.test.ts",
             "packages/testkit/src/customer-archive.postgres.test.ts",
             "packages/adapters/src/customer-conversations.postgres.test.ts",
+            "apps/api/src/customer-website.postgres.test.ts",
             "packages/testkit/src/journeys.test.ts",
             "packages/testkit/src/authorization.test.ts",
             "packages/testkit/src/attachments.test.ts",
@@ -189,6 +190,36 @@ async function main() {
     const requestWaiters = new Set<() => void>();
     const server = serve({
       fetch: async (request) => {
+        if (new URL(request.url).pathname === "/api/__e2e/widget") {
+          const channel = new URL(request.url).searchParams.get("channel") ?? "";
+          if (!/^[a-z0-9-]+$/.test(channel)) return new Response(null, { status: 400 });
+          return new Response(
+            `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h1>Example shop</h1><script src="/support-widget.js" data-channel="${channel}" defer></script></body></html>`,
+            { headers: { "content-type": "text/html" } },
+          );
+        }
+        // Fixture routes exist only in this loopback test server, never in createApp.
+        if (new URL(request.url).pathname === "/__e2e/customer" && request.method === "POST") {
+          const { email: address } = (await request.json()) as { email: string };
+          if (!address.endsWith("@rakazo.test")) return new Response(null, { status: 400 });
+          const user = await handles.prisma.user.findUniqueOrThrow({ where: { email: address } });
+          const bot = await handles.prisma.bot.findFirstOrThrow({
+            where: { userId: user.id, archivedAt: null },
+          });
+          const channel = await handles.prisma.customerChannel.create({
+            data: {
+              userId: user.id,
+              spaceId: bot.spaceId,
+              botId: bot.id,
+              provider: "web",
+              accountId: crypto.randomUUID(),
+              name: "Website support",
+              ciphertext: "",
+              websiteOrigins: [webOrigin],
+            },
+          });
+          return Response.json({ channelId: channel.id });
+        }
         if (new URL(request.url).pathname === "/__e2e/emails") {
           return Response.json(email.sent, { headers: { "cache-control": "no-store" } });
         }

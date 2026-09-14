@@ -75,6 +75,7 @@ import {
   verifyMcpInstall,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
+import type { ThreadSendInput } from "@rakazo/contracts";
 import {
   type Actor,
   appContract,
@@ -490,6 +491,17 @@ export function createRouter(deps: RouterDeps) {
     if (!context.actor) throw new ORPCError("UNAUTHORIZED");
     return next({ context: { ...context, actor: context.actor } });
   });
+
+  async function sendStaffMessage(actor: Actor, input: ThreadSendInput) {
+    if ((await modelSetup(deps, actor)).needsModel) {
+      throw new ORPCError("BAD_REQUEST", { message: "Connect a model to start a run." });
+    }
+    const target = await resolveThreadTarget(deps.prisma, actor, input);
+    if (target.kind === "bot") {
+      await assertTeachingSendAllowed(deps.prisma, actor.spaceId, target.botId);
+    }
+    return sendThreadMessage(deps, actor, target, input);
+  }
 
   return os.router({
     health: os.health.handler(async () => ({ ok: true as const, version: "0.1.0" })),
@@ -1389,16 +1401,9 @@ export function createRouter(deps: RouterDeps) {
           yield event;
         }
       }),
-      send: authed.threads.send.handler(async ({ context, input }) => {
-        if ((await modelSetup(deps, context.actor)).needsModel) {
-          throw new ORPCError("BAD_REQUEST", { message: "Connect a model to start a run." });
-        }
-        const target = await resolveThreadTarget(deps.prisma, context.actor, input);
-        if (target.kind === "bot") {
-          await assertTeachingSendAllowed(deps.prisma, context.actor.spaceId, target.botId);
-        }
-        return sendThreadMessage(deps, context.actor, target, input);
-      }),
+      send: authed.threads.send.handler(({ context, input }) =>
+        sendStaffMessage(context.actor, input),
+      ),
       react: authed.threads.react.handler(async ({ context, input }) => {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         const result = await reactToThreadMessage(deps, context.actor, target, input);
@@ -4416,6 +4421,22 @@ export function createRouter(deps: RouterDeps) {
       },
     },
     customers: {
+      investigate: authed.customers.investigate.handler(async ({ context, input }) => {
+        const { text, ...assistant } = await createCustomerRepos(deps.prisma).prepareInvestigation(
+          context.actor,
+          input.id,
+        );
+        await sendStaffMessage(context.actor, {
+          botId: assistant.botId,
+          text,
+          clientNonce: input.clientNonce,
+        });
+        return assistant;
+      }),
+      updateCase: authed.customers.updateCase.handler(async ({ context, input }) => {
+        await createCustomerInbox(deps.prisma).updateCase(context.actor, input);
+        return { ok: true as const };
+      }),
       reply: authed.customers.reply.handler(async ({ context, input }) => {
         await createCustomerInbox(deps.prisma).reply(context.actor, input);
         // Persistence succeeded; reconciliation recovers a temporarily unavailable queue.
@@ -4432,11 +4453,11 @@ export function createRouter(deps: RouterDeps) {
         await createCustomerInbox(deps.prisma).setOwner(context.actor, input.id, input.owner);
         return { ok: true as const };
       }),
-      list: authed.customers.list.handler(({ context }) =>
-        createCustomerRepos(deps.prisma).list(context.actor),
+      list: authed.customers.list.handler(({ context, input }) =>
+        createCustomerRepos(deps.prisma).list(context.actor, input),
       ),
       snapshot: authed.customers.snapshot.handler(({ context, input }) =>
-        createCustomerRepos(deps.prisma).snapshot(context.actor, input.id),
+        createCustomerRepos(deps.prisma).snapshot(context.actor, input.id, input.before),
       ),
     },
     externalConversations: {

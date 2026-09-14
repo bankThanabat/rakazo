@@ -27,10 +27,19 @@ export class OpenRagCustomerRuntime implements CustomerRuntime {
     return JSON.parse(body.text);
   }
 
-  async publish(input: { staffId: string; instructions: string; signal: AbortSignal }) {
+  async publish(input: {
+    staffId: string;
+    instructions: string;
+    knowledgeFilterId?: string;
+    signal: AbortSignal;
+  }) {
     const result = await this.post(
       "customer/flows",
-      { staff_id: input.staffId, instructions: input.instructions },
+      {
+        staff_id: input.staffId,
+        instructions: input.instructions,
+        knowledge_filter_id: input.knowledgeFilterId,
+      },
       input.signal,
     );
     return z.object({ flow_id: z.string().min(1) }).parse(result).flow_id;
@@ -38,7 +47,7 @@ export class OpenRagCustomerRuntime implements CustomerRuntime {
 
   async search(input: { query: string; knowledgeFilterId: string; signal: AbortSignal }) {
     return this.post(
-      "search",
+      "customer/search",
       { query: input.query, filter_id: input.knowledgeFilterId, limit: 10 },
       input.signal,
     );

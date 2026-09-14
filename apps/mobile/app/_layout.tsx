@@ -1,4 +1,5 @@
-import { DarkTheme, Stack, ThemeProvider } from "expo-router";
+import * as Notifications from "expo-notifications";
+import { DarkTheme, Stack, ThemeProvider, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useState } from "react";
 import { View } from "react-native";
@@ -6,7 +7,14 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { AvatarStyleProvider } from "../components/avatar-style";
 import { ComputerUpdateProgress } from "../components/computer-update-progress";
-import { currentApiBase, loadApiBase, loadSessionToken, selectedSpaceId } from "../lib/api";
+import {
+  currentApiBase,
+  loadApiBase,
+  loadSessionToken,
+  rpc,
+  selectedSpaceId,
+  selectSpace,
+} from "../lib/api";
 import { loadAppearancePreference, mobileTokens } from "../lib/appearance";
 import { bootstrapI18n, useI18n } from "../lib/i18n";
 import {
@@ -18,8 +26,34 @@ import { native, useResolvedAppearance } from "../lib/native";
 configureForegroundNotifications();
 
 export default function Layout() {
+  const router = useRouter();
   const { t } = useI18n();
   const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (!ready) return;
+    const handled = new Set<string>();
+    async function open(response: Notifications.NotificationResponse | null) {
+      if (!response) return;
+      const { identifier, content } = response.notification.request;
+      const id = content.data?.customerConversationId;
+      const spaceId = content.data?.spaceId;
+      if (typeof id !== "string" || handled.has(identifier)) return;
+      handled.add(identifier);
+      if (typeof spaceId === "string" && spaceId !== selectedSpaceId()) {
+        const spaces = await rpc<Array<{ id: string }>>("spaces/list");
+        if (!spaces.some((space) => space.id === spaceId) || !(await selectSpace(spaceId))) return;
+      }
+      router.push({ pathname: "/customer-thread", params: { conversationId: id } });
+      await Notifications.clearLastNotificationResponseAsync();
+    }
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      void open(response).catch(() => undefined);
+    });
+    void Notifications.getLastNotificationResponseAsync()
+      .then(open)
+      .catch(() => undefined);
+    return () => subscription.remove();
+  }, [ready, router]);
   const resolved = useResolvedAppearance();
   const navigationTheme = useMemo(() => {
     const tokens = mobileTokens();

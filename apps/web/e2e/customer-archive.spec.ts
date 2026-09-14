@@ -45,7 +45,7 @@ test("retired channels leave a readable customer archive without sending control
   await sidebar.getByRole("tab", { name: "Customer", exact: true }).click();
   await sidebar.getByRole("button", { name: /Archived customer/ }).click();
   await expect(page.getByText("Historical reply", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Resume bot", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Resume AI", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Take over", exact: true })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Reply to customer", exact: true })).toHaveCount(
     0,

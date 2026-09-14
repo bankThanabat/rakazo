@@ -66,13 +66,20 @@ export function customerPage(binding: CustomerBinding, data: unknown, startedAt:
       try {
         return (
           customerField(item, incoming.path) === incoming.equals &&
-          typeof customerField(item, fields.body) === "string"
+          (binding.receive.nonText === "handoff" ||
+            typeof customerField(item, fields.body) === "string")
         );
       } catch {
         return false;
       } // Ignore non-message events and attachment-only updates.
     })
     .map((item) => {
+      let body: unknown;
+      try {
+        body = customerField(item, fields.body);
+      } catch {
+        /* Attachment-only event. */
+      }
       const rawTime = customerField(item, fields.timestamp);
       const timestamp =
         binding.receive.timestampFormat === "iso"
@@ -86,7 +93,11 @@ export function customerPage(binding: CustomerBinding, data: unknown, startedAt:
         externalId: identifier.parse(customerField(item, fields.id)),
         externalThreadId: identifier.parse(customerField(item, fields.threadId)),
         customerId: identifier.parse(customerField(item, fields.customerId)),
-        body: z.string().trim().min(1).max(16_000).parse(customerField(item, fields.body)),
+        body:
+          typeof body === "string"
+            ? z.string().trim().min(1).max(16_000).parse(body)
+            : "[Non-text message: view it in the original channel]",
+        unsupported: typeof body !== "string",
         name: fields.name
           ? z.string().max(500).parse(customerField(item, fields.name))
           : "Customer",

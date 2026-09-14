@@ -1,0 +1,23 @@
+/** Preserve every Unicode code point while fitting the channel's actual wire limit. */
+export function customerReplyParts(
+  body: string,
+  limit: { max: number; unit: "characters" | "utf8" },
+): string[] {
+  if (!Number.isInteger(limit.max) || limit.max < 4) throw new Error("Invalid message limit");
+  const encoder = new TextEncoder();
+  const parts: string[] = [];
+  let part = "";
+  let size = 0;
+  for (const character of body) {
+    const cost = limit.unit === "utf8" ? encoder.encode(character).length : 1;
+    if (size + cost > limit.max) {
+      parts.push(part);
+      part = "";
+      size = 0;
+    }
+    part += character;
+    size += cost;
+  }
+  if (part) parts.push(part);
+  return parts;
+}

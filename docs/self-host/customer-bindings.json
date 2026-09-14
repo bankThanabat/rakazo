@@ -3,7 +3,10 @@
     "receive": {
       "mode": "webhook",
       "items": ["events"],
-      "account": { "path": ["destination"], "equals": "CONNECTED_BOT_USER_ID" },
+      "account": {
+        "path": ["destination"],
+        "equals": "CONNECTED_BOT_USER_ID"
+      },
       "webhook": {
         "secretId": "LINE_CHANNEL_SECRET_RECORD",
         "header": "x-line-signature",
@@ -11,23 +14,40 @@
         "encoding": "base64"
       },
       "timestampFormat": "milliseconds",
-      "incoming": { "path": ["message", "type"], "equals": "text" },
+      "incoming": {
+        "path": ["type"],
+        "equals": "message"
+      },
       "fields": {
         "id": ["webhookEventId"],
         "threadId": ["source", "userId"],
         "customerId": ["source", "userId"],
         "body": ["message", "text"],
         "timestamp": ["timestamp"]
-      }
+      },
+      "nonText": "handoff"
     },
-    "send": { "action": "line.send_push_text", "input": { "to": "$threadId", "texts": ["$body"] } }
+    "send": {
+      "action": "line.send_push_text",
+      "input": {
+        "to": "$threadId",
+        "texts": ["$body"]
+      },
+      "textLimit": {
+        "max": 5000,
+        "unit": "characters"
+      }
+    }
   },
   "instagram": {
     "receive": {
       "mode": "webhook",
       "batchPath": ["entry"],
       "items": ["messaging"],
-      "account": { "path": ["id"], "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID" },
+      "account": {
+        "path": ["id"],
+        "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID"
+      },
       "webhook": {
         "secretId": "META_APP_SECRET_RECORD",
         "verificationSecretId": "META_VERIFY_TOKEN_RECORD",
@@ -37,40 +57,70 @@
         "prefix": "sha256="
       },
       "timestampFormat": "milliseconds",
-      "incoming": { "path": ["recipient", "id"], "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID" },
+      "incoming": {
+        "path": ["recipient", "id"],
+        "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID"
+      },
       "fields": {
         "id": ["message", "mid"],
         "threadId": ["sender", "id"],
         "customerId": ["sender", "id"],
         "body": ["message", "text"],
         "timestamp": ["timestamp"]
-      }
+      },
+      "nonText": "handoff"
     },
     "send": {
       "action": "instagram.send_message",
-      "input": { "recipientId": "$customerId", "text": "$body" }
+      "input": {
+        "recipientId": "$customerId",
+        "text": "$body"
+      },
+      "textLimit": {
+        "max": 1000,
+        "unit": "utf8"
+      }
     }
   },
   "telegram": {
     "receive": {
       "mode": "poll",
       "action": "telegram.get_updates",
-      "input": { "offset": "$cursor", "limit": 100, "timeout": 0, "allowedUpdates": ["message"] },
+      "input": {
+        "offset": "$cursor",
+        "limit": 100,
+        "timeout": 0,
+        "allowedUpdates": ["message"]
+      },
       "items": ["updates"],
-      "cursor": { "kind": "max-plus-one", "path": ["updateId"] },
+      "cursor": {
+        "kind": "max-plus-one",
+        "path": ["updateId"]
+      },
       "timestampFormat": "seconds",
-      "incoming": { "path": ["message", "from", "isBot"], "equals": false },
+      "incoming": {
+        "path": ["message", "from", "isBot"],
+        "equals": false
+      },
       "fields": {
         "id": ["updateId"],
         "threadId": ["message", "chat", "id"],
         "customerId": ["message", "from", "id"],
         "body": ["message", "text"],
         "timestamp": ["message", "date"]
-      }
+      },
+      "nonText": "handoff"
     },
     "send": {
       "action": "telegram.send_message",
-      "input": { "chatId": "$threadId", "text": "$body" }
+      "input": {
+        "chatId": "$threadId",
+        "text": "$body"
+      },
+      "textLimit": {
+        "max": 4096,
+        "unit": "characters"
+      }
     }
   }
 }

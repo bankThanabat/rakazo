@@ -517,7 +517,11 @@ export function ShellPage() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [initialBotsLoaded, setInitialBotsLoaded] = useState(false);
   const [bootstrapMe, setBootstrapMe] = useState<Me | null>();
-  const customerInbox = useCustomerInbox(inboxTab === "customer", bootstrapMe?.spaceId);
+  const customerInbox = useCustomerInbox(
+    inboxTab === "customer",
+    bootstrapMe?.spaceId,
+    query.trim(),
+  );
   const [routineDraft, setRoutineDraft] = useState<RoutineDraftState>(emptyRoutineDraft());
   const [routineWebhookSecret, setRoutineWebhookSecret] = useState<string | null>(null);
   const [editingRoutine, setEditingRoutine] = useState<Routine | null>(null);
@@ -3011,11 +3015,7 @@ export function ShellPage() {
           ) : null}
         </TabsContent>
         <TabsContent value="customer" className="rk-scroll min-h-0 overflow-y-auto px-2.5 pb-2.5">
-          <CustomerSidebar
-            inbox={customerInbox}
-            query={query}
-            onSelect={() => setMobileSidebarOpen(false)}
-          />
+          <CustomerSidebar inbox={customerInbox} onSelect={() => setMobileSidebarOpen(false)} />
         </TabsContent>
         <button
           type="button"
@@ -3143,6 +3143,14 @@ export function ShellPage() {
           <CustomerThread
             id={customerInbox.id}
             onOpenNavigation={() => setMobileSidebarOpen(true)}
+            onAskAssistant={async (id) => {
+              const assistant = await rpc.customers.investigate({
+                id,
+                clientNonce: newClientNonce(),
+              });
+              setInboxTab("staff");
+              navigate(`/app/${assistant.botId}`);
+            }}
           />
         ) : (
           <>

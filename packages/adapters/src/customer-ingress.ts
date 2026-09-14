@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { JobPublisher } from "@rakazo/adapter-kit";
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
-import { createCustomerInbox } from "@rakazo/db";
+import { CustomerMessageLimitError, createCustomerInbox } from "@rakazo/db";
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerField, customerPage } from "./customer-mapping.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
@@ -98,7 +98,13 @@ export function createCustomerIngress(deps: {
       const page = customerPage(binding, data, channel.startedAt!);
       for (const message of page.messages) {
         // Fence a mapping/account change racing signature verification.
-        const id = await inbox.receive(channelId, message, undefined, channel.updatedAt);
+        let id: string;
+        try {
+          id = await inbox.receive(channelId, message, undefined, channel.updatedAt);
+        } catch (error) {
+          if (error instanceof CustomerMessageLimitError) continue;
+          throw error;
+        }
         await deps.jobs
           .enqueue({
             name: "customer.process",
