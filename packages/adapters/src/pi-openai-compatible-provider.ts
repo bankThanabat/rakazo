@@ -141,21 +141,14 @@ export function createOpenAiCompatibleLookup(
 }
 
 function headersCarryAuthorization(headers: HeadersInit): boolean {
-  if (headers instanceof Headers) return Boolean(headers.get("authorization"));
-  if (Array.isArray(headers)) {
-    return headers.some(
-      ([name, value]) => name.toLowerCase() === "authorization" && Boolean(value),
-    );
-  }
-  return Object.entries(headers).some(
-    ([name, value]) => name.toLowerCase() === "authorization" && Boolean(value),
-  );
+  const values = new Headers(headers);
+  return Boolean(values.get("authorization") || values.get("x-api-key"));
 }
 
 /** Matches fetch: when init.headers is set it replaces Request headers entirely. */
 function requestCarriesAuthorization(input: RequestInfo | URL, init?: RequestInit): boolean {
   if (init?.headers !== undefined) return headersCarryAuthorization(init.headers);
-  return input instanceof Request ? Boolean(input.headers.get("authorization")) : false;
+  return input instanceof Request ? headersCarryAuthorization(input.headers) : false;
 }
 
 export function createOpenAiCompatibleFetch(

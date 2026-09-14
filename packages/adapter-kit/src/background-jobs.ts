@@ -7,7 +7,8 @@ import type {
 } from "./types.js";
 
 const payloadSchemas = {
-  "customer.process": z.object({}),
+  "customer.process": z.object({ conversationId: z.string().min(1).optional() }),
+  "customer.poll": z.object({ channelId: z.string().min(1) }),
   "run.continue": z.object({ runId: z.string().min(1) }),
   "routine.wakeup": z.object({
     routineId: z.string().min(1),

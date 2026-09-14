@@ -1,3 +1,4 @@
+import { useCustomerActions } from "@rakazo/chat-ui/customer-actions";
 import type { CustomerSnapshot } from "@rakazo/contracts";
 import { Stack, useLocalSearchParams } from "expo-router";
 import {
@@ -7,10 +8,12 @@ import {
   Platform,
   Pressable,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { ProfileAvatar } from "../components/profile-avatar";
 import { rpc } from "../lib/api";
+import { newClientNonce } from "../lib/client-nonce";
 import { useI18n } from "../lib/i18n";
 import { useMobileTokens } from "../lib/native";
 import { useFocusedPolling } from "../lib/use-focused-polling";
@@ -24,7 +27,14 @@ export default function CustomerThread() {
     conversationId,
     1500,
   );
-  const current = polling.data;
+  const current = polling.data?.conversation.id === conversationId ? polling.data : undefined;
+  const actions = useCustomerActions({
+    id: conversationId,
+    nonce: newClientNonce,
+    reply: (input) => rpc("customers/reply", input),
+    setOwner: (input) => rpc("customers/setOwner", input),
+    refresh: polling.refresh,
+  });
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -53,6 +63,20 @@ export default function CustomerThread() {
             : undefined,
         }}
       />
+      {current?.conversation.canReply ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={actions.busy}
+          onPress={() =>
+            void actions.setOwner(current.conversation.owner === "bot" ? "staff" : "bot")
+          }
+          style={{ padding: 16, alignSelf: "flex-end" }}
+        >
+          <Text style={{ color: tokens.foreground }}>
+            {current.conversation.owner === "bot" ? t("Take over") : t("Resume staff")}
+          </Text>
+        </Pressable>
+      ) : null}
       <FlatList
         inverted
         data={current ? [...current.messages].reverse() : []}
@@ -100,6 +124,42 @@ export default function CustomerThread() {
           </View>
         )}
       />
+      {current?.conversation.canReply && current.conversation.owner === "staff" ? (
+        <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8, padding: 16 }}>
+          <TextInput
+            accessibilityLabel={t("Reply to customer")}
+            placeholder={t("Reply…")}
+            multiline
+            value={actions.body}
+            onChangeText={actions.setBody}
+            editable={!actions.busy}
+            maxLength={16000}
+            placeholderTextColor={tokens.mutedForeground}
+            style={{
+              flex: 1,
+              maxHeight: 160,
+              minHeight: 44,
+              padding: 12,
+              color: tokens.foreground,
+              backgroundColor: tokens.muted,
+              borderRadius: 12,
+            }}
+          />
+          <Pressable
+            accessibilityRole="button"
+            disabled={actions.busy || !actions.body.trim()}
+            onPress={() => void actions.send()}
+            style={{ padding: 12, opacity: actions.busy || !actions.body.trim() ? 0.5 : 1 }}
+          >
+            <Text style={{ color: tokens.foreground }}>{t("Send")}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {actions.error ? (
+        <Text accessibilityRole="alert" style={{ color: tokens.destructive, padding: 16 }}>
+          {t("Could not save. Try again.")}
+        </Text>
+      ) : null}
       {polling.error ? (
         <Text accessibilityRole="alert" style={{ color: tokens.destructive, padding: 16 }}>
           {t("Could not update conversation")}

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type {
   AdapterContext,
   AgentHomeStore,
-  AgentModelOAuthCredential,
   AgentRunRequest,
   AgentRuntime,
   AgentToolCompletion,
@@ -77,6 +76,7 @@ import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import {
   appendEventInTransaction,
   connectionAccessWhere,
+  createCustomerRepos,
   createSpaceForMember,
   createThreadMessageInTransaction,
   effectiveMemoryScope,
@@ -189,6 +189,7 @@ import {
 import { observationToolResult, parseComputerActions } from "./computer-tools.js";
 import { checkpointRunComputerWorkspace } from "./computer-workspace.js";
 import { sanitizeConnectorError } from "./connector-safety.js";
+import type { CustomerConversationService } from "./customer-conversations.js";
 import { resolveDeploymentModel } from "./deployment-model.js";
 import { handoffToGroupBot, loadGroupContext } from "./group-handoff.js";
 import {
@@ -215,6 +216,7 @@ import {
 import { loadAgentMemoryContext } from "./memory-context.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { selectMemoryTools } from "./memory-tools.js";
+import { resolveModelKey } from "./model-credentials.js";
 import {
   isCatalogModelChoice,
   selectConfiguredModel,
@@ -225,15 +227,7 @@ import {
   IMAGE_RETURNING_COMPUTER_TOOLS,
   MODEL_CANNOT_SEE_MESSAGE,
   modelAcceptsImageInput,
-  modelIdSupportsImages,
 } from "./model-vision.js";
-import { toOAuthCredential } from "./pi-credentials.js";
-import {
-  parseModelSecret,
-  resolveModelAuth,
-  secretValuesToRedact,
-  serializeModelSecret,
-} from "./pi-oauth.js";
 import {
   assertPlotDataWithinLimits,
   PLOT_TOOL_GUIDE,
@@ -301,8 +295,10 @@ import {
 import { createWebProvider } from "./web-provider-factory.js";
 import { webFetchFromTool, webSearchFromTool } from "./web-tools.js";
 
-const modelCredentialLocks = new Map<string, Promise<void>>();
 const READ_ONLY_AGENT_TOOLS = new Set([
+  "customer_inspect",
+  "customer_activity",
+  "customer_snapshot",
   "computer_observe",
   "list_files",
   "read_file",
@@ -463,6 +459,7 @@ function runtimeFallbackModel(runtime: AgentRuntime) {
 }
 
 export interface ExecutorDeps {
+  customers?: CustomerConversationService;
   prisma: PrismaClient;
   events: ThreadEvents;
   runtime: AgentRuntime;
@@ -2092,6 +2089,36 @@ export function createRunExecutor(deps: ExecutorDeps) {
               : Promise.resolve(true);
           const finish = async (result: unknown) =>
             (await persistEffectResult(result)) ? result : uncertainEffectResult(name);
+          if (name.startsWith("customer_")) {
+            if (messagingChannelRun || run.trigger === "webhook" || !deps.customers)
+              return {
+                error: "Customer management is available only in internal staff conversations",
+              };
+            if (name === "customer_activity") {
+              const from = new Date(String(args.from));
+              const until = new Date(String(args.until));
+              if (
+                !Number.isFinite(from.getTime()) ||
+                !Number.isFinite(until.getTime()) ||
+                from >= until
+              )
+                throw new Error("A valid activity time range is required");
+              return deps.customers.activity(run, bot.id, from, until);
+            }
+            if (name === "customer_snapshot") {
+              const owned = await deps.prisma.customerConversation.findFirst({
+                where: {
+                  id: String(args.id),
+                  channel: { botId: bot.id, userId: run.userId, spaceId: run.spaceId },
+                },
+              });
+              if (!owned) throw new Error("Customer conversation not found");
+              return createCustomerRepos(deps.prisma).snapshot(run, owned.id);
+            }
+            return finish(
+              await deps.customers.manage(run, bot.id, name.slice("customer_".length), args),
+            );
+          }
           if (name === "computer_observe") {
             if (await getActiveTeachingSession(deps.prisma, run.spaceId, run.botId)) {
               return { error: "Teaching is in progress. Stop teaching before using the computer." };
@@ -4200,6 +4227,7 @@ export function selectBuiltinToolsForRun(options: {
     (tool) =>
       !options.messagingChannelRun ||
       (!["remember", "save_memory", "recall_memory", "forget_memory"].includes(tool.name) &&
+        !tool.name.startsWith("customer_") &&
         !tool.name.startsWith("scratchpad_")),
   );
 }
@@ -4497,154 +4525,6 @@ async function runSandboxCommand(
     if (event.type === "exit") code = event.code;
   }
   return { stdout, stderr, code };
-}
-
-/**
- * The deployment key is a bearer credential for exactly one vendor, so it is handed out
- * only when the provider that won the resolution above is that vendor. A provider named
- * by deployment settings or a bot override gets no key rather than another vendor's.
- */
-function deploymentKeyFor(deps: ExecutorDeps, provider: string): string | undefined {
-  if (!deps.deploymentModelKey) return undefined;
-  return provider === resolveDeploymentModel().provider ? deps.deploymentModelKey : undefined;
-}
-
-async function resolveModelKey(
-  deps: ExecutorDeps,
-  userId: string,
-  spaceId: string,
-  credential: {
-    secretId: string;
-    provider: string;
-    defaultModel?: string | null;
-    supportsImages?: boolean;
-  } | null,
-  provider: string,
-  modelId: string,
-  registerSecrets?: (values: string[]) => void,
-): Promise<{
-  apiKey?: string;
-  baseUrl?: string;
-  reasoning?: boolean;
-  maxTokens?: number;
-  contextWindow?: number;
-  thinkingLevel?: AgentRunRequest["model"]["thinkingLevel"];
-  acceptsImages?: boolean;
-  maxImagesPerPrompt?: number;
-  oauth?: AgentModelOAuthCredential;
-  persistOAuth?: (credential: AgentModelOAuthCredential) => Promise<void>;
-  redact: string[];
-}> {
-  if (credential) {
-    return withModelCredentialLock(credential.secretId, async () => {
-      const row = await deps.prisma.secret.findFirst({
-        where: { id: credential.secretId, userId, spaceId: null },
-      });
-      if (!row) return { apiKey: deploymentKeyFor(deps, provider), redact: [] };
-      const plaintext = deps.secretStore.load(row.ciphertext, row.id);
-      registerSecrets?.(secretValuesToRedact(parseModelSecret(plaintext)));
-      const persist = async (next: string) => {
-        const stored = await deps.secretStore.put(
-          next,
-          {
-            operationId: "cred",
-            traceId: "cred-refresh",
-            spaceId,
-            userId,
-            signal: new AbortController().signal,
-          },
-          row.id,
-        );
-        await deps.prisma.secret.update({
-          where: { id: row.id },
-          data: { ciphertext: stored.ciphertext },
-        });
-      };
-      const resolved = await resolveModelAuth(plaintext, credential.provider, {
-        persist,
-      });
-      const oauth = resolved.secret.kind === "oauth" ? resolved.secret.credential : undefined;
-      const baseUrl =
-        resolved.secret.kind === "openai_compatible" ? resolved.secret.baseUrl : undefined;
-      const acceptsImages =
-        credential.provider === OPENAI_COMPATIBLE_PROVIDER_ID &&
-        resolved.secret.kind === "openai_compatible" &&
-        (modelIdSupportsImages(resolved.secret.visionModelIds, modelId) ||
-          // Legacy secrets have no per-model list, so keep their existing
-          // capability scoped to the model saved in the space preference.
-          (resolved.secret.visionModelIds === undefined &&
-            credential.supportsImages === true &&
-            credential.defaultModel?.trim() === modelId.trim()));
-      return {
-        apiKey: resolved.apiKey,
-        baseUrl,
-        reasoning:
-          resolved.secret.kind === "openai_compatible" ? resolved.secret.reasoning : undefined,
-        maxTokens:
-          resolved.secret.kind === "openai_compatible" ? resolved.secret.maxTokens : undefined,
-        contextWindow:
-          resolved.secret.kind === "openai_compatible" ? resolved.secret.contextWindow : undefined,
-        thinkingLevel:
-          resolved.secret.kind === "openai_compatible" ? resolved.secret.thinkingLevel : undefined,
-        acceptsImages,
-        maxImagesPerPrompt:
-          resolved.secret.kind === "openai_compatible"
-            ? resolved.secret.maxImagesPerPrompt
-            : undefined,
-        oauth,
-        persistOAuth: oauth
-          ? async (next) => {
-              await withModelCredentialLock(credential.secretId, async () => {
-                const currentRow = await deps.prisma.secret.findFirst({
-                  where: { id: credential.secretId, userId, spaceId: null },
-                });
-                if (!currentRow) return;
-                const current = parseModelSecret(
-                  deps.secretStore.load(currentRow.ciphertext, currentRow.id),
-                );
-                if (current.kind === "oauth") {
-                  const stored = current.credential;
-                  if (stored.expires > next.expires) return;
-                  if (
-                    stored.access === next.access &&
-                    stored.refresh === next.refresh &&
-                    stored.expires === next.expires
-                  ) {
-                    return;
-                  }
-                }
-                await persist(
-                  serializeModelSecret({ kind: "oauth", credential: toOAuthCredential(next) }),
-                );
-              });
-            }
-          : undefined,
-        redact: [...secretValuesToRedact(resolved.secret), resolved.apiKey].filter(
-          (value): value is string => Boolean(value),
-        ),
-      };
-    });
-  }
-  return { apiKey: deploymentKeyFor(deps, provider), redact: [] };
-}
-
-async function withModelCredentialLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = modelCredentialLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const current = previous.then(
-    () =>
-      new Promise<void>((resolve) => {
-        release = resolve;
-      }),
-  );
-  modelCredentialLocks.set(key, current);
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-    if (modelCredentialLocks.get(key) === current) modelCredentialLocks.delete(key);
-  }
 }
 
 export function selectRunConnections<

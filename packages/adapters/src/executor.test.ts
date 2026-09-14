@@ -493,6 +493,7 @@ describe("createRunExecutor", () => {
     expect(tools).not.toContain("remember");
     expect(tools).not.toContain("save_memory");
     expect(tools.some((tool) => tool.startsWith("scratchpad_"))).toBe(false);
+    expect(tools.some((tool) => tool.startsWith("customer_"))).toBe(false);
     expect(tools).toContain("web_fetch");
   });
 

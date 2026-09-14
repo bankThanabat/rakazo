@@ -1,0 +1,76 @@
+{
+  "line": {
+    "receive": {
+      "mode": "webhook",
+      "items": ["events"],
+      "account": { "path": ["destination"], "equals": "CONNECTED_BOT_USER_ID" },
+      "webhook": {
+        "secretId": "LINE_CHANNEL_SECRET_RECORD",
+        "header": "x-line-signature",
+        "algorithm": "sha256",
+        "encoding": "base64"
+      },
+      "timestampFormat": "milliseconds",
+      "incoming": { "path": ["message", "type"], "equals": "text" },
+      "fields": {
+        "id": ["webhookEventId"],
+        "threadId": ["source", "userId"],
+        "customerId": ["source", "userId"],
+        "body": ["message", "text"],
+        "timestamp": ["timestamp"]
+      }
+    },
+    "send": { "action": "line.send_push_text", "input": { "to": "$threadId", "texts": ["$body"] } }
+  },
+  "instagram": {
+    "receive": {
+      "mode": "webhook",
+      "batchPath": ["entry"],
+      "items": ["messaging"],
+      "account": { "path": ["id"], "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID" },
+      "webhook": {
+        "secretId": "META_APP_SECRET_RECORD",
+        "verificationSecretId": "META_VERIFY_TOKEN_RECORD",
+        "header": "x-hub-signature-256",
+        "algorithm": "sha256",
+        "encoding": "hex",
+        "prefix": "sha256="
+      },
+      "timestampFormat": "milliseconds",
+      "incoming": { "path": ["recipient", "id"], "equals": "CONNECTED_INSTAGRAM_ACCOUNT_ID" },
+      "fields": {
+        "id": ["message", "mid"],
+        "threadId": ["sender", "id"],
+        "customerId": ["sender", "id"],
+        "body": ["message", "text"],
+        "timestamp": ["timestamp"]
+      }
+    },
+    "send": {
+      "action": "instagram.send_message",
+      "input": { "recipientId": "$customerId", "text": "$body" }
+    }
+  },
+  "telegram": {
+    "receive": {
+      "mode": "poll",
+      "action": "telegram.get_updates",
+      "input": { "offset": "$cursor", "limit": 100, "timeout": 0, "allowedUpdates": ["message"] },
+      "items": ["updates"],
+      "cursor": { "kind": "max-plus-one", "path": ["updateId"] },
+      "timestampFormat": "seconds",
+      "incoming": { "path": ["message", "from", "isBot"], "equals": false },
+      "fields": {
+        "id": ["updateId"],
+        "threadId": ["message", "chat", "id"],
+        "customerId": ["message", "from", "id"],
+        "body": ["message", "text"],
+        "timestamp": ["message", "date"]
+      }
+    },
+    "send": {
+      "action": "telegram.send_message",
+      "input": { "chatId": "$threadId", "text": "$body" }
+    }
+  }
+}

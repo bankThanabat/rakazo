@@ -20,9 +20,12 @@ import {
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
+  createCustomerConversations,
+  createCustomerIngress,
   createJobReconciler,
   createMessagingContextLoader,
   createMessagingTeamChatSender,
+  createModelBridge,
   createRunExecutor,
   createRunSandbox,
   createRunSecretWriter,
@@ -82,6 +85,7 @@ import { requestLogging } from "@rakazo/logging/hono";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { mountCustomerHttp } from "./customer-http.js";
 import { type AppEnv, loadEnv } from "./env.js";
 import { mountLocalSettings } from "./local-settings.js";
 import {
@@ -90,6 +94,7 @@ import {
   wakeMessageRoutines,
 } from "./messaging-inbound.js";
 import { mountMessagingWebhookRoutes } from "./messaging-webhook.js";
+import { mountModelBridge } from "./model-bridge.js";
 import { mountApiRequestBodyLimits } from "./request-body-limit.js";
 import { createRouter } from "./router.js";
 import { mountScreenTarget } from "./screen-proxy.js";
@@ -331,7 +336,15 @@ export async function createApp(
     CLOUD_AGENT_SPACE_ID: env.cloudAgentSpaceId,
   });
   const shutdown = new AbortController();
+  const customers = createCustomerConversations({
+    apiUrl: env.apiUrl,
+    prisma,
+    integrations: integrationSettings,
+    secrets,
+    jobs,
+  });
   const executor = createRunExecutor({
+    customers,
     prisma,
     runtime,
     sandbox,
@@ -371,6 +384,7 @@ export async function createApp(
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    customers,
     executor,
     prisma,
     sandbox,
@@ -394,6 +408,7 @@ export async function createApp(
         jobs,
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+        reconcileCustomers: customers.reconcile,
       })
     : undefined;
   reconciler?.start();
@@ -476,6 +491,23 @@ export async function createApp(
     return auth.handler(c.req.raw);
   });
   mountLocalSettings(app, { token: env.desktopStackToken, prisma, rpc });
+  mountCustomerHttp(
+    app,
+    createCustomerIngress({ prisma, secrets, integrations: integrationSettings, jobs }),
+    customers.tools,
+  );
+  mountModelBridge(
+    app,
+    createModelBridge({ prisma, secrets }),
+    async (c) => {
+      const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
+      if (!session?.user) return null;
+      return requireMembership(prisma, session.user.id, c.req.header("x-rakazo-space-id")).catch(
+        () => null,
+      );
+    },
+    (origin) => isTrustedOrigin(origin, env),
+  );
   app.use("/rpc/*", async (c, next) => {
     const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
     const requestedSpaceId = c.req.header("x-rakazo-space-id");

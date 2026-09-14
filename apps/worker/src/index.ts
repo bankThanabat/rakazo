@@ -9,6 +9,7 @@ import {
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
+  createCustomerConversations,
   createJobReconciler,
   createMessagingContextLoader,
   createPostgresReconciliationLeadership,
@@ -144,7 +145,15 @@ async function main() {
   const jobHost: JobWorkerHost = inMemoryJobs ?? new GraphileJobWorkerHost(databaseUrl);
   // One provider instance so emulator launches and polls share the same Map.
   const cloudAgent = createCloudAgentConnection();
+  const customers = createCustomerConversations({
+    apiUrl: process.env.API_URL ?? "http://127.0.0.1:3100",
+    prisma,
+    integrations: integrationSettings,
+    secrets,
+    jobs,
+  });
   const executor = createRunExecutor({
+    customers,
     prisma,
     runtime,
     sandbox,
@@ -182,6 +191,7 @@ async function main() {
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    customers,
     executor,
     prisma,
     sandbox,
@@ -204,6 +214,7 @@ async function main() {
     leadership: createPostgresReconciliationLeadership(pool),
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
+    reconcileCustomers: customers.reconcile,
   });
   reconciler.start();
 
