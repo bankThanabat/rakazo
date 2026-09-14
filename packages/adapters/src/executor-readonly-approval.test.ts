@@ -156,7 +156,9 @@ function fixture({
     }
     yield { type: "done" as const, text: "Done" };
   });
+  const manage = vi.fn(async () => ({ ok: true }));
   const executor = createRunExecutor({
+    customers: { manage },
     prisma,
     runtime: { describe: () => ({ capabilities: { scripted: false } }), run: runtimeRun },
     connector: {
@@ -183,6 +185,7 @@ function fixture({
     secrets: [],
   } as unknown as Parameters<typeof createRunExecutor>[0]);
   return {
+    manage,
     effects,
     results,
     execute,
@@ -203,6 +206,30 @@ function fixture({
 describe("connector read-only metadata and approval enforcement", () => {
   beforeEach(() => {
     vi.mocked(runAutoReviewJudge).mockReset();
+  });
+
+  it("completes and deduplicates customer configuration effects", async () => {
+    const f = fixture({ name: "customer_instructions" });
+    f.setCalls([
+      { args: { id: "item-1" }, executionId: "same-call" },
+      { args: { id: "item-1" }, executionId: "same-call" },
+    ]);
+    await f.run();
+    expect(f.manage).toHaveBeenCalledTimes(1);
+    expect(f.effects[0]?.status).toBe("completed");
+    expect(f.results).toEqual([{ ok: true }, { ok: true }]);
+  });
+
+  it("requires owner approval for new customer grants even with an allow rule", async () => {
+    const f = fixture({
+      name: "customer_configure",
+      autoReview: true,
+      rules: [{ effect: "always_allow", matchKind: "tool", matchValue: "customer_configure" }],
+    });
+    await f.run();
+    expect(f.manage).not.toHaveBeenCalled();
+    expect(f.pauseRunForInput).toHaveBeenCalledOnce();
+    expect(runAutoReviewJudge).not.toHaveBeenCalled();
   });
 
   it.each(["shell", "write_file"])(

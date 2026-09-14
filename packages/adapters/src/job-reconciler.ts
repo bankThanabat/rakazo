@@ -104,6 +104,7 @@ export function createJobReconciler(
     jobs: JobPublisher;
     events?: ThreadEvents;
     leadership?: ReconciliationLeadership;
+    reconcileCustomers?: () => Promise<void>;
     reconcileComputerUpdates?: () => Promise<void>;
     reconcileCloudAgents?: () => Promise<void>;
   },
@@ -124,8 +125,8 @@ export function createJobReconciler(
       if (deps.leadership && !(await deps.leadership.tryAcquire())) return;
 
       const auxiliary = await Promise.allSettled(
-        [deps.reconcileCloudAgents, deps.reconcileComputerUpdates].map(async (reconcile) =>
-          reconcile?.(),
+        [deps.reconcileCloudAgents, deps.reconcileComputerUpdates, deps.reconcileCustomers].map(
+          async (reconcile) => reconcile?.(),
         ),
       );
       for (const result of auxiliary) {

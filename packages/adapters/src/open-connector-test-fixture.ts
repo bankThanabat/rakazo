@@ -35,7 +35,9 @@ interface TestSecret {
 }
 
 /** Reusable offline HTTP/persistence fixture for the adapter and authenticated RPC journeys. */
-export function createOpenConnectorFixture() {
+export function createOpenConnectorFixture(
+  onAction?: (action: string, input: unknown, alias: string) => unknown,
+) {
   const providers: OpenConnectorProvider[] = [
     {
       service: "sample",
@@ -89,7 +91,12 @@ export function createOpenConnectorFixture() {
         return Response.json({ error: "connection_not_allowed" }, { status: 403 });
       }
       sent.push({ alias, input: body.input, token: bearer! });
-      return Response.json({ success: true, data: { sentMessages: [{ id: "message-1" }] } });
+      return Response.json({
+        success: true,
+        data: onAction
+          ? await onAction(actionId, body.input, alias)
+          : { sentMessages: [{ id: "message-1" }] },
+      });
     }
     if (bearer !== openConnectorTestConfig.apiKey) return Response.json({}, { status: 401 });
     if (url.pathname === "/api/providers") return Response.json(providers);

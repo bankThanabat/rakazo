@@ -42,7 +42,7 @@ describe("account preferences", () => {
     return { update, deps, actor, handler: new RPCHandler(createRouter(deps)) };
   }
 
-  it.each(["providers", "channels", "connect", "setChannelEnabled", "setOwner", "reply"])(
+  it.each(["providers", "channels", "connect", "setChannelEnabled"])(
     "does not expose the retired customer %s endpoint",
     async (endpoint) => {
       const { actor, handler } = preferencesDeps("robot");

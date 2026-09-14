@@ -1,7 +1,8 @@
 import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
 import { usePolling } from "@rakazo/chat-ui/async-state";
-import { Button, cn, ProfileAvatar } from "@rakazo/ui-web";
+import { useCustomerActions } from "@rakazo/chat-ui/customer-actions";
+import { Button, cn, ProfileAvatar, Textarea } from "@rakazo/ui-web";
 import { Menu } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { rpc } from "../lib/rpc";
@@ -91,6 +92,13 @@ export function CustomerThread({
     pinned.current = true;
   }, [id]);
   const current = snapshot?.conversation.id === id ? snapshot : null;
+  const actions = useCustomerActions({
+    id,
+    nonce: () => crypto.randomUUID(),
+    reply: rpc.customers.reply,
+    setOwner: rpc.customers.setOwner,
+    refresh: polling.refresh,
+  });
   const lastMessageId = current?.messages.at(-1)?.id;
   useEffect(() => {
     if (scroll.current && pinned.current) scroll.current.scrollTop = scroll.current.scrollHeight;
@@ -113,6 +121,21 @@ export function CustomerThread({
           ) : null}
           <span className="truncate font-medium">{current?.conversation.name ?? t`Customer`}</span>
         </div>
+        {current?.conversation.canReply ? (
+          <Button
+            variant="ghost"
+            disabled={actions.busy}
+            onClick={() =>
+              void actions.setOwner(current.conversation.owner === "bot" ? "staff" : "bot")
+            }
+          >
+            {current.conversation.owner === "bot" ? (
+              <Trans>Take over</Trans>
+            ) : (
+              <Trans>Resume staff</Trans>
+            )}
+          </Button>
+        ) : null}
       </div>
       <div
         ref={scroll}
@@ -152,7 +175,8 @@ export function CustomerThread({
                 <Trans>Cancelled</Trans>
               </p>
             ) : null}
-            {message.role !== "customer" && message.status === "queued" ? (
+            {message.role !== "customer" &&
+            (message.status === "queued" || message.status === "sending") ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 <Trans>Sending…</Trans>
               </p>
@@ -160,6 +184,34 @@ export function CustomerThread({
           </div>
         ))}
       </div>
+      {current?.conversation.canReply && current.conversation.owner === "staff" ? (
+        <form
+          className="flex items-end gap-2 border-t border-sidebar-border p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void actions.send();
+          }}
+        >
+          <Textarea
+            aria-label={t`Reply to customer`}
+            placeholder={t`Reply…`}
+            value={actions.body}
+            maxLength={16000}
+            onChange={(event) => actions.setBody(event.target.value)}
+            disabled={actions.busy}
+            rows={2}
+            className="max-h-40 min-h-10 flex-1"
+          />
+          <Button type="submit" disabled={actions.busy || !actions.body.trim()}>
+            <Trans>Send</Trans>
+          </Button>
+        </form>
+      ) : null}
+      {actions.error ? (
+        <p role="alert" className="px-5 py-2 text-sm text-destructive">
+          <Trans>Could not save. Try again.</Trans>
+        </p>
+      ) : null}
       {polling.error ? (
         <p role="alert" className="px-5 py-2 text-sm text-destructive">
           <Trans>Could not update conversation</Trans>

@@ -14,6 +14,7 @@ import { pollCloudAgent } from "./cloud-agent-poll.js";
 import { expireComputerControl } from "./computer-control.js";
 import { scheduleComputerSleep, sleepComputerIfIdle } from "./computer-idle.js";
 import { performComputerUpdate } from "./computer-update.js";
+import type { CustomerConversationService } from "./customer-conversations.js";
 import type { createRunExecutor } from "./executor.js";
 import { compactHistory } from "./history-compaction.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
@@ -22,6 +23,7 @@ import type { EncryptedSecretStore } from "./secrets.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 export function createBackgroundJobHandlers(deps: {
+  customers?: CustomerConversationService;
   executor: ReturnType<typeof createRunExecutor>;
   prisma: PrismaClient;
   sandbox: SandboxProvider;
@@ -53,7 +55,12 @@ export function createBackgroundJobHandlers(deps: {
 
   return {
     // Drain jobs queued before native customer channels were retired.
-    "customer.process": async () => {},
+    "customer.process": async ({ conversationId }) => {
+      if (conversationId) await deps.customers?.process(conversationId);
+    },
+    "customer.poll": async ({ channelId }) => {
+      await deps.customers?.poll(channelId);
+    },
     "run.continue": async (payload) => {
       await deps.executor.continueRun(payload.runId, deps.workerId);
       // Automatic messaging mirror: once the run's bot messages are durable,
