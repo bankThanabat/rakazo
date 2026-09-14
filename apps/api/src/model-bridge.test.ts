@@ -1,4 +1,3 @@
-import type { Actor } from "@rakazo/contracts";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
@@ -16,7 +15,9 @@ function fixture() {
     app,
     f.bridge,
     async (c) =>
-      c.req.header("cookie") === "test-session=owner" ? (bridgeTestActor as Actor) : null,
+      c.req.header("cookie") === "test-session=owner"
+        ? { ...bridgeTestActor, email: "owner@example.test", isDeploymentOwner: true }
+        : null,
     (origin) => origin === "https://app.example.test",
   );
   app.get("/other-provider", (c) => c.json({ auth: "unchanged" }));
