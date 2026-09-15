@@ -2,7 +2,7 @@ import { setupI18n } from "@lingui/core";
 import { I18nProvider } from "@lingui/react";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { GatewayRuntimes } from "../../src/components/integrations/GatewaySettings";
+import { GatewayRuntimes } from "../../src/components/integrations/GatewayRuntimes";
 import { IntegrationSetup } from "../../src/components/integrations/IntegrationSetup";
 import { PluginsOverlay } from "../../src/pages/PluginsOverlay";
 import "../../src/styles.css";
