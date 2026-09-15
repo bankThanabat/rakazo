@@ -13,10 +13,22 @@ const hash = (value: string) => createHash("sha256").update(value).digest();
 export function customerPolicyHash(behavior: {
   actions: unknown;
   knowledgeFilterId: string | null;
-  credentialId: string;
+  credentialId?: string | null;
+  runtime?: unknown;
+  knowledge?: unknown;
+  modelCredentialId?: string | null;
+  modelId?: string | null;
 }) {
   return hash(
-    stableJsonValue([behavior.actions, behavior.knowledgeFilterId, behavior.credentialId]),
+    stableJsonValue([
+      behavior.actions,
+      behavior.knowledgeFilterId,
+      behavior.credentialId,
+      behavior.modelCredentialId,
+      behavior.modelId,
+      behavior.runtime,
+      behavior.knowledge,
+    ]),
   ).toString("hex");
 }
 export function customerExecutionKey(messageId: string) {
@@ -80,8 +92,8 @@ export function createCustomerBusinessTools(deps: {
   prisma: PrismaClient;
   connector: ReturnType<typeof createCustomerConnector>;
   runtime: (
-    channel: { userId: string; spaceId: string },
-    credentialId: string,
+    channel: { userId: string; spaceId: string; botId: string },
+    behavior: { runtime: unknown; knowledge?: unknown },
   ) => Promise<CustomerRuntime>;
 }) {
   const { prisma } = deps;
@@ -208,7 +220,7 @@ export function createCustomerBusinessTools(deps: {
             .object({ query: z.string().trim().min(1).max(4000) })
             .strict()
             .parse(call.arguments);
-          const runtime = await deps.runtime(scope.channel, scope.behavior.credentialId);
+          const runtime = await deps.runtime(scope.channel, scope.behavior);
           if (!runtime.search) throw denied();
           result = await runtime.search({
             query,

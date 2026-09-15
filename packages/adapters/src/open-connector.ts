@@ -34,7 +34,7 @@ export class OpenConnector implements ManagedConnectorProvider {
   constructor(
     private readonly config: { endpoint: string; apiKey: string; identitySecret: string },
     deps: {
-      prisma: Pick<PrismaClient, "secret">;
+      prisma: Pick<PrismaClient, "secret" | "openConnectorAttempt">;
       secrets: EncryptedSecretStore;
       fetch?: typeof fetch;
     },
@@ -44,7 +44,11 @@ export class OpenConnector implements ManagedConnectorProvider {
     this.accounts = new OpenConnectorAccounts(this.http, {
       ...deps,
       identitySecret: config.identitySecret,
+      endpoint: config.endpoint,
     });
+  }
+  maintain() {
+    return this.accounts.maintain();
   }
   describe() {
     return {

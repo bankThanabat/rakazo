@@ -8,7 +8,6 @@ import type {
 } from "@rakazo/contracts";
 import { CONNECTION_CATALOG_PAGE_SIZE, waitForConnectionAuthorization } from "@rakazo/core";
 import * as Clipboard from "expo-clipboard";
-import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -23,7 +22,6 @@ import {
 } from "react-native";
 import { rpc } from "../../lib/api";
 import { mobileTokens } from "../../lib/appearance";
-import { newClientNonce } from "../../lib/client-nonce";
 import { useI18n } from "../../lib/i18n";
 import { presentMessageActionSheet } from "../../lib/message-action-sheet";
 import { native, useResolvedAppearance, useThemedStyles } from "../../lib/native";
@@ -75,7 +73,6 @@ export function OpenConnectorCatalog({
   onRefresh: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
-  const router = useRouter();
   const colorScheme = useResolvedAppearance();
   const styles = useThemedStyles(createStyles);
   const [open, setOpen] = useState(false);
@@ -94,6 +91,11 @@ export function OpenConnectorCatalog({
   const [form, setForm] = useState(false);
   const [reconnect, setReconnect] = useState<string | null>(null);
   const [attempt, setAttempt] = useState<{ id: string; url: string } | null>(null);
+  const [incoming, setIncoming] = useState<{
+    connectionId: string;
+    botId: string;
+    secrets: Record<string, string>;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tools, setTools] = useState<Array<{ name: string; description: string }> | null>(null);
@@ -108,27 +110,14 @@ export function OpenConnectorCatalog({
     await run(async () => {
       const bots = await rpc<Array<{ id: string; name: string }>>("bots/list");
       if (!bots.length) throw new Error(t("Create an assistant first."));
-      const clientNonce = newClientNonce();
       presentMessageActionSheet({
-        title: t("Choose an assistant to continue in chat."),
+        title: t("Choose an assistant"),
         cancel: t("Cancel"),
         more: t("More"),
         colorScheme,
         actions: bots.map((bot) => ({
           text: bot.name,
-          onPress: () => {
-            void run(async () => {
-              const assistant = await rpc<{ botId: string; name: string }>(
-                "connections/setupIncoming",
-                {
-                  connectionId,
-                  botId: bot.id,
-                  clientNonce,
-                },
-              );
-              router.push({ pathname: "/thread", params: assistant });
-            });
-          },
+          onPress: () => setIncoming({ connectionId, botId: bot.id, secrets: {} }),
         })),
       });
     });
@@ -422,6 +411,11 @@ export function OpenConnectorCatalog({
                   {button(t("Disconnect"), () => disconnect(row))}
                 </View>
               ) : null}
+              {row.automaticReplies !== undefined ? (
+                <Text style={styles.text}>
+                  {row.automaticReplies ? t("Automatic replies on") : t("Automatic replies off")}
+                </Text>
+              ) : null}
               {row.webhookUrl ? (
                 <View style={styles.group}>
                   <Text style={styles.text}>{t("Webhook URL")}</Text>
@@ -435,7 +429,46 @@ export function OpenConnectorCatalog({
                   })}
                 </View>
               ) : row.status === "connected" ? (
-                button(t("Set up incoming messages"), () => void setupIncoming(row.id))
+                row.incomingSecrets?.length && row.canManage !== false ? (
+                  incoming?.connectionId === row.id ? (
+                    <View style={styles.group}>
+                      {row.incomingSecrets.map((secret) => (
+                        <TextInput
+                          key={secret.key}
+                          accessibilityLabel={secret.label}
+                          placeholder={secret.label}
+                          secureTextEntry
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          value={incoming.secrets[secret.key] ?? ""}
+                          style={styles.input}
+                          onChangeText={(value) =>
+                            setIncoming({
+                              ...incoming,
+                              secrets: { ...incoming.secrets, [secret.key]: value },
+                            })
+                          }
+                        />
+                      ))}
+                      {button(
+                        t("Enable incoming messages"),
+                        () =>
+                          void run(async () => {
+                            await rpc("connections/setupIncoming", incoming);
+                            setIncoming(null);
+                            await onRefresh();
+                          }),
+                        busy ||
+                          row.incomingSecrets.some(
+                            (secret) => !incoming.secrets[secret.key]?.trim(),
+                          ),
+                      )}
+                      {button(t("Cancel"), () => setIncoming(null))}
+                    </View>
+                  ) : (
+                    button(t("Set up incoming messages"), () => void setupIncoming(row.id))
+                  )
+                ) : null
               ) : null}
             </View>
           ))}
@@ -472,7 +505,7 @@ export function OpenConnectorCatalog({
               {method.type === "oauth2" && !setup.oauthConfigured ? (
                 <>
                   <Text style={styles.text}>{t("Admin setup required")}</Text>
-                  {settings?.canConfigure ? (
+                  {settings?.canConfigure && !setup.oauthManaged ? (
                     <>
                       <Fields
                         fields={[

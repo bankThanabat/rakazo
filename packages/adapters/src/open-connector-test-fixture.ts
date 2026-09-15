@@ -47,10 +47,7 @@ export function createOpenConnectorFixture(
       actions: [sampleAction],
     },
   ];
-  const requests = new Map<
-    string,
-    { scope: string; service: string; status: string; appId: string | null }
-  >();
+  const requests = new Map<string, { service: string; status: string; appId: string | null }>();
   const oauthConfigs = new Set<string>();
   const accounts = new Map<
     string,
@@ -120,8 +117,8 @@ export function createOpenConnectorFixture(
       oauthConfigs.add(url.pathname.split("/").at(-1)!);
       return Response.json({ configured: true });
     }
-    if (url.pathname === "/v1/connection-capabilities")
-      return Response.json({ success: true, data: { scopedRequests: true, cancelRequests: true } });
+    if (url.pathname === "/v1/connection-capabilities" || headers.has("x-oo-connection-scope"))
+      throw new Error("Removed fork API used");
     if (url.pathname.endsWith("/connect") && init?.method === "POST") {
       const target = url.pathname.includes("/by-id/")
         ? [...accounts.values()].find((row) => row.id === url.pathname.split("/").at(-2))
@@ -129,7 +126,6 @@ export function createOpenConnectorFixture(
       const service = target?.service ?? url.pathname.split("/").at(-2)!;
       const id = `request-${++ordinal}`;
       requests.set(id, {
-        scope: headers.get("x-oo-connection-scope")!,
         service,
         status: "initiated",
         appId: target?.id ?? null,
@@ -144,9 +140,7 @@ export function createOpenConnectorFixture(
     }
     if (url.pathname.startsWith("/v1/connection-requests/")) {
       const request = requests.get(url.pathname.split("/").at(-1)!);
-      if (!request || request.scope !== headers.get("x-oo-connection-scope"))
-        return Response.json({}, { status: 404 });
-      if (init?.method === "DELETE" && request.status === "initiated") request.status = "failed";
+      if (!request || init?.method === "DELETE") return Response.json({}, { status: 404 });
       return Response.json({ success: true, data: request });
     }
     if (url.pathname.startsWith("/api/connections/") && init?.method === "PUT") {
@@ -236,7 +230,33 @@ export function createOpenConnectorFixture(
       return { count: matches.length };
     }),
   };
-  const prisma = { secret } as unknown as Pick<PrismaClient, "secret">;
+  const attempts = new Map<
+    string,
+    {
+      id: string;
+      ref: string;
+      endpoint: string;
+      spaceId: string;
+      userId: string;
+      service: string;
+      createdAt: Date;
+    }
+  >();
+  const openConnectorAttempt = {
+    create: vi.fn(async ({ data }) => {
+      const row = { ...data, createdAt: new Date() };
+      attempts.set(row.id, row);
+      return row;
+    }),
+    deleteMany: vi.fn(async ({ where }) => ({ count: Number(attempts.delete(where.id)) })),
+    findMany: vi.fn(async ({ where }) =>
+      [...attempts.values()].filter((row) => row.endpoint === where.endpoint),
+    ),
+  };
+  const prisma = { secret, openConnectorAttempt } as unknown as Pick<
+    PrismaClient,
+    "secret" | "openConnectorAttempt"
+  >;
   const secrets = new EncryptedSecretStore("fake-secret-storage-key");
   const adapter = new OpenConnector(openConnectorTestConfig, {
     prisma,

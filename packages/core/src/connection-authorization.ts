@@ -1,4 +1,12 @@
+import { isPlainHttpUrl } from "@rakazo/contracts";
 import { abortableDelay } from "./async.js";
+
+export function gatewayAuthorizationUrl(endpoint: string): string | null {
+  if (!isPlainHttpUrl(endpoint)) return null;
+  const url = new URL(endpoint);
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/api/integration-gateway/authorize`;
+  return url.toString();
+}
 
 export type ConnectionAuthorizationResult =
   | { status: "connected" }

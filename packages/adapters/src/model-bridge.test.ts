@@ -16,6 +16,17 @@ const signal = () => new AbortController().signal;
 afterEach(() => vi.restoreAllMocks());
 
 describe("saved model OAuth bridge", () => {
+  it("expires a customer execution grant without changing persistent grants", async () => {
+    const f = modelBridgeFixture();
+    const grant = await f.bridge.create(
+      bridgeTestActor,
+      { credentialId: "credential", modelId: bridgeTestModel },
+      { expiresAt: new Date(0) },
+    );
+    await expect(f.bridge.models(grant.apiKey)).rejects.toThrow("Model connection is unavailable");
+    const persistent = await f.issue();
+    await expect(f.bridge.models(persistent.apiKey)).resolves.toMatchObject({ object: "list" });
+  });
   it("uses the existing Codex OAuth token through real Pi transport, with no login or API key fallback", async () => {
     const f = modelBridgeFixture();
     const grant = await f.issue();
@@ -322,5 +333,71 @@ describe("saved model OAuth bridge", () => {
       message: "Model request failed",
     });
     expect(f.upstream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("staff-selected model bridge", () => {
+  const request = { model: "rakazo-staff", messages: prompt.messages };
+  it("follows staff model changes without replacing the key or changing the client model", async () => {
+    const f = modelBridgeFixture();
+    const grant = await f.bridge.create(bridgeTestActor, { botId: f.staff.id });
+    expect(grant.model).toBe("rakazo-staff");
+    await f.bridge.respond(grant.apiKey, request, signal());
+    expect(f.payloads.at(-1)).toMatchObject({ model: bridgeTestModel });
+    f.staff.modelId = "gpt-5.4";
+    await f.bridge.respond(grant.apiKey, request, signal());
+    expect(f.payloads.at(-1)).toMatchObject({ model: "gpt-5.4" });
+    expect(await f.bridge.models(grant.apiKey)).toMatchObject({ data: [{ id: "rakazo-staff" }] });
+    expect(await f.bridge.list(bridgeTestActor)).toEqual([
+      { id: grant.id, botId: "staff", model: "rakazo-staff" },
+    ]);
+  });
+  it("follows the workspace default when staff inherits it", async () => {
+    const f = modelBridgeFixture();
+    f.staff.modelProvider = null;
+    f.staff.modelId = null;
+    const grant = await f.bridge.create(bridgeTestActor, { botId: f.staff.id });
+    f.preference.modelId = "gpt-5.4";
+    await f.bridge.respond(grant.apiKey, request, signal());
+    expect(f.payloads.at(-1)).toMatchObject({ model: "gpt-5.4" });
+  });
+  it("checks staff ownership at creation and on every request", async () => {
+    const f = modelBridgeFixture();
+    await expect(
+      f.bridge.create(bridgeTestActor, { botId: "someone-elses-staff" }),
+    ).rejects.toThrow("Model connection is unavailable");
+    const grant = await f.bridge.create(bridgeTestActor, { botId: f.staff.id });
+    f.staff.userId = "another-owner";
+    await expect(f.bridge.respond(grant.apiKey, request, signal())).rejects.toThrow(
+      "Model connection is unavailable",
+    );
+    expect(f.upstream).not.toHaveBeenCalled();
+  });
+  it("denies archived staff and disconnected model credentials", async () => {
+    const f = modelBridgeFixture();
+    const grant = await f.bridge.create(bridgeTestActor, { botId: f.staff.id });
+    f.prisma.bot.findFirst.mockResolvedValueOnce(null);
+    await expect(f.bridge.models(grant.apiKey)).rejects.toThrow("Model connection is unavailable");
+    f.prisma.spaceModelPreference.findFirst.mockResolvedValue(null);
+    f.prisma.userModelCredential.findFirst.mockResolvedValue(null);
+    await expect(f.bridge.respond(grant.apiKey, request, signal())).rejects.toThrow(
+      "Model connection is unavailable",
+    );
+    expect(f.upstream).not.toHaveBeenCalled();
+  });
+  it("rejects ambiguous grants and clients trying to override the staff selection", async () => {
+    const f = modelBridgeFixture();
+    await expect(
+      f.bridge.create(bridgeTestActor, {
+        botId: f.staff.id,
+        credentialId: "credential",
+        modelId: bridgeTestModel,
+      }),
+    ).rejects.toThrow("Invalid model connection");
+    const grant = await f.bridge.create(bridgeTestActor, { botId: f.staff.id });
+    await expect(f.bridge.respond(grant.apiKey, prompt, signal())).rejects.toThrow(
+      "Model is not granted to this key",
+    );
+    expect(f.upstream).not.toHaveBeenCalled();
   });
 });

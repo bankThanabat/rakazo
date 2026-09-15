@@ -237,7 +237,7 @@ describe("catalog-driven authentication", () => {
       expect(f.sent).toHaveLength(1);
     },
   );
-  it("keeps concurrent OAuth requests independent, cancels precisely, and reconnects the same account", async () => {
+  it("keeps concurrent OAuth requests independent, cancels precisely, and replaces the account on reconnect", async () => {
     const f = fixture();
     f.providers[0]!.auth = [{ type: "oauth2" }];
     const auth = { type: "oauth2" as const, values: {} };
@@ -253,6 +253,7 @@ describe("catalog-driven authentication", () => {
     await f.adapter.revoke(first.state, owner);
     const ids = [...f.requests.keys()];
     f.authorize(ids[0]!);
+    await f.adapter.maintain();
     expect(f.accounts.size).toBe(0);
     f.authorize(ids[1]!);
     await f.adapter.complete({ state: second.state }, owner);
@@ -260,7 +261,9 @@ describe("catalog-driven authentication", () => {
     await f.adapter.reconnect(second.state, auth, owner);
     f.authorize([...f.requests.keys()].at(-1)!);
     await f.adapter.complete({ state: second.state }, owner);
-    expect([...f.tokens.values()][0]!.allowedConnections).toEqual([accountId]);
+    const replacement = [...f.accounts.values()][0]!.id;
+    expect(replacement).not.toBe(accountId);
+    expect([...f.tokens.values()][0]!.allowedConnections).toEqual([replacement]);
     await f.adapter.revoke(second.state, owner);
     await f.adapter.revoke(second.state, owner);
     expect(f.accounts.size).toBe(0);
@@ -316,6 +319,7 @@ it("cancels OAuth reconnect without deleting the existing team account", async (
   await f.adapter.reconnect(first.state, auth, owner);
   expect(await f.adapter.cancelAuthorization(first.state, owner)).toEqual({ connected: true });
   f.authorize([...f.requests.keys()].at(-1)!);
+  await f.adapter.maintain();
   expect([...f.tokens.keys()]).toEqual([token]);
   expect([...f.accounts.values()]).toEqual([account]);
   expect(await collect(f.adapter.execute(call(), connected(first.state)))).toEqual([
@@ -397,8 +401,9 @@ it("execution cannot erase a reconnect request, even during a runtime policy ref
   release();
   await executing;
   await f.adapter.cancelAuthorization(f.state, owner);
-  expect(f.requests.get(requestId)!.status).toBe("failed");
+  expect(f.requests.get(requestId)!.status).toBe("initiated");
   f.authorize(requestId);
+  await f.adapter.maintain();
   expect(f.accounts.size).toBe(1);
 });
 

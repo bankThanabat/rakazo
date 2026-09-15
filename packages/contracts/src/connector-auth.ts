@@ -31,6 +31,7 @@ export const ConnectorAuthInputSchema = z.object({
 });
 export const ConnectorSetupSchema = z.object({
   methods: z.array(ConnectorAuthMethodSchema),
+  oauthManaged: z.boolean().optional(),
   oauthConfigured: z.boolean(),
   oauthFields: z.array(ConnectorCredentialFieldSchema).optional(),
   oauthSetupUrl: z.string().url().optional(),

@@ -193,6 +193,7 @@ export interface ManagedConnectorProvider
   listConnectedExternalIds(context: AdapterContext): Promise<string[]>;
   connectionReady(context: AdapterContext, externalId: string): Promise<boolean>;
   warmDirectory?(): Promise<void>;
+  maintain?(): Promise<void>;
   listActions?(
     provider: string,
     context: AdapterContext,

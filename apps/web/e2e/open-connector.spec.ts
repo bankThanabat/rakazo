@@ -23,7 +23,7 @@ for (const viewport of [
     const catalog = [
       {
         connectorId: "open-connector",
-        slug: "sample",
+        slug: "line",
         name: "Sample app",
         logo: "https://assets.example.test/sample.svg",
         connected: false,
@@ -59,7 +59,7 @@ for (const viewport of [
       else if (path === "connections/setup")
         result = {
           methods:
-            input.provider === "sample"
+            input.provider === "line"
               ? [
                   {
                     type: "api_key",
@@ -109,6 +109,8 @@ for (const viewport of [
           status: "connected",
           scope: "team",
           canManage: true,
+          incomingSecrets:
+            input.provider === "line" ? [{ key: "channelSecret", label: "Channel secret" }] : [],
           capabilities: [],
           createdAt: "2026-01-01T00:00:00.000Z",
         };
@@ -120,7 +122,9 @@ for (const viewport of [
         result = [{ id: "setup-assistant", name: "Support assistant" }];
       else if (path === "connections/setupIncoming") {
         incomingRequests.push(input);
-        result = { botId: "setup-assistant", name: "Support assistant" };
+        accounts[0]!.webhookUrl = "https://relay.example.test/ingest/fixture-source";
+        accounts[0]!.automaticReplies = false;
+        result = { id: "fixture-channel", webhookUrl: accounts[0]!.webhookUrl };
       } else if (path === "connections/revoke") {
         accounts.find((row) => row.id === input.connectionId)!.status = "revoked";
         result = { ok: true };
@@ -162,24 +166,20 @@ for (const viewport of [
     await expect(page.getByRole("combobox", { name: "Assistant", exact: true })).toHaveValue(
       "setup-assistant",
     );
+    const channelSecret = page.getByLabel("Channel secret", { exact: true });
+    await expect(channelSecret).toHaveAttribute("type", "password");
+    await channelSecret.fill("fixture-channel-secret");
     await captureScreenshot(page, testInfo, `openconnector-incoming-setup-${viewport.width}`);
-    await page.getByRole("button", { name: "Continue in chat", exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: "Support assistant", exact: true }),
-    ).toBeVisible();
+    await page.getByRole("button", { name: "Enable incoming messages", exact: true }).click();
     expect(incomingRequests).toEqual([
       {
         connectionId: accounts[0]!.id,
         botId: "setup-assistant",
-        clientNonce: expect.any(String),
+        secrets: { channelSecret: "fixture-channel-secret" },
       },
     ]);
-    // Emulate approved customer_connect completion in the assistant chat.
-    accounts[0]!.webhookUrl =
-      "https://public-api.example.test/api/customer-events/customer-channel-1";
-    await page.getByRole("button", { name: "Back to integrations", exact: true }).click();
-    await page.getByRole("button", { name: "Browse apps", exact: true }).click();
-    await page.getByRole("button", { name: "Sample app, Manage", exact: true }).click();
+    await expect(page.getByText("Automatic replies off", { exact: true })).toBeVisible();
+    await expect(channelSecret).toHaveCount(0);
     await expect(webhookUrl).toHaveValue(accounts[0]!.webhookUrl!);
     await expect(webhookUrl).toHaveAttribute("readonly", "");
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -189,7 +189,7 @@ for (const viewport of [
     await captureScreenshot(page, testInfo, `openconnector-webhook-${viewport.width}`);
     expect(started[0]).toMatchObject({
       connectorId: "open-connector",
-      provider: "sample",
+      provider: "line",
       auth: { type: "api_key", values: { apiKey: "fake-account-token" } },
     });
     await captureScreenshot(page, testInfo, `openconnector-connected-${viewport.width}`);
@@ -250,6 +250,7 @@ test("server owner configures OpenConnector without exposing server credentials 
       provider: "open-connector",
       endpoint: "https://connector.example.test",
       apiKey: "fake-admin-token",
+      mode: "direct",
     },
   ]);
   await expect(page.getByLabel("Admin token", { exact: true })).toHaveValue("");
@@ -268,7 +269,7 @@ test("a teammate can inspect a shared account without management controls", asyn
         : [
             {
               connectorId: "open-connector",
-              slug: "sample",
+              slug: "line",
               name: "Sample app",
               logo: null,
               connected: false,
@@ -290,7 +291,7 @@ test("a teammate can inspect a shared account without management controls", asyn
         {
           id: "shared",
           connectorId: "open-connector",
-          provider: "sample",
+          provider: "line",
           displayName: "Support",
           status: "connected",
           canManage: false,
@@ -451,4 +452,78 @@ test("OAuth reconnect survives reload and cancellation preserves the existing ac
   await expect(page.getByText("Waiting for authorization", { exact: true })).toBeHidden();
   expect(cancelled).toBe(true);
   expect(mutations).toEqual([]);
+});
+
+test("runtime owners configure a scoped gateway key without an OpenConnector admin token", async ({
+  page,
+}, testInfo) => {
+  const saved: unknown[] = [];
+  await page.route("**/rpc/integrationSetup/get", (route) =>
+    route.fulfill({
+      json: {
+        json: {
+          canConfigure: true,
+          needsSetup: false,
+          providers: [{ id: "open-connector", configured: true }],
+          webUrl: "https://example.test/integrations/setup",
+        },
+      },
+    }),
+  );
+  await page.route("**/rpc/integrationSetup/save", async (route) => {
+    saved.push(route.request().postDataJSON().json);
+    await route.fulfill({ json: { json: { ok: true } } });
+  });
+  await page.goto("/e2e/fixtures/open-connector.html?setup");
+  await page.getByRole("button", { name: "Rakazo gateway", exact: true }).click();
+  await expect(page.getByLabel("Admin token", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Get credentials" })).toHaveCount(0);
+  await page.getByLabel("Server URL", { exact: true }).fill("https://");
+  await expect(page.getByRole("link", { name: "Get credentials" })).toHaveCount(0);
+  await page.getByLabel("Server URL", { exact: true }).fill("https://gateway.example.test");
+  await expect(page.getByRole("link", { name: "Get credentials" })).toHaveAttribute(
+    "href",
+    "https://gateway.example.test/api/integration-gateway/authorize",
+  );
+  await page.getByLabel("Runtime key", { exact: true }).fill("fixture-runtime-key");
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  expect(saved).toEqual([
+    {
+      provider: "open-connector",
+      mode: "gateway",
+      endpoint: "https://gateway.example.test",
+      apiKey: "fixture-runtime-key",
+    },
+  ]);
+  await expect(page.getByLabel("Runtime key", { exact: true })).toHaveValue("");
+  await captureScreenshot(page, testInfo, "gateway-runtime-settings");
+});
+
+test("cloud users issue and revoke their runtime keys inside Rakazo", async ({
+  page,
+}, testInfo) => {
+  let rows: Array<{ id: string; name: string; revokedAt: string | null }> = [];
+  await page.route("**/rpc/integrationSetup/listRuntimes", (route) =>
+    route.fulfill({ json: { json: rows } }),
+  );
+  await page.route("**/rpc/integrationSetup/createRuntime", async (route) => {
+    rows = [
+      { id: "fixture-runtime", name: route.request().postDataJSON().json.name, revokedAt: null },
+    ];
+    await route.fulfill({ json: { json: { id: rows[0]!.id, token: "fixture-runtime-key" } } });
+  });
+  await page.route("**/rpc/integrationSetup/revokeRuntime", async (route) => {
+    expect(route.request().postDataJSON().json).toEqual({ id: "fixture-runtime" });
+    rows[0]!.revokedAt = "2026-01-01T00:00:00Z";
+    await route.fulfill({ json: { json: { ok: true } } });
+  });
+  await page.goto("/e2e/fixtures/open-connector.html?runtime");
+  await page.getByLabel("Runtime name", { exact: true }).fill("Home runtime");
+  await page.getByRole("button", { name: "Create key", exact: true }).click();
+  await expect(page.getByLabel("Runtime key", { exact: true })).toHaveValue("fixture-runtime-key");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.getByLabel("Runtime key", { exact: true })).toHaveCount(0);
+  await captureScreenshot(page, testInfo, "gateway-runtime-keys");
+  await page.getByRole("button", { name: "Revoke", exact: true }).click();
+  await expect(page.getByText("Revoked", { exact: true })).toBeVisible();
 });

@@ -109,6 +109,7 @@ export function createCustomerInbox(prisma: PrismaClient) {
             externalThreadId: input.externalThreadId,
             customerId: input.customerId,
             name: input.name,
+            owner: channel.autoReplies ? "bot" : "staff",
           },
           update: {},
         });

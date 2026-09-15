@@ -10,6 +10,7 @@ import {
   CustomerInstructionsInput,
   CustomerKnowledgeInput,
   CustomerListInput,
+  CustomerServiceConnection,
   CustomerWebsiteInput,
 } from "@rakazo/contracts";
 import { customerReplyParts } from "@rakazo/core";
@@ -24,6 +25,7 @@ import {
   Prisma,
   requireCustomerAccess,
 } from "@rakazo/db";
+import { normalizeSecretDestination } from "./bot-secrets.js";
 import {
   createCustomerBusinessTools,
   customerExecutionKey,
@@ -31,11 +33,12 @@ import {
   validateCustomerGrants,
 } from "./customer-business-tools.js";
 import { createCustomerConnector } from "./customer-connector.js";
-import { customerInput, customerPage } from "./customer-mapping.js";
-import { OpenRagCustomerRuntime } from "./customer-runtime.js";
+import { customerDeliveryId, customerInput, customerPage } from "./customer-mapping.js";
+import type { CustomerRuntimeConfig } from "./customer-runtime.js";
+import { LangflowCustomerRuntime } from "./customer-runtime.js";
 import { customerWebhookUrl } from "./customer-webhooks.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
-import { parseModelSecret } from "./pi-oauth.js";
+import { createModelBridge } from "./model-bridge.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 export type CustomerConversationService = ReturnType<typeof createCustomerConversations>;
@@ -54,11 +57,16 @@ export function createCustomerConversations(deps: {
   apiUrl?: string;
   apiInternalUrl?: string;
   webOrigin?: string;
-  runtime?: (config: { baseUrl: string; apiKey?: string }) => CustomerRuntime;
+  runtime?: (config: CustomerRuntimeConfig) => CustomerRuntime;
   notifications?: NotificationProvider;
 }) {
   const { prisma } = deps;
   const inbox = createCustomerInbox(prisma);
+  const modelBridge = createModelBridge(deps);
+  const callbackBaseUrl = (deps.apiInternalUrl ?? deps.apiUrl ?? "http://127.0.0.1:3100").replace(
+    /\/$/,
+    "",
+  );
   const processJob = (id: string) =>
     deps.jobs.enqueue({
       name: "customer.process",
@@ -95,21 +103,39 @@ export function createCustomerConversations(deps: {
     );
   }
 
-  async function runtimeConfig(actor: Pick<Actor, "userId" | "spaceId">, credentialId: string) {
-    const row = await prisma.userModelCredential.findFirst({
-      where: { id: credentialId, userId: actor.userId },
+  async function serviceConfig(
+    scope: Pick<Actor, "userId" | "spaceId"> & { botId: string },
+    raw: unknown,
+  ) {
+    const config = CustomerServiceConnection.parse(raw);
+    const row = await prisma.botSecret.findFirst({
+      where: {
+        name: config.credential,
+        userId: scope.userId,
+        spaceId: scope.spaceId,
+        botId: scope.botId,
+      },
     });
     if (!row) throw new IsolationError();
-    const secret = await prisma.secret.findUniqueOrThrow({ where: { id: row.secretId } });
-    const config = parseModelSecret(deps.secrets.load(secret.ciphertext, secret.id));
-    if (config.kind !== "openai_compatible")
-      throw new Error("Select a configured compatible customer runtime connection");
-    return config;
+    const destination = normalizeSecretDestination(row);
+    if (
+      new URL(config.baseUrl).origin !== destination.origin ||
+      destination.auth.type !== "header" ||
+      destination.auth.name.toLowerCase() !== "x-api-key"
+    )
+      throw new Error("Customer service requires a destination-bound x-api-key credential");
+    return { baseUrl: config.baseUrl, apiKey: deps.secrets.load(row.ciphertext, row.id) };
   }
 
-  const runtimeFor = async (actor: Pick<Actor, "userId" | "spaceId">, credentialId: string) => {
-    const config = await runtimeConfig(actor, credentialId);
-    return deps.runtime?.(config) ?? new OpenRagCustomerRuntime(config);
+  const runtimeFor = async (
+    scope: Pick<Actor, "userId" | "spaceId"> & { botId: string },
+    behavior: { runtime: unknown; knowledge?: unknown },
+  ) => {
+    const config = {
+      ...(await serviceConfig(scope, behavior.runtime)),
+      knowledge: behavior.knowledge ? await serviceConfig(scope, behavior.knowledge) : undefined,
+    };
+    return deps.runtime?.(config) ?? new LangflowCustomerRuntime(config);
   };
   const tools = createCustomerBusinessTools({ prisma, connector, runtime: runtimeFor });
 
@@ -241,7 +267,9 @@ export function createCustomerConversations(deps: {
         if (!behavior) throw new Error("Customer behavior has not been configured");
         if (row.channel.provider !== "web")
           await connection(row.channel, row.channel.connectionId!);
-        const config = await runtimeConfig(row.channel, behavior.credentialId);
+        if (!behavior.modelCredentialId || !behavior.modelId)
+          throw new Error("Republish customer behavior with a model connection");
+        const runtime = await runtimeFor(row.channel, behavior);
         const execution = customerExecutionKey(message.id);
         const running = await prisma.$transaction(async (tx) => {
           if (
@@ -277,24 +305,43 @@ export function createCustomerConversations(deps: {
           orderBy: { seq: "desc" },
           take: 100,
         });
-        const runtime = deps.runtime?.(config) ?? new OpenRagCustomerRuntime(config);
-        const body = await runtime.reply({
-          flowId: behavior.flowId,
-          knowledgeFilterId: behavior.knowledgeFilterId ?? undefined,
-          instructions: behavior.instructions,
-          conversationId,
-          executionContext: {
-            endpoint: `${(deps.apiInternalUrl ?? deps.apiUrl ?? "http://127.0.0.1:3100").replace(/\/$/, "")}/api/customer-tools`,
-            token: execution.token,
+        const modelGrant = await modelBridge.create(
+          row.channel,
+          {
+            credentialId: behavior.modelCredentialId,
+            modelId: behavior.modelId,
           },
-          messages: history
-            .sort((a, b) => (a.inReplyToSeq ?? a.seq) - (b.inReplyToSeq ?? b.seq) || a.seq - b.seq)
-            .map((item) => ({
-              role: item.role === "customer" ? "user" : "assistant",
-              content: item.body,
-            })),
-          signal: AbortSignal.timeout(60_000),
-        });
+          { expiresAt: new Date(Date.now() + 60_000) },
+        );
+        let body: string;
+        try {
+          body = await runtime.reply({
+            model: {
+              baseUrl: `${callbackBaseUrl}${modelGrant.basePath}`,
+              apiKey: modelGrant.apiKey,
+              id: modelGrant.model,
+            },
+            flowId: behavior.flowId,
+            knowledgeFilterId: behavior.knowledgeFilterId ?? undefined,
+            instructions: behavior.instructions,
+            conversationId,
+            executionContext: {
+              endpoint: `${callbackBaseUrl}/api/customer-tools`,
+              token: execution.token,
+            },
+            messages: history
+              .sort(
+                (a, b) => (a.inReplyToSeq ?? a.seq) - (b.inReplyToSeq ?? b.seq) || a.seq - b.seq,
+              )
+              .map((item) => ({
+                role: item.role === "customer" ? "user" : "assistant",
+                content: item.body,
+              })),
+            signal: AbortSignal.timeout(60_000),
+          });
+        } finally {
+          await modelBridge.revoke(row.channel, modelGrant.id);
+        }
         const generated = await prisma.$transaction(async (tx) => {
           const changed = await tx.customerConversation.updateMany({
             where: {
@@ -381,7 +428,7 @@ export function createCustomerConversations(deps: {
               threadId: row.externalThreadId,
               customerId: outbound.senderId ?? row.customerId,
               body: parts[index],
-              messageId: `${outbound.id}:${index}`,
+              messageId: customerDeliveryId(outbound.id, index),
             },
             `customer.send:${outbound.id}:${index}`,
           );
@@ -585,7 +632,7 @@ export function createCustomerConversations(deps: {
         });
         if (!behavior.knowledgeFilterId)
           throw new Error("No approved customer knowledge is configured");
-        const runtime = await runtimeFor(channel, behavior.credentialId);
+        const runtime = await runtimeFor(channel, behavior);
         if (!runtime.search) throw new Error("Knowledge search is unavailable");
         return runtime.search({
           query: input.query,
@@ -657,13 +704,22 @@ export function createCustomerConversations(deps: {
       }
       if (operation === "channel") {
         const { id, ...settings } = CustomerChannelSettingsInput.parse(args);
+        if (
+          settings.autoReplies &&
+          !(await prisma.customerBehavior.findUnique({ where: { botId } }))
+        )
+          throw new Error("Configure customer behavior before enabling automatic replies");
         await prisma.$transaction(async (tx) => {
           const changed = await tx.customerChannel.updateMany({
             where: { id, botId, userId: actor.userId, spaceId: actor.spaceId },
             data: settings,
           });
           if (!changed.count) throw new IsolationError();
-          if (settings.enabled === false || settings.shared === false)
+          if (
+            settings.enabled === false ||
+            settings.shared === false ||
+            settings.autoReplies === false
+          )
             await invalidateCustomerConversations(tx, { channelId: id }, "staff");
         });
         return { ok: true };
@@ -679,6 +735,7 @@ export function createCustomerConversations(deps: {
               provider: true,
               connectionId: true,
               enabled: true,
+              autoReplies: true,
               binding: true,
               pollError: true,
               shared: true,
@@ -696,9 +753,13 @@ export function createCustomerConversations(deps: {
             },
             select: { id: true, provider: true, displayName: true },
           }),
-          runtimes: await prisma.userModelCredential.findMany({
-            where: { userId: actor.userId, provider: "openai-compatible" },
-            select: { id: true, label: true },
+          services: await prisma.botSecret.findMany({
+            where: { userId: actor.userId, spaceId: actor.spaceId, botId },
+            select: { name: true, origin: true, auth: true },
+          }),
+          models: await prisma.userModelCredential.findMany({
+            where: { userId: actor.userId },
+            select: { id: true, label: true, provider: true },
           }),
         };
       if (operation === "instructions" || operation === "configure") {
@@ -712,7 +773,14 @@ export function createCustomerConversations(deps: {
               });
         const actions = validateCustomerGrants(input.actions);
         for (const grant of actions) await connection(actor, grant.connectionId);
-        const runtime = await runtimeFor(actor, input.credentialId);
+        if (input.knowledgeFilterId && !input.knowledge)
+          throw new Error("Select the OpenRAG knowledge connection for this filter");
+        const modelGrant = await modelBridge.create(actor, {
+          credentialId: input.modelCredentialId,
+          modelId: input.modelId,
+        });
+        await modelBridge.revoke(actor, modelGrant.id);
+        const runtime = await runtimeFor({ ...actor, botId }, input);
         if (!runtime.publish)
           throw new Error("Customer runtime does not support managed publication");
         const flowId = await runtime.publish({
@@ -729,8 +797,20 @@ export function createCustomerConversations(deps: {
             throw new Error("Customer behavior changed; inspect and retry");
           return tx.customerBehavior.upsert({
             where: { botId },
-            create: { botId, ...input, actions, flowId },
-            update: { ...input, actions, flowId, revision: { increment: 1 } },
+            create: {
+              botId,
+              ...input,
+              knowledge: input.knowledge ?? Prisma.DbNull,
+              actions,
+              flowId,
+            },
+            update: {
+              ...input,
+              knowledge: input.knowledge ?? Prisma.DbNull,
+              actions,
+              flowId,
+              revision: { increment: 1 },
+            },
           });
         });
       }
@@ -796,6 +876,7 @@ export function createCustomerConversations(deps: {
                   ? 0
                   : Prisma.DbNull),
               enabled: true,
+              autoReplies: true,
               startedAt: now,
               nextPollAt: input.binding.receive.mode === "poll" ? now : null,
             },
@@ -807,6 +888,7 @@ export function createCustomerConversations(deps: {
                   ? 0
                   : Prisma.DbNull),
               enabled: true,
+              autoReplies: true,
               startedAt: now,
               nextPollAt: input.binding.receive.mode === "poll" ? now : null,
               pollToken: null,

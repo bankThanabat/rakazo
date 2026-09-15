@@ -3,10 +3,15 @@ import type { Bot, IntegrationSetupState } from "@rakazo/contracts";
 import { NativeSelect, NativeSelectOption } from "@rakazo/ui-web";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { GatewayRuntimes } from "../components/integrations/GatewayRuntimes";
 import { IntegrationSetup } from "../components/integrations/IntegrationSetup";
 import { rpc } from "../lib/rpc";
 
 export function IntegrationSetupPage() {
+  const [params] = useSearchParams();
+  return params.get("mode") === "runtime" ? <GatewayRuntimes /> : <ServerIntegrationSetupPage />;
+}
+function ServerIntegrationSetupPage() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const serverSetup = params.get("mode") !== "mcp";

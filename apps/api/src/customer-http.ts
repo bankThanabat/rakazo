@@ -1,7 +1,7 @@
 import type { createCustomerBusinessTools, createCustomerIngress } from "@rakazo/adapters";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { readBoundedBody } from "./http-body.js";
+import { bearerToken, readBoundedBody } from "./http-body.js";
 
 /** Channel signatures and short-lived execution keys are independent of app sessions. */
 export function mountCustomerHttp(
@@ -17,8 +17,7 @@ export function mountCustomerHttp(
   app.onError((_error, c) =>
     c.json({ error: "Customer request could not be verified or completed" }, 403),
   );
-  const bearer = (c: Context) =>
-    /^Bearer (.+)$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+  const bearer = (c: Context) => bearerToken(c.req.header("authorization"));
   async function body(c: Context, limit: number) {
     const value = await readBoundedBody(c.req.raw, limit);
     if (value === null) throw new Error("Request too large");

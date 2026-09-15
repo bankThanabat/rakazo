@@ -84,43 +84,9 @@ function fixture() {
   return { prisma, env, request, setupIncoming };
 }
 
-it("starts incoming-message setup for the chosen account through staff admission without activating a channel", async () => {
+it("rejects the old chat-based setup request without a channel secret", async () => {
   const f = fixture();
-  const { response } = await f.setupIncoming();
-  expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ json: { botId: "case-bot", name: "Support" } });
-  const input = dispatch.send.mock.calls[0]![3];
-  expect(input).toMatchObject({ botId: "case-bot", clientNonce: "setup-nonce" });
-  expect(input.text).toContain('connection "line-account"');
-  expect(input.text).toContain("existing owner approval flow");
-  expect(input.text).not.toContain("untrusted replacement");
-  expect(dispatch.teaching).toHaveBeenCalledWith(f.prisma, actor.spaceId, "case-bot");
-  expect(f.prisma.connection.findFirst).toHaveBeenCalledWith({
-    where: {
-      spaceId: actor.spaceId,
-      OR: [{ userId: actor.userId }, { scope: "team" }],
-      id: "line-account",
-      connectorId: "open-connector",
-      status: "connected",
-    },
-  });
-  expect(f.prisma.bot.findFirst).toHaveBeenCalledWith(
-    expect.objectContaining({
-      where: {
-        id: "case-bot",
-        userId: actor.userId,
-        spaceId: actor.spaceId,
-        archivedAt: null,
-        thread: { isNot: null },
-      },
-    }),
-  );
-});
-
-it.each(["connection", "bot"] as const)("rejects setup for an inaccessible %s", async (model) => {
-  const f = fixture();
-  f.prisma[model].findFirst.mockResolvedValue(null as never);
-  expect((await f.setupIncoming()).response.status).toBeGreaterThanOrEqual(400);
+  expect((await f.setupIncoming()).response.status).toBe(400);
   expect(dispatch.send).not.toHaveBeenCalled();
 });
 

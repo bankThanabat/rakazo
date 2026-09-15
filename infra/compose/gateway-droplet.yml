@@ -1,0 +1,47 @@
+# API and durable queue only. Caddy exposes the integration gateway routes.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: rakazo
+      POSTGRES_USER: rakazo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rakazo -d rakazo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  api:
+    build:
+      context: ./source
+      dockerfile: infra/compose/Dockerfile.gateway
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://rakazo:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/rakazo
+      API_HOST: 0.0.0.0
+      API_PORT: 3100
+      DATA_DIR: /data
+      SANDBOX_PROVIDER: none
+      AGENT_RUNTIME: pi
+      WAKEUP_DRIVER: graphile
+      SIGNUPS_ENABLED: "false"
+    ports:
+      - "127.0.0.1:3310:3100"
+    volumes:
+      - appdata:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
+volumes:
+  pgdata:
+  appdata:
