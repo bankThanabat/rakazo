@@ -520,9 +520,9 @@ test("cloud users issue and revoke their runtime keys inside Rakazo", async ({
   await page.goto("/e2e/fixtures/open-connector.html?runtime");
   await page.getByLabel("Runtime name", { exact: true }).fill("Home runtime");
   await page.getByRole("button", { name: "Create key", exact: true }).click();
-  await expect(page.getByLabel("Runtime key", { exact: true })).toHaveValue("fixture-runtime-key");
+  await expect(page.getByLabel("Runtime key (shown once)", { exact: true })).toHaveValue("fixture-runtime-key");
   await page.getByRole("button", { name: "Done", exact: true }).click();
-  await expect(page.getByLabel("Runtime key", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Runtime key (shown once)", { exact: true })).toHaveCount(0);
   await captureScreenshot(page, testInfo, "gateway-runtime-keys");
   await page.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(page.getByText("Revoked", { exact: true })).toBeVisible();
