@@ -68,6 +68,26 @@ describe("optional model bridge HTTP API", () => {
     expect(await (await f.app.request("/other-provider")).json()).toEqual({ auth: "unchanged" });
   });
 
+  it("creates a staff-following grant and keeps its model alias stable", async () => {
+    const f = fixture();
+    const created = await f.app.request("/api/model-bridge/grants", {
+      method: "POST",
+      headers: { cookie: "test-session=owner", "content-type": "application/json" },
+      body: JSON.stringify({ botId: f.staff.id }),
+    });
+    expect(created.status).toBe(201);
+    const { apiKey, model } = await created.json();
+    expect(model).toBe("rakazo-staff");
+    f.staff.modelId = "gpt-5.4";
+    const result = await f.app.request("/api/model-bridge/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "Hello" }] }),
+    });
+    expect(result.status).toBe(200);
+    expect(f.payloads.at(-1)).toMatchObject({ model: "gpt-5.4" });
+  });
+
   it("never accepts a session cookie as a model key or a model key as a session", async () => {
     const f = fixture();
     const { apiKey, basePath } = await (await f.grant()).json();

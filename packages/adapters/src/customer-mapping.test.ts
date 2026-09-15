@@ -1,6 +1,11 @@
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { customerField, customerInput, customerPage } from "./customer-mapping.js";
+import {
+  customerDeliveryId,
+  customerField,
+  customerInput,
+  customerPage,
+} from "./customer-mapping.js";
 
 const customerTestBinding = CustomerBindingSchema.parse({
   receive: {
@@ -31,6 +36,12 @@ const message = {
   direction: "incoming",
 };
 describe("messaging action mappings", () => {
+  it("uses stable UUID retry keys with distinct keys for each message and part", () => {
+    // Independent UUIDv5 URL-namespace vectors, checked with Python's uuid module.
+    expect(customerDeliveryId("message", 0)).toBe("e8da1d7d-7dbf-5f63-b4d4-f3a683d4e633");
+    expect(customerDeliveryId("message", 1)).toBe("514006c6-1704-58dc-bd72-d544a8b375cc");
+    expect(customerDeliveryId("another-message", 0)).not.toBe(customerDeliveryId("message", 0));
+  });
   it("ignores old messages and echoes and orders a page before accepting its checkpoint", () => {
     const result = customerPage(
       customerTestBinding,

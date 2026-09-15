@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { isPlainHttpUrl } from "./http-url.js";
+import { isLocalMcpHost } from "./mcp.js";
 
 export const BotSecretName = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 
@@ -32,20 +34,15 @@ export const BotSecretDestination = z.object({
     .string()
     .max(2048)
     .refine((value) => {
-      try {
-        const url = new URL(value);
-        return (
-          url.protocol === "https:" &&
-          !url.username &&
-          !url.password &&
-          !url.search &&
-          !url.hash &&
-          url.pathname === "/"
-        );
-      } catch {
-        return false;
-      }
-    }, "Expected an HTTPS origin without a path, credentials, query, or fragment"),
+      if (!isPlainHttpUrl(value, { originOnly: true })) return false;
+      const url = new URL(value);
+      return (
+        url.protocol === "https:" ||
+        isLocalMcpHost(url.hostname) ||
+        url.hostname === "host.docker.internal" ||
+        url.hostname.endsWith(".localhost")
+      );
+    }, "Expected an HTTPS origin or local HTTP service origin without a path, credentials, query, or fragment"),
   auth: BotSecretAuth,
 });
 export type BotSecretDestination = z.infer<typeof BotSecretDestination>;

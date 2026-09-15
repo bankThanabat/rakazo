@@ -1,3 +1,7 @@
+export function bearerToken(authorization: string | undefined): string {
+  return /^Bearer (.+)$/i.exec(authorization ?? "")?.[1] ?? "";
+}
+
 /** Reads a request body without buffering more than maxBytes. */
 export async function readBoundedBody(request: Request, maxBytes: number): Promise<string | null> {
   const contentLengthHeader = request.headers.get("content-length");

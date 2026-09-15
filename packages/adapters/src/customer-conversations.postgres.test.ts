@@ -11,7 +11,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createCustomerConversations } from "./customer-conversations.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
-import { createOpenConnectorFixture } from "./open-connector-test-fixture.js";
+import { createModelBridge } from "./model-bridge.js";
+import { createOpenConnectorFixture, sampleAction } from "./open-connector-test-fixture.js";
 import { serializeModelSecret } from "./pi-oauth.js";
 
 const enabled = process.env.VERIFY_DATABASE === "1" && Boolean(process.env.DATABASE_URL);
@@ -88,6 +89,17 @@ describe.skipIf(!enabled)(
         sendStarted?.();
         return holdSend ?? { id: "confirmed" };
       });
+      // Exercise a connector that requires UUID delivery keys, not arbitrary strings.
+      f.providers[0]!.actions = f.providers[0]!.actions.map((action) => ({
+        ...action,
+        inputSchema: {
+          ...sampleAction.inputSchema,
+          properties: {
+            ...sampleAction.inputSchema.properties,
+            retryKey: { type: "string", format: "uuid" },
+          },
+        },
+      }));
       for (const provider of ["sample", "another-messenger"]) {
         if (provider !== "sample")
           f.providers.push({
@@ -126,6 +138,26 @@ describe.skipIf(!enabled)(
         await db.prisma.user.delete({ where: { id: owner.userId } });
       }
     });
+    async function saveServices(owner: { userId: string; spaceId: string; botId: string }) {
+      for (const [name, origin] of [
+        ["runtime", "https://runtime.example.test"],
+        ["knowledge", "https://rag.example.test"],
+      ]) {
+        const id = randomUUID();
+        await db.prisma.botSecret.create({
+          data: {
+            id,
+            userId: owner.userId,
+            spaceId: owner.spaceId,
+            botId: owner.botId,
+            name: name!,
+            origin: origin!,
+            auth: { type: "header", name: "x-api-key" },
+            ciphertext: f.secrets.seal("fixture-service-key", id),
+          },
+        });
+      }
+    }
     async function setup(provider = "sample") {
       const owner = await provisionMessagingIdentity(
         db.prisma,
@@ -171,8 +203,12 @@ describe.skipIf(!enabled)(
           secretId: stored.id,
         },
       });
+      await saveServices(owner);
       await service.manage(owner, owner.botId, "configure", {
-        credentialId: credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Public menu only",
       });
       await service.manage(owner, owner.botId, "connect", {
@@ -290,12 +326,19 @@ describe.skipIf(!enabled)(
         },
       });
       await service.manage(a.owner, a.owner.botId, "configure", {
-        credentialId: a.credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: a.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Public rules",
         knowledgeFilterId: "case-sources",
       });
+      await saveServices({ ...teammate, botId: bot.id });
       await service.manage(teammate, bot.id, "configure", {
-        credentialId: b.credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: b.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Other rules",
         knowledgeFilterId: "other-sources",
       });
@@ -437,6 +480,9 @@ describe.skipIf(!enabled)(
         await service.process(c.id);
         await Promise.all(contenders);
         expect(sends).toHaveLength(4);
+        expect(
+          new Set(sends.map((send) => (send.input as { retryKey: string }).retryKey)).size,
+        ).toBe(4);
         expect(
           await db.prisma.customerMessage.findFirst({
             where: { conversationId: c.id, role: "bot" },
@@ -644,20 +690,52 @@ describe.skipIf(!enabled)(
       await service.process(c.id);
       expect(sends).toHaveLength(0);
     });
+    it("binds service credentials to their destination and revokes each turn's model grant", async () => {
+      const a = await setup();
+      await expect(
+        service.manage(a.owner, a.owner.botId, "configure", {
+          runtime: { credential: "runtime", baseUrl: "https://other.example.test/api/v1" },
+          modelCredentialId: a.credential.id,
+          modelId: "fixture-model",
+          instructions: "public",
+        }),
+      ).rejects.toThrow("destination-bound");
+      const c = await receive(a);
+      const bridge = createModelBridge({ prisma: db.prisma, secrets: f.secrets });
+      let token = "";
+      reply.mockImplementation(async (request) => {
+        token = request.model!.apiKey;
+        await expect(bridge.models(token)).resolves.toMatchObject({ object: "list" });
+        throw new Error("interrupted flow");
+      });
+      await service.process(c.id);
+      await expect(bridge.models(token)).rejects.toThrow("unavailable");
+      expect(
+        await db.prisma.secret.count({ where: { userId: a.owner.userId, kind: "model-bridge" } }),
+      ).toBe(0);
+      expect(sends).toHaveLength(0);
+    });
+
     it("blocks revoked accounts, cross-owner configuration, and archived sending", async () => {
       const a = await setup();
       const b = await setup("another-messenger");
       const c = await receive(a);
       await expect(
         service.manage(b.owner, a.owner.botId, "configure", {
-          credentialId: b.credential.id,
+          runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+          modelCredentialId: b.credential.id,
+          modelId: "fixture-model",
+          knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
           flowId: "bad",
           instructions: "bad",
         }),
       ).rejects.toThrow();
       await expect(
         service.manage(a.owner, a.owner.botId, "configure", {
-          credentialId: b.credential.id,
+          runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+          modelCredentialId: b.credential.id,
+          modelId: "fixture-model",
+          knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
           flowId: "bad",
           instructions: "bad",
         }),
@@ -690,7 +768,10 @@ describe.skipIf(!enabled)(
         where: { botId: a.owner.botId },
       });
       expect(after).toMatchObject({
-        credentialId: before.credentialId,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: before.modelCredentialId,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         flowId: "flow-2",
         knowledgeFilterId: before.knowledgeFilterId,
         revision: before.revision + 1,
@@ -878,7 +959,10 @@ describe.skipIf(!enabled)(
         }
       };
       await service.manage(a.owner, a.owner.botId, "configure", {
-        credentialId: a.credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: a.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Check promotion",
         actions: [grant],
       });
@@ -911,7 +995,10 @@ describe.skipIf(!enabled)(
         });
         expect(refunds).toBe(1);
         await service.manage(a.owner, a.owner.botId, "configure", {
-          credentialId: a.credential.id,
+          runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+          modelCredentialId: a.credential.id,
+          modelId: "fixture-model",
+          knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
           instructions: "Stop refunds",
           actions: [],
         });
@@ -953,7 +1040,10 @@ describe.skipIf(!enabled)(
         return { refunded: true };
       };
       await service.manage(a.owner, a.owner.botId, "configure", {
-        credentialId: a.credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: a.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Check ownership and current refund eligibility",
         actions: [
           {
@@ -1015,7 +1105,10 @@ describe.skipIf(!enabled)(
         });
       const a = await setup();
       await service.manage(a.owner, a.owner.botId, "configure", {
-        credentialId: a.credential.id,
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: a.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
         instructions: "Refund only the sender's orders",
         actions: [
           {

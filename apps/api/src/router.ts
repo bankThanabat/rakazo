@@ -15,7 +15,7 @@ import {
   runJobKey,
   type SandboxProvider,
 } from "@rakazo/adapter-kit";
-import type { IntegrationProviderSettings } from "@rakazo/adapters";
+import type { IntegrationGateway, IntegrationProviderSettings } from "@rakazo/adapters";
 import {
   acquireComputerExecutionLease,
   applyTeachingDesktopInput,
@@ -32,6 +32,7 @@ import {
   computerSupportsUpdate,
   computerUpdateView,
   createVoiceProvider,
+  customerIncomingTemplate,
   deletePushToken,
   deploymentAutoReviewDefault,
   destroyBot,
@@ -54,7 +55,6 @@ import {
   type PiOAuthLogins,
   planLiveConnectionSync,
   prepareApiInstall,
-  prepareCustomerWebhookSetup,
   prepareGraphqlInstall,
   probeOpenAiCompatibleModels,
   provisionComputer,
@@ -71,6 +71,7 @@ import {
   screenLeaseIdForRun,
   scriptedCatalogEntry,
   serializeModelSecret,
+  setupCustomerIncoming,
   takeoverLeaseMs,
   toComputerRef,
   touchRunningComputer,
@@ -430,6 +431,7 @@ export interface RouterDeps {
   secrets: EncryptedSecretStore;
   oauthLogins: PiOAuthLogins;
   integrationSettings?: IntegrationProviderSettings;
+  integrationGateway?: IntegrationGateway;
   composio?: ComposioProvider;
   mcpOAuth?: McpOAuthBroker;
   connectors: ConnectorRegistry;
@@ -478,6 +480,10 @@ export function createRouter(deps: RouterDeps) {
   const repos = createRepos(deps.prisma);
 
   const onboardingDeps = { prisma: deps.prisma, events: deps.events, connectors: deps.connectors };
+  const gateway = () => {
+    if (!deps.integrationGateway) throw new ORPCError("SERVICE_UNAVAILABLE");
+    return deps.integrationGateway;
+  };
   const mcpOAuth = deps.mcpOAuth ?? new McpOAuthBroker(deps.prisma, deps.secrets);
   const groupRepos = createGroupRepos(deps.prisma);
   const taughtSkills = createTaughtSkillsService({
@@ -3231,6 +3237,25 @@ export function createRouter(deps: RouterDeps) {
       }),
     },
     integrationSetup: {
+      gatewayConfigure: authed.integrationSetup.gatewayConfigure.handler(
+        async ({ context, input }) => {
+          if (!context.actor.isDeploymentOwner) throw new ORPCError("FORBIDDEN");
+          await gateway().configure(context.actor, input);
+          return { ok: true as const };
+        },
+      ),
+      createRuntime: authed.integrationSetup.createRuntime.handler(({ context, input }) =>
+        gateway().createRuntime(context.actor, input.name),
+      ),
+      listRuntimes: authed.integrationSetup.listRuntimes.handler(async ({ context }) => {
+        if (!deps.integrationGateway) return [];
+        const rows = await deps.integrationGateway.listRuntimes(context.actor);
+        return rows.map((row) => ({ ...row, revokedAt: row.revokedAt?.toISOString() ?? null }));
+      }),
+      revokeRuntime: authed.integrationSetup.revokeRuntime.handler(async ({ context, input }) => {
+        await gateway().revokeRuntime(context.actor, input.id);
+        return { ok: true as const };
+      }),
       get: authed.integrationSetup.get.handler(async ({ context }) => {
         const canConfigure = context.actor.isDeploymentOwner;
         const providers = canConfigure
@@ -3269,17 +3294,16 @@ export function createRouter(deps: RouterDeps) {
     connections: {
       setupIncoming: authed.connections.setupIncoming.handler(async ({ context, input }) => {
         if (!deps.integrationSettings) throw new ORPCError("SERVICE_UNAVAILABLE");
-        const { text, ...assistant } = await prepareCustomerWebhookSetup(
-          { prisma: deps.prisma, integrations: deps.integrationSettings },
+        return setupCustomerIncoming(
+          {
+            prisma: deps.prisma,
+            secrets: deps.secrets,
+            integrations: deps.integrationSettings,
+            apiUrl: deps.env.apiUrl,
+          },
           context.actor,
           input,
         );
-        await sendStaffMessage(context.actor, {
-          botId: assistant.botId,
-          text,
-          clientNonce: input.clientNonce,
-        });
-        return assistant;
       }),
       setup: authed.connections.setup.handler(async ({ context, input }) => {
         const provider = deps.connectors.managed(input.connectorId);
@@ -3446,7 +3470,12 @@ export function createRouter(deps: RouterDeps) {
               authorizationUrl:
                 row.userId === context.actor.userId ? state.authorizationUrl : undefined,
               id: row.id,
-              webhookUrl: webhookUrls.get(row.id),
+              webhookUrl: webhookUrls.get(row.id)?.url,
+              automaticReplies: webhookUrls.get(row.id)?.autoReplies,
+              incomingSecrets:
+                row.connectorId === "open-connector"
+                  ? customerIncomingTemplate(row.provider)?.secrets
+                  : undefined,
               canManage: row.userId === context.actor.userId,
               connectorId: row.connectorId,
               provider: row.provider,

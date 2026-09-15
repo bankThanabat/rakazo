@@ -1,0 +1,12 @@
+[
+  {
+    "name": "OpenRAG",
+    "path": "apps/openrag",
+    "revision": "5cf69da52cac77e3040a6b8343d479bca9471a18"
+  },
+  {
+    "name": "OpenConnector",
+    "path": "infra/open-connector",
+    "revision": "493def090c95a92ee312b95594c489c9856a16af"
+  }
+]

@@ -1,0 +1,10 @@
+connect.example.com {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	reverse_proxy 127.0.0.1:3000 {
+		header_down Set-Cookie "^(.*)$" "$1; Secure"
+	}
+}

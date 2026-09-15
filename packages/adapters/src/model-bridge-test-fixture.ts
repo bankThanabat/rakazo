@@ -108,7 +108,24 @@ export function modelBridgeFixture(
       return { count };
     }),
   };
+  const staff = {
+    id: "staff",
+    ...bridgeTestActor,
+    archivedAt: null,
+    modelProvider: provider as string | null,
+    modelId: modelId as string | null,
+    thinkingLevel: null,
+  };
+  const preference = { ...bridgeTestActor, modelId, isDefault: true, credential };
   const prisma = {
+    bot: { findFirst: vi.fn(async ({ where }) => (matches(staff, where) ? staff : null)) },
+    spaceModelPreference: {
+      findFirst: vi.fn(async ({ where }) => {
+        const { credential: filter, ...scope } = where;
+        if (!matches(preference, scope) || (filter && !matches(credential, filter))) return null;
+        return preference;
+      }),
+    },
     secret,
     spaceMember: {
       findFirst: vi.fn(async ({ where }) =>
@@ -148,5 +165,17 @@ export function modelBridgeFixture(
     },
   });
   const issue = () => bridge.create(bridgeTestActor, { credentialId: credential.id, modelId });
-  return { bridge, issue, upstream, rows, prisma, credential, configurations, payloads, modelId };
+  return {
+    bridge,
+    issue,
+    upstream,
+    rows,
+    prisma,
+    credential,
+    configurations,
+    payloads,
+    modelId,
+    staff,
+    preference,
+  };
 }

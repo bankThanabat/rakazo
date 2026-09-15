@@ -12,7 +12,6 @@ export function OpenConnectorCatalog({
   onRefresh,
   onSetup,
   activeBotId,
-  onOpenAssistant,
 }: {
   connections: Connection[];
   onRefresh: () => Promise<unknown>;
@@ -53,7 +52,7 @@ export function OpenConnectorCatalog({
     connectionId: string;
     bots: Array<{ id: string; name: string }>;
     botId: string;
-    clientNonce: string;
+    secrets: Record<string, string>;
   } | null>(null);
   const controller = useRef<AbortController | null>(null);
   const accounts = connections.filter(
@@ -259,7 +258,7 @@ export function OpenConnectorCatalog({
         connectionId,
         bots,
         botId: bots.find((bot) => bot.id === activeBotId)?.id ?? bots[0]!.id,
-        clientNonce: crypto.randomUUID(),
+        secrets: {},
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t`Could not start setup. Try again.`);
@@ -272,9 +271,10 @@ export function OpenConnectorCatalog({
     setPending(true);
     setError(null);
     try {
-      const { connectionId, botId, clientNonce } = incomingSetup;
-      const assistant = await rpc.connections.setupIncoming({ connectionId, botId, clientNonce });
-      onOpenAssistant(assistant);
+      const { connectionId, botId, secrets } = incomingSetup;
+      await rpc.connections.setupIncoming({ connectionId, botId, secrets });
+      setIncomingSetup(null);
+      await onRefresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t`Could not start setup. Try again.`);
     } finally {
@@ -556,6 +556,11 @@ export function OpenConnectorCatalog({
               </div>
               {row.webhookUrl ? (
                 <div className="space-y-1">
+                  {row.automaticReplies !== undefined ? (
+                    <p className="text-sm text-muted-foreground">
+                      {row.automaticReplies ? t`Automatic replies on` : t`Automatic replies off`}
+                    </p>
+                  ) : null}
                   <label htmlFor={`${formId}-${row.id}-webhook`} className="text-sm">
                     <Trans>Webhook URL</Trans>
                   </label>
@@ -587,7 +592,9 @@ export function OpenConnectorCatalog({
                     </Button>
                   </div>
                 </div>
-              ) : row.status === "connected" ? (
+              ) : row.status === "connected" &&
+                row.incomingSecrets?.length &&
+                row.canManage !== false ? (
                 incomingSetup?.connectionId === row.id ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <NativeSelect
@@ -604,13 +611,35 @@ export function OpenConnectorCatalog({
                         </NativeSelectOption>
                       ))}
                     </NativeSelect>
+                    {row.incomingSecrets.map((secret) => (
+                      <Input
+                        key={secret.key}
+                        aria-label={secret.label}
+                        placeholder={secret.label}
+                        type="password"
+                        autoComplete="new-password"
+                        value={incomingSetup.secrets[secret.key] ?? ""}
+                        disabled={pending}
+                        onChange={(event) =>
+                          setIncomingSetup({
+                            ...incomingSetup,
+                            secrets: { ...incomingSetup.secrets, [secret.key]: event.target.value },
+                          })
+                        }
+                      />
+                    ))}
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={pending}
+                      disabled={
+                        pending ||
+                        row.incomingSecrets.some(
+                          (secret) => !incomingSetup.secrets[secret.key]?.trim(),
+                        )
+                      }
                       onClick={() => void continueIncomingSetup()}
                     >
-                      <Trans>Continue in chat</Trans>
+                      <Trans>Enable incoming messages</Trans>
                     </Button>
                     <Button
                       variant="ghost"
@@ -731,7 +760,7 @@ export function OpenConnectorCatalog({
                   <p className="text-sm">
                     <Trans>Admin setup required</Trans>
                   </p>
-                  {canConfigure ? (
+                  {canConfigure && !setup.oauthManaged ? (
                     <>
                       <OpenConnectorFields
                         fields={[

@@ -36,11 +36,10 @@ export * from "./computer-workspace.js";
 export * from "./cursor-cloud-agent.js";
 export { createCustomerBusinessTools } from "./customer-business-tools.js";
 export * from "./customer-conversations.js";
+export { customerIncomingTemplate } from "./customer-incoming.js";
 export { createCustomerIngress } from "./customer-ingress.js";
-export {
-  listConnectionWebhooks,
-  prepareCustomerWebhookSetup,
-} from "./customer-webhooks.js";
+export * from "./customer-relay.js";
+export { listConnectionWebhooks } from "./customer-webhooks.js";
 export * from "./daytona-emulator.js";
 export * from "./daytona-sandbox.js";
 export * from "./deployment-model.js";
@@ -63,6 +62,8 @@ export * from "./group-handoff.js";
 export * from "./home.js";
 export * from "./host-aware-sandbox.js";
 export * from "./installed-connectors.js";
+export * from "./integration-gateway.js";
+export * from "./integration-gateway-client.js";
 export * from "./integration-provider-settings.js";
 export * from "./job-reconciler.js";
 export * from "./keyless-http-web.js";

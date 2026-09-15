@@ -39,6 +39,7 @@ import {
   InMemoryJobQueue,
   InMemoryRealtimeFanout,
   InstalledConnectorProvider,
+  IntegrationGateway,
   IntegrationProviderSettings,
   isComposioEnabled,
   isMessagingSurfaceEnabled,
@@ -56,6 +57,7 @@ import {
   piSessionsRoot,
   pushTokenPath,
   type RemoteConnectorDependencies,
+  receiveCustomerRelayBatch,
   reconcileCloudAgents,
   reconcileComputerUpdates,
   removePiUserSessions,
@@ -88,6 +90,7 @@ import { cors } from "hono/cors";
 import { mountCustomerHttp } from "./customer-http.js";
 import { mountCustomerWebsite } from "./customer-website.js";
 import { type AppEnv, loadEnv } from "./env.js";
+import { mountIntegrationGateway } from "./integration-gateway-http.js";
 import { mountLocalSettings } from "./local-settings.js";
 import {
   createMessagingInboundHandler,
@@ -305,6 +308,7 @@ export async function createApp(
       "http://127.0.0.1:19006",
     ],
     beforeDeleteUser: async (userId) => {
+      await integrationGateway.removeUserAccounts(userId);
       const bots = await prisma.bot.findMany({
         where: { userId },
         select: { id: true, userId: true, spaceId: true, name: true, archivedAt: true },
@@ -417,6 +421,11 @@ export async function createApp(
     : undefined;
   reconciler?.start();
 
+  const integrationGateway = new IntegrationGateway({
+    prisma,
+    secrets,
+    integrations: integrationSettings,
+  });
   const router = createRouter({
     prisma,
     events,
@@ -429,6 +438,7 @@ export async function createApp(
     secrets,
     oauthLogins,
     integrationSettings,
+    integrationGateway,
     mcpOAuth,
     composio: stack.composio,
     connectors: stack.connector,
@@ -498,6 +508,30 @@ export async function createApp(
     return auth.handler(c.req.raw);
   });
   mountLocalSettings(app, { token: env.desktopStackToken, prisma, rpc });
+  mountIntegrationGateway(app, integrationGateway, env.webOrigin);
+  let relayBusy = false;
+  let lastConnectorMaintenance = 0;
+  const relayAbort = new AbortController();
+  const relayTimer = setInterval(() => {
+    if (relayBusy) return;
+    relayBusy = true;
+    void (async () => {
+      await receiveCustomerRelayBatch(
+        { prisma, secrets, integrations: integrationSettings, jobs },
+        relayAbort.signal,
+      );
+      if (Date.now() - lastConnectorMaintenance > 60000) {
+        lastConnectorMaintenance = Date.now();
+        await (await integrationSettings.resolve("open-connector"))?.maintain?.();
+        await integrationGateway.maintain();
+      }
+    })()
+      .catch(() => logger.warn("Integration relay or maintenance is unavailable"))
+      .finally(() => {
+        relayBusy = false;
+      });
+  }, 5000);
+  relayTimer.unref();
   mountCustomerHttp(
     app,
     createCustomerIngress({ prisma, secrets, integrations: integrationSettings, jobs }),
@@ -842,6 +876,8 @@ export async function createApp(
       // Abort in-flight continueRun boot waits before draining jobs so stop() cannot sit
       // on waitForComputerReady for the full boot-wait window during shared Postgres journeys.
       shutdown.abort();
+      clearInterval(relayTimer);
+      relayAbort.abort();
       oauthLogins.abortAll();
       messagingStopped = true;
       clearMessagingRetryDelay?.();

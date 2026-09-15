@@ -560,6 +560,9 @@ export type MemoryDocument = z.infer<typeof MemoryDocumentSchema>;
 export const ConnectionSchema = z.object({
   id: Id,
   webhookUrl: z.string().url().optional(),
+  automaticReplies: z.boolean().optional(),
+  /** Present when this provider can receive customer messages; lists the secrets setup needs. */
+  incomingSecrets: z.array(z.object({ key: z.string(), label: z.string() })).optional(),
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),
   authorizationUrl: z.string().url().optional(),

@@ -231,7 +231,7 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "request_secret",
     description:
-      "Collect a credential in a masked field. Supply credential to save a named API credential for this bot and user at one HTTPS origin, or connectionId for a one-use connector code. Existing named credentials are reused unless replace is true. For website logins, CAPTCHA, passkeys, or anything that needs the live desktop, call request_takeover instead.",
+      "Collect a credential in a masked field. Supply credential to save a named API credential for this bot and user at one HTTPS or local HTTP origin, or connectionId for a one-use connector code. Existing named credentials are reused unless replace is true. For website logins, CAPTCHA, passkeys, or anything that needs the live desktop, call request_takeover instead.",
     // Exactly one destination: credential XOR connectionId. Sibling optionals
     // looked schema-valid to models but the executor rejects both and neither.
     inputSchema: {

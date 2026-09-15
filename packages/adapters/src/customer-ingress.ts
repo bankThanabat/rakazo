@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { JobPublisher } from "@rakazo/adapter-kit";
+import type { GatewayDelivery } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { CustomerMessageLimitError, createCustomerInbox } from "@rakazo/db";
 import { createCustomerConnector } from "./customer-connector.js";
@@ -94,25 +95,40 @@ export function createCustomerIngress(deps: {
         }
         if (typeof challenge === "string" && challenge.length <= 4000) return { challenge };
       }
-      const page = customerPage(binding, data, channel.startedAt!);
-      for (const message of page.messages) {
-        // Fence a mapping/account change racing signature verification.
-        let id: string;
-        try {
-          id = await inbox.receive(channelId, message, undefined, channel.updatedAt);
-        } catch (error) {
-          if (error instanceof CustomerMessageLimitError) continue;
-          throw error;
-        }
-        await deps.jobs
-          .enqueue({
-            name: "customer.process",
-            payload: { conversationId: id },
-            replaceKey: `customer.process:${id}`,
-          })
-          .catch(() => undefined);
-      }
-      return { ok: true };
+      return accept(channel, binding, data);
+    },
+    async receiveRelayed(delivery: GatewayDelivery) {
+      const { channel, binding } = await load(delivery.channelId);
+      const connection = await connector.connection(channel, channel.connectionId!);
+      if (channel.relayId !== delivery.routeId || connection.providerRef !== delivery.providerRef)
+        throw new Error("Relay delivery does not match its local channel");
+      return accept(channel, binding, JSON.parse(delivery.payload));
     },
   };
+  async function accept(
+    channel: Awaited<ReturnType<typeof load>>["channel"],
+    binding: Awaited<ReturnType<typeof load>>["binding"],
+    payload: unknown,
+  ) {
+    const channelId = channel.id;
+    const page = customerPage(binding, payload, channel.startedAt!);
+    for (const message of page.messages) {
+      // Fence a mapping/account change racing signature verification.
+      let id: string;
+      try {
+        id = await inbox.receive(channelId, message, undefined, channel.updatedAt);
+      } catch (error) {
+        if (error instanceof CustomerMessageLimitError) continue;
+        throw error;
+      }
+      await deps.jobs
+        .enqueue({
+          name: "customer.process",
+          payload: { conversationId: id },
+          replaceKey: `customer.process:${id}`,
+        })
+        .catch(() => undefined);
+    }
+    return { ok: true };
+  }
 }

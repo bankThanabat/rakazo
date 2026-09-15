@@ -16,6 +16,7 @@ export interface CustomerRuntime {
     knowledgeFilterId?: string;
     instructions: string;
     conversationId: string;
+    model?: { baseUrl: string; apiKey: string; id: string };
     executionContext?: { endpoint: string; token: string };
     messages: Array<{ role: "user" | "assistant"; content: string }>;
     signal: AbortSignal;
