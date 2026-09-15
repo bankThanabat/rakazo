@@ -652,4 +652,10 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Set up incoming messages": "设置消息接收",
   "Choose an assistant to continue in chat.": "选择助手以在聊天中继续。",
   "Create an assistant first.": "请先创建助手。",
+  "Automatic replies off": "自动回复已关闭",
+  "Automatic replies on": "自动回复已开启",
+  "Choose an assistant": "选择助手",
+  "Enable incoming messages": "启用消息接收",
+  "Rakazo gateway": "Rakazo 网关",
+  "Runtime key": "运行时密钥",
 };

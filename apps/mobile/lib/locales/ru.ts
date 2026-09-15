@@ -671,4 +671,10 @@ export const RU_MESSAGES: Record<string, string> = {
   "Set up incoming messages": "Настроить приём сообщений",
   "Choose an assistant to continue in chat.": "Выберите помощника, чтобы продолжить в чате.",
   "Create an assistant first.": "Сначала создайте помощника.",
+  "Automatic replies off": "Автоответы выключены",
+  "Automatic replies on": "Автоответы включены",
+  "Choose an assistant": "Выберите помощника",
+  "Enable incoming messages": "Включить приём сообщений",
+  "Rakazo gateway": "Шлюз Rakazo",
+  "Runtime key": "Ключ среды выполнения",
 };

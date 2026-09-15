@@ -214,7 +214,7 @@ export class IntegrationGateway {
           case "incoming":
             if (!(await adapter.pollConnection(command.ref, context)))
               throw new Error("Account authorization is pending");
-            return this.provisionRoute(tx, owned(command.ref), command);
+            return this.provisionRoute(owned(command.ref), command);
           case "deliveries":
             return this.pullDeliveries(tx, runtime.id);
           case "ack": {
@@ -230,31 +230,30 @@ export class IntegrationGateway {
       { timeout: 120000 },
     );
   }
-  /** One relay route per account and local channel. Re-running setup with the same
-   * secret repairs an interrupted provisioning instead of creating duplicates. */
+  /** One relay route per account and local channel. The route row is written with
+   * the base client, outside the command transaction, so it survives a failed
+   * Convoy call and the retry repairs the same route instead of creating another. */
   private async provisionRoute(
-    tx: Prisma.TransactionClient,
     account: GatewayAccount,
     command: Extract<GatewayCommand, { op: "incoming" }>,
   ) {
+    const { prisma, secrets } = this.deps;
     const config = await this.configuration();
     if (!config) throw new Error("Webhook relay is not configured");
     const key = { accountId: account.id, channelId: command.channelId };
-    let route = await tx.gatewayRoute.findUnique({ where: { accountId_channelId: key } });
+    let route = await prisma.gatewayRoute.findUnique({ where: { accountId_channelId: key } });
     if (!route) {
       const id = randomUUID();
-      const ciphertext = this.deps.secrets.seal(
+      const ciphertext = secrets.seal(
         JSON.stringify({
           webhookSecret: command.webhookSecret,
           deliveryToken: randomBytes(32).toString("base64url"),
         }),
         id,
       );
-      route = await tx.gatewayRoute.create({ data: { id, ...key, ciphertext } });
+      route = await prisma.gatewayRoute.create({ data: { id, ...key, ciphertext } });
     }
-    const secret = routeSecrets.parse(
-      JSON.parse(this.deps.secrets.load(route.ciphertext, route.id)),
-    );
+    const secret = routeSecrets.parse(JSON.parse(secrets.load(route.ciphertext, route.id)));
     if (!equalWebhookSecret(secret.webhookSecret, command.webhookSecret))
       throw new Error("Secret differs from the existing route");
     const provisioned = await new ConvoyRelay(config).provision(
@@ -263,7 +262,7 @@ export class IntegrationGateway {
       secret.webhookSecret,
       secret.deliveryToken,
     );
-    await tx.gatewayRoute.update({
+    await prisma.gatewayRoute.update({
       where: { id: route.id },
       data: { ...provisioned, enabled: true },
     });

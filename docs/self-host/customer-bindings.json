@@ -20,11 +20,7 @@
       },
       "fields": {
         "id": ["webhookEventId"],
-        "threadId": [
-          ["source", "groupId"],
-          ["source", "roomId"],
-          ["source", "userId"]
-        ],
+        "threadId": [["source", "groupId"], ["source", "roomId"], ["source", "userId"]],
         "customerId": ["source", "userId"],
         "body": ["message", "text"],
         "timestamp": ["timestamp"]
