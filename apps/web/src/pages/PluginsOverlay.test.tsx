@@ -33,6 +33,14 @@ vi.mock("@rakazo/ui-web", () => {
   const strip = ({ variant: _v, size: _s, render: _r, ...rest }: Partial<ButtonProps>) => rest;
   const Box = ({ children }: Props) => <div>{children}</div>;
   return {
+    AlertDialog: ({ open, children }: Props & { open: boolean }) => (open ? children : null),
+    AlertDialogContent: Box,
+    AlertDialogHeader: Box,
+    AlertDialogTitle: Box,
+    AlertDialogDescription: Box,
+    AlertDialogFooter: Box,
+    AlertDialogCancel: (props: ButtonProps) => <button {...strip(props)} />,
+    AlertDialogAction: (props: ButtonProps) => <button {...strip(props)} />,
     AppIcon: ({ item }: { item: { name: string } }) => <span>{item.name[0]}</span>,
     Checkbox: (props: ComponentProps<"input">) => <input type="checkbox" {...props} />,
     Button: (props: ButtonProps) => <button {...strip(props)} />,
