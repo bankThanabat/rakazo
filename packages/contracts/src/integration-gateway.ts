@@ -1,5 +1,5 @@
 import * as z from "zod";
-import { ConnectorAuthInputSchema } from "./connector-auth.js";
+import { ConnectorAuthInputSchema, IncomingSecretSchema } from "./connector-auth.js";
 import { WebhookVerificationSchema } from "./customer.js";
 import { isPlainHttpUrl } from "./http-url.js";
 
@@ -23,12 +23,6 @@ export const GatewayServerConfigSchema = z.object({
     ),
 });
 export type GatewayServerConfig = z.infer<typeof GatewayServerConfigSchema>;
-/** A secret the provider's incoming template asks the account owner to enter. */
-export const IncomingSecretSchema = z.object({
-  key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]{0,63}$/),
-  label: z.string().min(1).max(100),
-});
-export type IncomingSecret = z.infer<typeof IncomingSecretSchema>;
 export const IncomingSetupInputSchema = z.object({
   connectionId: id,
   botId: id,

@@ -274,6 +274,27 @@ describe.skipIf(!enabled)(
       ).toMatchObject({ owner: "staff" });
     });
 
+    it("still sends a queued handoff notice after auto replies are turned off", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        await service.tools.execute(request.executionContext!.token, {
+          name: "request_human",
+          callId: "handoff",
+          arguments: { reason: "Customer asks for a person" },
+        });
+        return "This model continuation must not be delivered";
+      });
+      await service.process(c.id);
+      await configureCustomerReplies(db.prisma, a.owner, {
+        connectionId: a.account.id,
+        enabled: false,
+      });
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      expect(JSON.stringify(sends[0]?.input)).toContain("A support agent will follow up here.");
+    });
+
     it("turning auto replies off fences generation already in progress", async () => {
       const a = await setup();
       const c = await receive(a);
@@ -352,7 +373,7 @@ describe.skipIf(!enabled)(
         where: { botId: a.owner.botId },
       });
       await db.prisma.customerBehavior.create({
-        data: { ...behavior, botId: bot.id, runtime: undefined, knowledge: undefined },
+        data: { botId: bot.id, flowId: behavior.flowId, instructions: behavior.instructions },
       });
       await configureCustomerReplies(db.prisma, a.owner, {
         connectionId: a.account.id,

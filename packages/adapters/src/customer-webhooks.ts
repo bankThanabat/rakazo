@@ -10,6 +10,10 @@ export const liveCustomerWebhookChannel = {
   bot: { archivedAt: null },
 };
 
+export function customerWebhookSecretId(channelId: string, key: string) {
+  return `customer-webhook:${channelId}:${key}`;
+}
+
 export function customerWebhookBinding(value: unknown) {
   const parsed = CustomerBindingSchema.safeParse(value);
   return parsed.success && parsed.data.receive.mode === "webhook" && parsed.data.receive.webhook
@@ -21,7 +25,16 @@ export function customerWebhookUrl(apiUrl: string | undefined, channelId: string
   return `${(apiUrl ?? "http://127.0.0.1:3100").replace(/\/$/, "")}/api/customer-events/${channelId}`;
 }
 
-export async function listConnectionWebhooks(
+export type ConnectionIncoming = {
+  url?: string;
+  autoReplies?: boolean;
+  botId: string;
+  botName: string;
+  savedSecrets: string[];
+};
+
+/** Incoming-message state per connection id: the live webhook plus secrets saved by an unfinished setup. */
+export async function listConnectionIncoming(
   deps: { prisma: PrismaClient; apiUrl?: string },
   actor: Pick<Actor, "spaceId" | "userId">,
   connections: Connection[],
@@ -29,27 +42,32 @@ export async function listConnectionWebhooks(
   const ids = connections
     .filter((row) => row.status === "connected" && row.connectorId === "open-connector")
     .map((row) => row.id);
-  const channels = ids.length
-    ? await deps.prisma.customerChannel.findMany({
-        where: { ...customerChannelAccessWhere(actor), connectionId: { in: ids } },
-        select: {
-          id: true,
-          connectionId: true,
-          provider: true,
-          binding: true,
-          webhookUrl: true,
-          autoReplies: true,
-          botId: true,
-          enabled: true,
-          startedAt: true,
-          bot: { select: { archivedAt: true, name: true } },
-        },
-      })
-    : [];
-  // Secrets persist before provisioning finishes, so a channel can hold them without being live.
+  const incoming = new Map<string, ConnectionIncoming>();
+  if (!ids.length) return incoming;
+  const where = { ...customerChannelAccessWhere(actor), connectionId: { in: ids } };
+  const [channels, live] = await Promise.all([
+    deps.prisma.customerChannel.findMany({
+      where,
+      select: {
+        id: true,
+        connectionId: true,
+        provider: true,
+        binding: true,
+        webhookUrl: true,
+        autoReplies: true,
+        botId: true,
+        bot: { select: { name: true } },
+      },
+    }),
+    deps.prisma.customerChannel.findMany({
+      where: { ...where, ...liveCustomerWebhookChannel },
+      select: { id: true },
+    }),
+  ]);
+  const liveIds = new Set(live.map((row) => row.id));
   const secretIds = channels.flatMap((channel) =>
-    (customerIncomingTemplate(channel.provider)?.secrets ?? []).map(
-      (secret) => `customer-webhook:${channel.id}:${secret.key}`,
+    (customerIncomingTemplate(channel.provider)?.secrets ?? []).map((secret) =>
+      customerWebhookSecretId(channel.id, secret.key),
     ),
   );
   const saved = new Set(
@@ -62,26 +80,18 @@ export async function listConnectionWebhooks(
         ).map((row) => row.id)
       : [],
   );
-  const urls = new Map<
-    string,
-    { url?: string; autoReplies?: boolean; botId: string; botName: string; savedSecrets: string[] }
-  >();
   for (const channel of channels) {
     if (!channel.connectionId) continue;
-    const live =
-      channel.enabled &&
-      channel.startedAt &&
-      !channel.bot.archivedAt &&
-      customerWebhookBinding(channel.binding);
-    urls.set(channel.connectionId, {
-      url: live ? (channel.webhookUrl ?? customerWebhookUrl(deps.apiUrl, channel.id)) : undefined,
-      autoReplies: live ? channel.autoReplies : undefined,
+    const isLive = liveIds.has(channel.id) && customerWebhookBinding(channel.binding);
+    incoming.set(channel.connectionId, {
+      url: isLive ? (channel.webhookUrl ?? customerWebhookUrl(deps.apiUrl, channel.id)) : undefined,
+      autoReplies: isLive ? channel.autoReplies : undefined,
       botId: channel.botId,
       botName: channel.bot.name,
       savedSecrets: (customerIncomingTemplate(channel.provider)?.secrets ?? [])
         .map((secret) => secret.key)
-        .filter((key) => saved.has(`customer-webhook:${channel.id}:${key}`)),
+        .filter((key) => saved.has(customerWebhookSecretId(channel.id, key))),
     });
   }
-  return urls;
+  return incoming;
 }

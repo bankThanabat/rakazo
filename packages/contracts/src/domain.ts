@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { IncomingSecretSchema } from "./connector-auth.js";
 import { ThreadMessageSchema } from "./events.js";
 import { Id, MemoryScope, RunStatus, SandboxKind } from "./ids.js";
 import { McpHeadersSchema, McpRemoteEndpointSchema, McpTransportSchema } from "./mcp.js";
@@ -565,7 +566,7 @@ export const ConnectionSchema = z.object({
   replyBotName: z.string().optional(),
   /** Present when this provider can receive customer messages; lists the secrets setup needs. */
   incomingSecrets: z
-    .array(z.object({ key: z.string(), label: z.string(), saved: z.boolean().optional() }))
+    .array(IncomingSecretSchema.extend({ saved: z.boolean().optional() }))
     .optional(),
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),

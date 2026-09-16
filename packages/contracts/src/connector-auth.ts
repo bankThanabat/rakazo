@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+/** A secret the provider's incoming template asks the account owner to enter. */
+export const IncomingSecretSchema = z.object({
+  key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]{0,63}$/),
+  label: z.string().min(1).max(100),
+});
+export type IncomingSecret = z.infer<typeof IncomingSecretSchema>;
+
 export const ConnectorCredentialFieldSchema = z.object({
   key: z.string(),
   label: z.string(),
@@ -37,7 +44,7 @@ export const ConnectorSetupSchema = z.object({
   oauthSetupUrl: z.string().url().optional(),
   oauthCallbackUrl: z.string().optional(),
   /** Secrets the incoming-message setup will ask for, so the connect form can collect them up front. */
-  incomingSecrets: z.array(z.object({ key: z.string(), label: z.string() })).optional(),
+  incomingSecrets: z.array(IncomingSecretSchema).optional(),
 });
 export type ConnectorCredentialField = z.infer<typeof ConnectorCredentialFieldSchema>;
 export type ConnectorAuthMethod = z.infer<typeof ConnectorAuthMethodSchema>;

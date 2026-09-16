@@ -4,9 +4,10 @@ import {
   buildFeaturedConnectorTiles,
   CONNECTION_CATALOG_PAGE_SIZE,
   EMPTY_PLUGIN_CATALOG_MESSAGE,
-  searchConnectionCatalog,
+  filterConnectionCatalogItems,
 } from "@rakazo/core";
 import {
+  AppIcon,
   Button,
   cn,
   Dialog,
@@ -21,7 +22,6 @@ import { ChevronRight, Search, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AdvancedSources } from "../components/integrations/AdvancedSources";
 import { AppDetail } from "../components/integrations/AppDetail";
-import { AppIcon } from "../components/integrations/AppIcon";
 import { rpc } from "../lib/rpc";
 
 type Selection = { connectorId: string; slug: string } | "advanced" | null;
@@ -110,7 +110,7 @@ export function PluginsOverlay({
         : null,
     [catalog, selection],
   );
-  const visible = searchConnectionCatalog(catalog, query);
+  const visible = query.trim() ? filterConnectionCatalogItems(catalog, query) : catalog;
   const connected = visible.filter((item) => accountsFor(connections, item).length > 0);
   const available = visible.filter((item) => accountsFor(connections, item).length === 0);
   const rendered = available.slice(0, visibleCount);
@@ -339,11 +339,7 @@ export function PluginsOverlay({
                 onRefresh={refresh}
                 onBack={back}
               />
-            ) : (
-              <p className="grid h-full place-items-center p-6 text-sm text-muted-foreground">
-                <Trans>Select an app to connect it.</Trans>
-              </p>
-            )}
+            ) : null}
           </div>
         </div>
       </DialogContent>

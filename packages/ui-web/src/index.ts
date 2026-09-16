@@ -1,3 +1,4 @@
+export { AppIcon } from "./app-icon.js";
 export { type AvatarStyle, AvatarStyleProvider, useAvatarStyle } from "./avatar-style.js";
 export { BotAvatar, Wordmark } from "./bot-avatar.js";
 export * from "./components/ui/alert-dialog.js";

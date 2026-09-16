@@ -253,7 +253,8 @@ export function createCustomerConversations(deps: {
       if (
         message.generation !== row.generation ||
         (message.role === "customer" && row.owner !== "bot") ||
-        (message.role !== "staff" && !row.channel.autoReplies)
+        // Handoff notices (system) still go out when auto replies are off.
+        ((message.role === "customer" || message.role === "bot") && !row.channel.autoReplies)
       ) {
         await prisma.customerMessage.update({
           where: { id: message.id },
@@ -387,7 +388,7 @@ export function createCustomerConversations(deps: {
           where: {
             ...fence,
             generation: row.generation,
-            channel: { enabled: true, ...(outbound.role !== "staff" ? { autoReplies: true } : {}) },
+            channel: { enabled: true, ...(outbound.role === "bot" ? { autoReplies: true } : {}) },
             ...(outbound.role === "bot" ? { owner: "bot" } : {}),
           },
           data: { updatedAt: new Date(), leaseUntil: new Date(Date.now() + leaseMs) },
@@ -416,7 +417,7 @@ export function createCustomerConversations(deps: {
                 generation: row.generation,
                 channel: {
                   ...liveChannel,
-                  ...(outbound.role !== "staff" ? { autoReplies: true } : {}),
+                  ...(outbound.role === "bot" ? { autoReplies: true } : {}),
                 },
               },
               data: { leaseUntil: new Date(Date.now() + leaseMs) },
@@ -693,6 +694,7 @@ export function createCustomerConversations(deps: {
               name: input.name,
               ciphertext: "",
               websiteOrigins: origins,
+              autoReplies: true,
               startedAt: new Date(),
             },
             update: { name: input.name, websiteOrigins: origins },

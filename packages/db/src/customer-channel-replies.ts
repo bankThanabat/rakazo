@@ -23,7 +23,7 @@ export async function setCustomerChannelReplies(
   await tx.customerMessage.updateMany({
     where: {
       conversation: { channelId: channel.id },
-      role: { not: "staff" },
+      role: { in: ["customer", "bot"] },
       status: { in: ["queued", "processing"] },
     },
     data: { status: "cancelled" },

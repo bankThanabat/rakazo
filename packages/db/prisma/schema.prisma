@@ -1354,7 +1354,7 @@ model CustomerChannel {
   ciphertext          String
   enabled             Boolean                @default(true)
   shared              Boolean                @default(false)
-  autoReplies         Boolean                @default(true)
+  autoReplies         Boolean                @default(false)
   relayId             String?                @unique
   webhookUrl          String?
   websiteOrigins      String[]               @default([])

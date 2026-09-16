@@ -15,11 +15,51 @@ type AuthType = "none" | "bearer" | "header";
 
 /** Rendered in this order; e2e locks it. */
 const SOURCE_KINDS: SourceKind[] = ["mcp", "api", "graphql", "executor", "treg"];
-const SOURCE_URL_PLACEHOLDER: Record<Exclude<SourceKind, "treg">, string> = {
-  mcp: "https://example.com/mcp",
-  executor: "https://executor.example/mcp",
-  graphql: "https://example.com/graphql",
-  api: "https://example.com/openapi.json",
+/** Everything that differs per source kind; nothing else switches on it. */
+const SOURCES: Record<
+  SourceKind,
+  {
+    /** What the server installs; token-only kinds are MCP servers with a bearer token. */
+    kind: "mcp" | "api" | "graphql";
+    name: string;
+    url?: string;
+    placeholder?: string;
+    tokenOnly?: boolean;
+    config: (auth: { type: AuthType; name?: string }) => Record<string, unknown>;
+  }
+> = {
+  mcp: {
+    kind: "mcp",
+    name: "Custom connector",
+    placeholder: "https://example.com/mcp",
+    config: (auth) => ({ preset: "custom", auth }),
+  },
+  api: {
+    kind: "api",
+    name: "Custom connector",
+    placeholder: "https://example.com/openapi.json",
+    config: (auth) => ({ openApi: true, auth }),
+  },
+  graphql: {
+    kind: "graphql",
+    name: "GraphQL",
+    placeholder: "https://example.com/graphql",
+    config: (auth) => ({ auth }),
+  },
+  executor: {
+    kind: "mcp",
+    name: "Executor",
+    placeholder: "https://executor.example/mcp",
+    tokenOnly: true,
+    config: () => ({ preset: "custom", auth: { type: "bearer" } }),
+  },
+  treg: {
+    kind: "mcp",
+    name: "Treg",
+    url: "https://treg.to/mcp/",
+    tokenOnly: true,
+    config: () => ({ preset: "treg", auth: { type: "bearer" } }),
+  },
 };
 
 /** Every connection path that is not the app catalog: tool sources, catalog feed, MCP servers, server providers. */
@@ -51,7 +91,19 @@ export function AdvancedSources({
   const [feedError, setFeedError] = useState<string | null>(null);
   const [feedPending, setFeedPending] = useState(false);
   const [feedSearched, setFeedSearched] = useState(false);
-  const tokenOnly = kind === "treg" || kind === "executor";
+  const source = kind ? SOURCES[kind] : null;
+  const tokenOnly = source?.tokenOnly ?? false;
+  const labels: Record<SourceKind, string> = {
+    mcp: t`Add MCP server`,
+    api: t`Add OpenAPI`,
+    graphql: t`Add GraphQL`,
+    executor: t`Add Executor`,
+    treg: t`Add Treg`,
+  };
+  const tokenLabels: Partial<Record<SourceKind, string>> = {
+    treg: t`Treg token`,
+    executor: t`Executor token`,
+  };
 
   useEffect(() => {
     void Promise.all([
@@ -72,26 +124,15 @@ export function AdvancedSources({
       );
   }, []);
 
-  function kindLabel(value: SourceKind) {
-    return value === "mcp"
-      ? t`Add MCP server`
-      : value === "api"
-        ? t`Add OpenAPI`
-        : value === "graphql"
-          ? t`Add GraphQL`
-          : value === "executor"
-            ? t`Add Executor`
-            : t`Add Treg`;
-  }
-
   function beginSource(next: SourceKind) {
+    const target = SOURCES[next];
     setKind(next);
     setError(null);
     setHint(null);
-    setName(next === "treg" ? "Treg" : next === "executor" ? "Executor" : "");
-    setUrl(next === "treg" ? "https://treg.to/mcp/" : "");
+    setName(target.tokenOnly ? target.name : "");
+    setUrl(target.url ?? "");
     setCredential("");
-    setAuthType(next === "treg" || next === "executor" ? "bearer" : "none");
+    setAuthType(target.tokenOnly ? "bearer" : "none");
     setAuthName("x-api-key");
   }
 
@@ -111,32 +152,17 @@ export function AdvancedSources({
   }
 
   async function installSource() {
-    if (!kind) return;
+    if (!kind || !source) return;
     setError(null);
     setPending("install-source");
     try {
       const auth = { type: authType, ...(authType === "header" ? { name: authName.trim() } : {}) };
       const install = await rpc.capabilities.install({
-        kind: tokenOnly ? "mcp" : kind,
-        name:
-          name.trim() ||
-          (kind === "treg"
-            ? "Treg"
-            : kind === "executor"
-              ? "Executor"
-              : kind === "graphql"
-                ? "GraphQL"
-                : "Custom connector"),
+        kind: source.kind,
+        name: name.trim() || source.name,
         source: url.trim(),
         credential: credential.trim() || undefined,
-        config:
-          kind === "treg"
-            ? { preset: "treg", auth: { type: "bearer" } }
-            : kind === "api"
-              ? { openApi: true, auth }
-              : kind === "graphql"
-                ? { auth }
-                : { preset: "custom", auth: kind === "executor" ? { type: "bearer" } : auth },
+        config: source.config(auth),
       });
       setCredential("");
       setKind(null);
@@ -234,7 +260,7 @@ export function AdvancedSources({
               aria-pressed={kind === value}
               onClick={() => beginSource(value)}
             >
-              {kindLabel(value)}
+              {labels[value]}
             </Button>
           ))}
         </div>
@@ -252,14 +278,14 @@ export function AdvancedSources({
               aria-label={t`Display name`}
               placeholder={t`Display name`}
             />
-            {kind !== "treg" ? (
+            {source?.url ? null : (
               <Input
                 value={url}
                 onChange={(event) => setUrl(event.target.value)}
                 aria-label={t`Source URL`}
-                placeholder={SOURCE_URL_PLACEHOLDER[kind]}
+                placeholder={source?.placeholder}
               />
-            ) : null}
+            )}
             {!tokenOnly ? (
               <NativeSelect
                 className="w-full"
@@ -292,20 +318,8 @@ export function AdvancedSources({
                 autoComplete="new-password"
                 value={credential}
                 onChange={(event) => setCredential(event.target.value)}
-                aria-label={
-                  kind === "treg"
-                    ? t`Treg token`
-                    : kind === "executor"
-                      ? t`Executor token`
-                      : t`Credential`
-                }
-                placeholder={
-                  kind === "treg"
-                    ? t`Treg token`
-                    : kind === "executor"
-                      ? t`Executor token`
-                      : t`Credential`
-                }
+                aria-label={tokenLabels[kind] ?? t`Credential`}
+                placeholder={tokenLabels[kind] ?? t`Credential`}
               />
             ) : null}
             <p className="text-xs leading-5 text-muted-foreground">

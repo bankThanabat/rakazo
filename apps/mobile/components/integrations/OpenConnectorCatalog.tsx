@@ -444,9 +444,6 @@ export function OpenConnectorCatalog({
                     />
                     <Text style={styles.text}>{t("Auto reply messages")}</Text>
                   </View>
-                  <Text style={styles.secondary}>
-                    {t("When off, messages still arrive in your inbox.")}
-                  </Text>
                   <Text style={styles.text}>{t("Assign staff")}</Text>
                   {button(
                     row.replyBotName ?? t("Choose staff"),

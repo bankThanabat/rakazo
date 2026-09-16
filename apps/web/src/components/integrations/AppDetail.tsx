@@ -2,18 +2,19 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import type { Connection, ConnectionCatalogItem, ConnectorSetup } from "@rakazo/contracts";
 import { humanizeToolName, waitForConnectionAuthorization } from "@rakazo/core";
 import {
+  AppIcon,
   Button,
+  Checkbox,
   cn,
   Input,
   NativeSelect,
   NativeSelectOption,
   Skeleton,
-  Switch,
 } from "@rakazo/ui-web";
 import { ArrowLeft, ChevronRight } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { rpc } from "../../lib/rpc";
-import { AppIcon } from "./AppIcon";
+import { AccountIncoming } from "./AccountIncoming";
 import { OpenConnectorFields } from "./OpenConnectorFields";
 
 /** Only OpenConnector exposes a setup contract (credential forms, reconnect, cancel). Other connectors authorize in a popup. */
@@ -64,14 +65,7 @@ export function AppDetail({
   const [pending, setPending] = useState(false);
   const [attempt, setAttempt] = useState<{ id: string; url: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
-  const [copiedWebhook, setCopiedWebhook] = useState<string | null>(null);
   const [incomingValues, setIncomingValues] = useState<Record<string, string>>({});
-  /** Per-account incoming-message drafts. They survive a failed enable so nothing is retyped. */
-  const [incomingDrafts, setIncomingDrafts] = useState<
-    Record<string, { botId?: string; secrets: Record<string, string> }>
-  >({});
-  const [savingReplies, setSavingReplies] = useState<string | null>(null);
-  const [enabling, setEnabling] = useState<string | null>(null);
   const [bots, setBots] = useState<Array<{ id: string; name: string }> | null>(null);
   const botsRequested = useRef(false);
   const [botId, setBotId] = useState("");
@@ -169,89 +163,15 @@ export function AppDetail({
     }
     const incoming = incomingDraft.current;
     incomingDraft.current = null;
-    if (incoming) await enableIncoming({ connectionId, ...incoming });
+    if (incoming) {
+      // A failure leaves the account row asking for what is still missing.
+      await rpc.connections
+        .setupIncoming({ connectionId, ...incoming })
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : t`Could not enable incoming messages.`),
+        );
+    }
     await onRefresh().catch(() => setError(t`Could not refresh accounts. Try again.`));
-  }
-
-  /** Enables incoming messages. A failure keeps the entered values in the account row for a retry. */
-  async function enableIncoming(draft: {
-    connectionId: string;
-    botId: string;
-    secrets: Record<string, string>;
-  }) {
-    setEnabling(draft.connectionId);
-    setError(null);
-    try {
-      await rpc.connections.setupIncoming(draft);
-      setIncomingDrafts(({ [draft.connectionId]: _done, ...rest }) => rest);
-      return true;
-    } catch (cause) {
-      setIncomingDrafts((current) => ({
-        ...current,
-        [draft.connectionId]: { botId: draft.botId, secrets: draft.secrets },
-      }));
-      setError(cause instanceof Error ? cause.message : t`Could not enable incoming messages.`);
-      return false;
-    } finally {
-      setEnabling(null);
-    }
-  }
-
-  async function toggleIncoming(row: Connection) {
-    const draft = incomingDrafts[row.id];
-    const target = draft?.botId ?? botId;
-    if (!target) {
-      setError(t`Create an assistant first.`);
-      return;
-    }
-    const ok = await enableIncoming({
-      connectionId: row.id,
-      botId: target,
-      secrets: draft?.secrets ?? {},
-    });
-    if (ok) await onRefresh().catch(() => undefined);
-  }
-
-  async function configureReplies(row: Connection, enabled: boolean, assignedBotId?: string) {
-    setSavingReplies(row.id);
-    setError(null);
-    try {
-      await rpc.connections.configureReplies({
-        connectionId: row.id,
-        enabled,
-        botId: assignedBotId,
-      });
-      await onRefresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t`Could not save auto replies.`);
-    } finally {
-      setSavingReplies(null);
-    }
-  }
-
-  function updateDraft(id: string, patch: { botId?: string; secret?: [string, string] }) {
-    setIncomingDrafts((current) => {
-      const draft = current[id] ?? { secrets: {} };
-      return {
-        ...current,
-        [id]: {
-          botId: patch.botId ?? draft.botId,
-          secrets: patch.secret
-            ? { ...draft.secrets, [patch.secret[0]]: patch.secret[1] }
-            : draft.secrets,
-        },
-      };
-    });
-  }
-
-  function submitIncoming(row: Connection) {
-    if (incomingReady(row) && !enabling) void toggleIncoming(row);
-  }
-
-  function incomingReady(row: Connection) {
-    return (row.incomingSecrets ?? []).every(
-      (secret) => secret.saved || incomingDrafts[row.id]?.secrets[secret.key]?.trim(),
-    );
   }
 
   async function poll(id: string, url: string) {
@@ -507,147 +427,13 @@ export function AppDetail({
                     </span>
                   ) : null}
                 </div>
-                {row.webhookUrl ? (
-                  <div className="space-y-3">
-                    <div className="space-y-1.5">
-                      <div className="flex items-center gap-3 text-sm font-medium">
-                        <Switch
-                          id={`${formId}-${row.id}-replies`}
-                          aria-describedby={`${formId}-${row.id}-replies-help`}
-                          checked={row.automaticReplies ?? false}
-                          disabled={row.canManage === false || savingReplies !== null}
-                          onCheckedChange={(enabled) => void configureReplies(row, enabled)}
-                        />
-                        <label htmlFor={`${formId}-${row.id}-replies`}>
-                          <Trans>Auto reply messages</Trans>
-                        </label>
-                      </div>
-                      <p
-                        id={`${formId}-${row.id}-replies-help`}
-                        className="text-sm text-muted-foreground"
-                      >
-                        <Trans>When off, messages still arrive in your inbox.</Trans>
-                      </p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor={`${formId}-${row.id}-staff`}
-                        className="block text-sm font-medium"
-                      >
-                        <Trans>Assign staff</Trans>
-                      </label>
-                      <NativeSelect
-                        id={`${formId}-${row.id}-staff`}
-                        value={row.replyBotId ?? ""}
-                        disabled={row.canManage === false || savingReplies !== null || !bots}
-                        onChange={(event) =>
-                          void configureReplies(
-                            row,
-                            row.automaticReplies ?? false,
-                            event.target.value,
-                          )
-                        }
-                      >
-                        {row.replyBotId && !bots?.some((bot) => bot.id === row.replyBotId) ? (
-                          <NativeSelectOption value={row.replyBotId}>
-                            {row.replyBotName}
-                          </NativeSelectOption>
-                        ) : null}
-                        {!row.replyBotId ? (
-                          <NativeSelectOption value="">{t`Choose staff`}</NativeSelectOption>
-                        ) : null}
-                        {bots?.map((bot) => (
-                          <NativeSelectOption key={bot.id} value={bot.id}>
-                            {bot.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    </div>
-                    <label
-                      htmlFor={`${formId}-${row.id}-webhook`}
-                      className="block text-sm font-medium"
-                    >
-                      <Trans>Webhook URL</Trans>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Input
-                        id={`${formId}-${row.id}-webhook`}
-                        value={row.webhookUrl}
-                        readOnly
-                        className="h-8 min-w-0 flex-1"
-                        onFocus={(event) => event.currentTarget.select()}
-                      />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(row.webhookUrl!);
-                            setCopiedWebhook(row.webhookUrl!);
-                          } catch {
-                            setError(t`Could not copy. Select and copy the URL manually.`);
-                          }
-                        }}
-                      >
-                        {copiedWebhook === row.webhookUrl ? (
-                          <Trans>Copied</Trans>
-                        ) : (
-                          <Trans>Copy</Trans>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                ) : row.status === "connected" &&
-                  row.incomingSecrets?.length &&
-                  row.canManage !== false ? (
-                  <div className="flex flex-wrap gap-2">
-                    {bots && bots.length > 1 ? (
-                      <NativeSelect
-                        aria-label={t`Assign staff`}
-                        value={incomingDrafts[row.id]?.botId ?? botId}
-                        disabled={enabling !== null}
-                        onChange={(event) => updateDraft(row.id, { botId: event.target.value })}
-                      >
-                        {bots.map((bot) => (
-                          <NativeSelectOption key={bot.id} value={bot.id}>
-                            {bot.name}
-                          </NativeSelectOption>
-                        ))}
-                      </NativeSelect>
-                    ) : null}
-                    {row.incomingSecrets
-                      .filter((secret) => !secret.saved)
-                      .map((secret) => (
-                        <Input
-                          key={secret.key}
-                          aria-label={secret.label}
-                          placeholder={secret.label}
-                          type="password"
-                          autoComplete="new-password"
-                          value={incomingDrafts[row.id]?.secrets[secret.key] ?? ""}
-                          disabled={enabling !== null}
-                          className="h-8 basis-56"
-                          onChange={(event) =>
-                            updateDraft(row.id, { secret: [secret.key, event.target.value] })
-                          }
-                          onBlur={() => submitIncoming(row)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") event.currentTarget.blur();
-                          }}
-                        />
-                      ))}
-                    {row.incomingSecrets.every((secret) => secret.saved) ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={enabling !== null}
-                        onClick={() => void toggleIncoming(row)}
-                      >
-                        <Trans>Try again</Trans>
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
+                <AccountIncoming
+                  row={row}
+                  bots={bots}
+                  defaultBotId={botId}
+                  onError={setError}
+                  onRefresh={onRefresh}
+                />
                 {removing === row.id ? (
                   <div className="flex flex-wrap items-center gap-3 text-sm">
                     <span>
@@ -836,15 +622,19 @@ export function AppDetail({
                 </label>
               ) : null}
               {auth?.authorizationOptions?.map((option) => (
-                <label key={option.id} className="flex items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 accent-primary"
+                <label
+                  key={option.id}
+                  htmlFor={`${formId}-scope-${option.id}`}
+                  className="flex items-start gap-2 text-sm"
+                >
+                  <Checkbox
+                    id={`${formId}-scope-${option.id}`}
+                    className="mt-0.5"
                     checked={scopes.includes(option.id)}
                     disabled={option.required || pending}
-                    onChange={(event) =>
+                    onCheckedChange={(checked) =>
                       setScopes((current) =>
-                        event.target.checked
+                        checked
                           ? [...current, option.id]
                           : current.filter((id) => id !== option.id),
                       )

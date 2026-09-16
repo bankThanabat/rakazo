@@ -1,13 +1,12 @@
-import type { ConnectionCatalogItem } from "@rakazo/contracts";
-import { cn } from "@rakazo/ui-web";
 import { useState } from "react";
+import { cn } from "./lib/utils.js";
 
 /** App logo with a monogram fallback when the logo is missing or fails to load. */
 export function AppIcon({
   item,
   className,
 }: {
-  item: Pick<ConnectionCatalogItem, "name" | "logo">;
+  item: { name: string; logo?: string | null };
   className?: string;
 }) {
   const [failed, setFailed] = useState(false);

@@ -10,7 +10,7 @@ import type { CustomerIncomingTemplate } from "./customer-incoming.js";
 import { customerIncomingTemplate } from "./customer-incoming.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { customerField } from "./customer-mapping.js";
-import { customerWebhookUrl } from "./customer-webhooks.js";
+import { customerWebhookSecretId, customerWebhookUrl } from "./customer-webhooks.js";
 import { IntegrationGatewayClient } from "./integration-gateway-client.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import type { EncryptedSecretStore } from "./secrets.js";
@@ -40,13 +40,9 @@ async function verifyAccount(
     );
     return z.string().min(1).parse(customerField(result, lookup.path));
   } catch (cause) {
-    const detail = cause instanceof Error && cause.message ? ` (${cause.message})` : "";
-    throw new Error(
-      `Could not verify the account. Check its credentials, then try again.${detail}`,
-      {
-        cause,
-      },
-    );
+    throw new Error("Could not verify the account. Check its credentials, then try again.", {
+      cause,
+    });
   }
 }
 
@@ -133,13 +129,13 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
     });
   });
   const secretIds = Object.fromEntries(
-    template.secrets.map((secret) => [secret.key, `customer-webhook:${channel.id}:${secret.key}`]),
+    template.secrets.map((secret) => [secret.key, customerWebhookSecretId(channel.id, secret.key)]),
   );
-  // Secrets are saved before anything can fail, so a retry never asks for them again.
-  const secrets = await storeSecrets(deps, actor, context, template, input.secrets, secretIds);
   const accountId = template.account
     ? await verifyAccount(connector, actor, account.id, template.account)
     : "";
+  // Saved once the account checks out, so a later provisioning failure retries without retyping.
+  const secrets = await storeSecrets(deps, actor, context, template, input.secrets, secretIds);
   const binding = CustomerBindingSchema.parse(template.binding({ account: accountId, secretIds }));
   const webhook = binding.receive.webhook;
   const webhookKey = Object.keys(secretIds).find((key) => secretIds[key] === webhook?.secretId);

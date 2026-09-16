@@ -186,8 +186,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
     },
     customerChannel: {
       findMany: vi.fn(async ({ where }) => {
-        const { connectionId, ...scope } = where;
-        return matches(channel, scope) && connectionId.in.includes(channel.connectionId)
+        const { connectionId, startedAt, bot, ...scope } = where;
+        const live = !startedAt || (channel.startedAt && channel.bot.archivedAt === bot.archivedAt);
+        return live && matches(channel, scope) && connectionId.in.includes(channel.connectionId)
           ? [channel]
           : [];
       }),
@@ -219,11 +220,12 @@ it("lists team connections and discovers tools for teammates while keeping manag
       id: "team-account",
       canManage: false,
       webhookUrl: "https://public.example.test/api/customer-events/customer-channel",
-      replyBotId: "support-staff",
-      replyBotName: "Support staff",
       automaticReplies: false,
     }),
   ]);
+  // Who answers a shared account is the manager's business, not the teammate's.
+  expect(connections[0]).not.toHaveProperty("replyBotId");
+  expect(JSON.stringify(connections)).not.toContain("Support staff");
   expect(JSON.stringify(connections)).not.toContain("LINE_CHANNEL_SECRET_RECORD");
   expect((await rpc("list", {}, actor)).body.json[0]).not.toHaveProperty("webhookUrl");
   channel.shared = true;

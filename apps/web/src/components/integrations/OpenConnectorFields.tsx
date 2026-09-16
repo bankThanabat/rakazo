@@ -42,6 +42,9 @@ export function OpenConnectorFields({
               onChange={(event) => onChange({ ...values, [field.key]: event.target.value })}
             />
           )}
+          {field.description ? (
+            <p className="text-sm text-muted-foreground">{field.description}</p>
+          ) : null}
         </div>
       ))}
     </>

@@ -65,7 +65,7 @@ export function createCustomerConnector(deps: {
       },
       context,
     )) {
-      if (event.type === "error") throw new Error(event.message || "Messaging action failed");
+      if (event.type === "error") throw new Error("Messaging action failed");
       if (event.type === "result") {
         data = event.data;
         completed = true;

@@ -33,6 +33,8 @@ vi.mock("@rakazo/ui-web", () => {
   const strip = ({ variant: _v, size: _s, render: _r, ...rest }: Partial<ButtonProps>) => rest;
   const Box = ({ children }: Props) => <div>{children}</div>;
   return {
+    AppIcon: ({ item }: { item: { name: string } }) => <span>{item.name[0]}</span>,
+    Checkbox: (props: ComponentProps<"input">) => <input type="checkbox" {...props} />,
     Button: (props: ButtonProps) => <button {...strip(props)} />,
     Input: (props: ComponentProps<"input">) => <input {...props} />,
     NativeSelect: (props: ComponentProps<"select">) => <select {...props} />,
@@ -160,7 +162,7 @@ it("lists connected apps first and searches every catalog at once", async () => 
   expect(container.querySelector("[data-testid=integrations-advanced]")).toBeNull();
   expect(api.capabilities.list).not.toHaveBeenCalled();
 
-  await search("customers");
+  await search("LiNe");
   expect(rows()).toEqual(["connection-tile-line"]);
   await search("zzz");
   expect(container.querySelector("[role=status]")?.textContent).toBe("No apps match your search.");

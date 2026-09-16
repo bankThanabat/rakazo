@@ -40,7 +40,7 @@ export * from "./customer-conversations.js";
 export { customerIncomingTemplate } from "./customer-incoming.js";
 export { createCustomerIngress } from "./customer-ingress.js";
 export * from "./customer-relay.js";
-export { listConnectionWebhooks } from "./customer-webhooks.js";
+export { listConnectionIncoming } from "./customer-webhooks.js";
 export * from "./daytona-emulator.js";
 export * from "./daytona-sandbox.js";
 export * from "./deployment-model.js";

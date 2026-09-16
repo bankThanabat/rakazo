@@ -54,7 +54,7 @@ import {
   isComputerScreenUnavailable,
   isSandboxGoneError,
   isScratchpadStatus,
-  listConnectionWebhooks,
+  listConnectionIncoming,
   listPiCatalog,
   listScratchpadItems,
   McpOAuthBroker,
@@ -487,6 +487,11 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("CONFLICT", { message: error.message });
   }
   return error;
+}
+
+/** Only messages our own code threw reach the client; library errors get the generic text. */
+function deliberateMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.constructor === Error ? error.message : fallback;
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -3344,7 +3349,7 @@ export function createRouter(deps: RouterDeps) {
         } catch (error) {
           if (error instanceof IsolationError) throw new ORPCError("NOT_FOUND");
           throw new ORPCError("BAD_REQUEST", {
-            message: error instanceof Error ? error.message : "Could not save auto replies.",
+            message: deliberateMessage(error, "Could not save auto replies."),
           });
         }
       }),
@@ -3367,7 +3372,7 @@ export function createRouter(deps: RouterDeps) {
           // hand back the message instead of an opaque 500.
           getLogger().error("rpc connections/setupIncoming failed", error);
           throw new ORPCError(error instanceof IsolationError ? "NOT_FOUND" : "BAD_REQUEST", {
-            message: error instanceof Error ? error.message : "Could not set up incoming messages.",
+            message: deliberateMessage(error, "Could not set up incoming messages."),
           });
         }
       }),
@@ -3513,7 +3518,7 @@ export function createRouter(deps: RouterDeps) {
         const rows = await deps.prisma.connection.findMany({
           where: connectionAccessWhere(context.actor),
         });
-        const webhookUrls = await listConnectionWebhooks(
+        const incoming = await listConnectionIncoming(
           { prisma: deps.prisma, apiUrl: deps.env.apiUrl },
           context.actor,
           rows,
@@ -3533,24 +3538,26 @@ export function createRouter(deps: RouterDeps) {
                     )
                     .catch(() => ({}))
                 : {};
+            const canManage = row.userId === context.actor.userId;
+            const channel = incoming.get(row.id);
             return {
               ...state,
               // Authorization URLs belong to the creator, even for team-shared accounts.
-              authorizationUrl:
-                row.userId === context.actor.userId ? state.authorizationUrl : undefined,
+              authorizationUrl: canManage ? state.authorizationUrl : undefined,
               id: row.id,
-              webhookUrl: webhookUrls.get(row.id)?.url,
-              automaticReplies: webhookUrls.get(row.id)?.autoReplies,
-              replyBotId: webhookUrls.get(row.id)?.botId,
-              replyBotName: webhookUrls.get(row.id)?.botName,
+              webhookUrl: channel?.url,
+              automaticReplies: channel?.autoReplies,
+              // Only the manager can reassign staff, so only they learn who is assigned.
+              replyBotId: canManage ? channel?.botId : undefined,
+              replyBotName: canManage ? channel?.botName : undefined,
               incomingSecrets:
                 row.connectorId === "open-connector"
                   ? customerIncomingTemplate(row.provider)?.secrets.map((secret) => ({
                       ...secret,
-                      saved: webhookUrls.get(row.id)?.savedSecrets.includes(secret.key) ?? false,
+                      saved: channel?.savedSecrets.includes(secret.key) ?? false,
                     }))
                   : undefined,
-              canManage: row.userId === context.actor.userId,
+              canManage,
               connectorId: row.connectorId,
               provider: row.provider,
               displayName: row.displayName,

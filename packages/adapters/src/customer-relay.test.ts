@@ -89,8 +89,10 @@ it("rechecks credentials after a failed verification and keeps accounts independ
     secrets: { channelSecret: "fake-secret" },
   };
   await expect(setupCustomerIncoming(deps, actor, input)).rejects.toThrow(
-    "invalid channel access token",
+    "Could not verify the account",
   );
+  // Nothing is stored for an account that failed verification.
+  expect(prisma.secret.upsert).not.toHaveBeenCalled();
   valid = true;
   await expect(setupCustomerIncoming(deps, actor, input)).resolves.toMatchObject({
     id: "channel-account-a",
