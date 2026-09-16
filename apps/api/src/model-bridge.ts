@@ -3,7 +3,7 @@ import { ModelBridgeError } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import type { Context } from "hono";
 import { Hono } from "hono";
-import { readBoundedBody } from "./http-body.js";
+import { bearerToken, readBoundedBody } from "./http-body.js";
 
 export function mountModelBridge(
   parent: Hono,
@@ -22,8 +22,7 @@ export function mountModelBridge(
       error instanceof ModelBridgeError ? error.message : "Model bridge is unavailable";
     return c.json({ error: { message, type: "model_bridge_error" } }, status);
   });
-  const bearer = (c: Context) =>
-    /^Bearer (.+)$/i.exec(c.req.header("authorization") ?? "")?.[1] ?? "";
+  const bearer = (c: Context) => bearerToken(c.req.header("authorization"));
   async function actor(c: Context) {
     const origin = c.req.header("origin");
     if (origin && !trustedOrigin(origin)) throw new ModelBridgeError(403, "Origin is not allowed");

@@ -84,6 +84,11 @@ import {
 import { ProductEventSchema } from "./events.js";
 import { Id, IsoDate } from "./ids.js";
 import {
+  GatewayServerConfigSchema,
+  IncomingSetupInputSchema,
+  IncomingSetupResultSchema,
+} from "./integration-gateway.js";
+import {
   IntegrationProviderConfigSchema,
   IntegrationSetupStateSchema,
 } from "./integration-settings.js";
@@ -610,6 +615,14 @@ export const appContract = {
       .output(z.object({ ok: z.literal(true) })),
   },
   integrationSetup: {
+    gatewayConfigure: oc.input(GatewayServerConfigSchema).output(z.object({ ok: z.literal(true) })),
+    createRuntime: oc
+      .input(z.object({ name: z.string().trim().min(1).max(100) }))
+      .output(z.object({ id: Id, token: z.string() })),
+    listRuntimes: oc.output(
+      z.array(z.object({ id: Id, name: z.string(), revokedAt: z.string().nullable() })),
+    ),
+    revokeRuntime: oc.input(z.object({ id: Id })).output(z.object({ ok: z.literal(true) })),
     get: oc.output(IntegrationSetupStateSchema),
     save: oc.input(IntegrationProviderConfigSchema).output(z.object({ ok: z.literal(true) })),
   },
@@ -640,9 +653,7 @@ export const appContract = {
       )
       .output(z.array(ConnectionCatalogItemSchema)),
     list: oc.output(z.array(ConnectionSchema)),
-    setupIncoming: oc
-      .input(z.object({ connectionId: Id, botId: Id, clientNonce: z.string().min(1).max(200) }))
-      .output(z.object({ botId: Id, name: z.string() })),
+    setupIncoming: oc.input(IncomingSetupInputSchema).output(IncomingSetupResultSchema),
     begin: oc
       .input(
         z.object({

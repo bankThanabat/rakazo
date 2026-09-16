@@ -3,6 +3,7 @@ import type { Context, Models } from "@earendil-works/pi-ai";
 import type { AgentRunRequest } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
+import { findDefaultModelCredential, findModelCredential } from "@rakazo/db";
 import { z } from "zod";
 import {
   bridgeCompletion,
@@ -10,22 +11,28 @@ import {
   modelBridgeContext,
 } from "./model-bridge-protocol.js";
 import { resolveModelKey } from "./model-credentials.js";
+import { selectConfiguredModel } from "./model-selection.js";
 import { parseModelSecret } from "./pi-oauth.js";
 import { modelsForRequest, reliableStreamOptions } from "./pi-runtime.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 const grantKind = "model-bridge";
-const Grant = z.object({
-  credentialId: z.string(),
-  modelId: z.string(),
-  keyHash: z.string().regex(/^[a-f0-9]{64}$/),
-});
-export const ModelBridgeGrantInput = z
+const FixedModel = z
   .object({
     credentialId: z.string().min(1).max(256),
     modelId: z.string().min(1).max(256),
   })
   .strict();
+const StaffModel = z.object({ botId: z.string().min(1).max(256) }).strict();
+export const ModelBridgeGrantInput = z.union([FixedModel, StaffModel]);
+const grantMetadata = {
+  expiresAt: z.number().optional(),
+  keyHash: z.string().regex(/^[a-f0-9]{64}$/),
+};
+const Grant = z.union([FixedModel.extend(grantMetadata), StaffModel.extend(grantMetadata)]);
+type ModelSelection = z.infer<typeof ModelBridgeGrantInput>;
+const requestedModel = (selection: ModelSelection) =>
+  "botId" in selection ? "rakazo-staff" : selection.modelId;
 type Scope = Pick<Actor, "userId" | "spaceId">;
 export class ModelBridgeError extends Error {
   constructor(
@@ -49,13 +56,36 @@ export function createModelBridge(deps: {
   const registry = deps.modelRegistry ?? modelsForRequest;
   const active = new Map<string, number>();
 
-  async function connection(scope: Scope, credentialId: string) {
+  async function connection(scope: Scope, selection: ModelSelection) {
     if (!(await deps.prisma.spaceMember.findFirst({ where: scope }))) throw unavailable();
+    if ("botId" in selection) {
+      const bot = await deps.prisma.bot.findFirst({
+        where: { id: selection.botId, ...scope, archivedAt: null },
+        select: { modelProvider: true, modelId: true, thinkingLevel: true },
+      });
+      if (!bot) throw unavailable();
+      const [overrideCredential, defaultCredential] = await Promise.all([
+        bot.modelProvider && bot.modelId
+          ? findModelCredential(deps.prisma, scope, bot.modelProvider, bot.modelId)
+          : Promise.resolve(null),
+        findDefaultModelCredential(deps.prisma, scope),
+      ]);
+      const selected = selectConfiguredModel({
+        bot,
+        overrideCredential,
+        defaultCredential,
+        settings: null,
+        deployment: null,
+      });
+      // A bridge can only follow a connection owned by its user, never a deployment key.
+      if (!selected.credential || !selected.id) throw unavailable();
+      return { credential: selected.credential, modelId: selected.id };
+    }
     const credential = await deps.prisma.userModelCredential.findFirst({
-      where: { id: credentialId, userId: scope.userId },
+      where: { id: selection.credentialId, userId: scope.userId },
     });
     if (!credential) throw unavailable();
-    return credential;
+    return { credential, modelId: selection.modelId };
   }
 
   async function authenticate(token: string) {
@@ -64,17 +94,19 @@ export function createModelBridge(deps: {
     const row = await deps.prisma.secret.findFirst({ where: { id: match[1], kind: grantKind } });
     if (!row?.spaceId) throw unavailable();
     const grant = Grant.parse(JSON.parse(deps.secrets.load(row.ciphertext, row.id)));
+    if (grant.expiresAt !== undefined && grant.expiresAt <= Date.now()) throw unavailable();
     if (!timingSafeEqual(digest(token), Buffer.from(grant.keyHash, "hex"))) throw unavailable();
     const scope = { userId: row.userId, spaceId: row.spaceId };
-    const credential = await connection(scope, grant.credentialId);
-    return { grant, scope, credential };
+    const selected = await connection(scope, grant);
+    return { grant, scope, ...selected };
   }
 
   return {
-    async create(scope: Scope, raw: unknown) {
+    async create(scope: Scope, raw: unknown, options: { expiresAt?: Date } = {}) {
+      scope = { userId: scope.userId, spaceId: scope.spaceId };
       const input = ModelBridgeGrantInput.safeParse(raw);
       if (!input.success) throw new ModelBridgeError(400, "Invalid model connection");
-      const credential = await connection(scope, input.data.credentialId);
+      const { credential, modelId } = await connection(scope, input.data);
       let compatible = {};
       if (credential.provider === "openai-compatible") {
         const secret = await deps.prisma.secret.findFirst({
@@ -87,14 +119,18 @@ export function createModelBridge(deps: {
       }
       // Catalog lookup needs no OAuth refresh, network request, or new login.
       const models = registry(
-        { model: { ...compatible, provider: credential.provider, id: input.data.modelId } },
+        { model: { ...compatible, provider: credential.provider, id: modelId } },
         credential.provider,
       );
-      if (!models.getModel(credential.provider, input.data.modelId))
+      if (!models.getModel(credential.provider, modelId))
         throw new ModelBridgeError(400, "Unknown model for this connection");
       const id = randomBytes(16).toString("hex");
       const apiKey = `rmb_${id}.${randomBytes(32).toString("base64url")}`;
-      const grant = { ...input.data, keyHash: digest(apiKey).toString("hex") };
+      const grant = {
+        ...input.data,
+        keyHash: digest(apiKey).toString("hex"),
+        expiresAt: options.expiresAt?.getTime(),
+      };
       await deps.prisma.secret.create({
         data: {
           id,
@@ -103,9 +139,10 @@ export function createModelBridge(deps: {
           ciphertext: deps.secrets.seal(JSON.stringify(grant), id),
         },
       });
-      return { id, apiKey, model: input.data.modelId, basePath: "/api/model-bridge/v1" };
+      return { id, apiKey, model: requestedModel(input.data), basePath: "/api/model-bridge/v1" };
     },
     async list(scope: Scope) {
+      scope = { userId: scope.userId, spaceId: scope.spaceId };
       if (!(await deps.prisma.spaceMember.findFirst({ where: scope }))) throw unavailable();
       const rows = await deps.prisma.secret.findMany({
         where: { ...scope, kind: grantKind },
@@ -113,10 +150,15 @@ export function createModelBridge(deps: {
       });
       return rows.map((row) => {
         const grant = Grant.parse(JSON.parse(deps.secrets.load(row.ciphertext, row.id)));
-        return { id: row.id, credentialId: grant.credentialId, model: grant.modelId };
+        return {
+          id: row.id,
+          ...("botId" in grant ? { botId: grant.botId } : { credentialId: grant.credentialId }),
+          model: requestedModel(grant),
+        };
       });
     },
     async revoke(scope: Scope, id: string) {
+      scope = { userId: scope.userId, spaceId: scope.spaceId };
       if (!(await deps.prisma.spaceMember.findFirst({ where: scope }))) throw unavailable();
       await deps.prisma.secret.deleteMany({ where: { ...scope, id, kind: grantKind } });
     },
@@ -124,16 +166,18 @@ export function createModelBridge(deps: {
       const { grant, credential } = await authenticate(token);
       return {
         object: "list",
-        data: [{ id: grant.modelId, object: "model", created: 0, owned_by: credential.provider }],
+        data: [
+          { id: requestedModel(grant), object: "model", created: 0, owned_by: credential.provider },
+        ],
       };
     },
     async respond(token: string, raw: unknown, requestSignal: AbortSignal): Promise<Response> {
-      const { grant, scope, credential } = await authenticate(token);
+      const { grant, scope, credential, modelId } = await authenticate(token);
       const parsed = ModelBridgeRequest.safeParse(raw);
       if (!parsed.success)
         throw new ModelBridgeError(400, "Unsupported or invalid chat completion request");
       const input = parsed.data;
-      if (input.model !== grant.modelId)
+      if (input.model !== requestedModel(grant))
         throw new ModelBridgeError(403, "Model is not granted to this key");
       // Bound simultaneous subscription use per connection, including multiple bridge keys.
       if ((active.get(credential.id) ?? 0) >= 2)
@@ -163,20 +207,20 @@ export function createModelBridge(deps: {
           scope.spaceId,
           credential,
           credential.provider,
-          grant.modelId,
+          modelId,
         );
         if (!resolved.oauth && !resolved.apiKey && credential.provider !== "openai-compatible")
           throw unavailable();
         const config: AgentRunRequest["model"] = {
           provider: credential.provider,
-          id: grant.modelId,
+          id: modelId,
           ...resolved,
           oauth: resolved.oauth
             ? { credential: resolved.oauth, persist: resolved.persistOAuth }
             : undefined,
         };
         const models = registry({ model: config }, credential.provider);
-        const model = models.getModel(credential.provider, grant.modelId);
+        const model = models.getModel(credential.provider, modelId);
         if (!model) throw unavailable();
         let context: Context;
         try {
@@ -209,7 +253,7 @@ export function createModelBridge(deps: {
           const result = await stream.result();
           if (!["stop", "length", "toolUse"].includes(result.stopReason))
             throw new Error("Model request failed");
-          return Response.json(bridgeCompletion(result, grant.modelId, id), {
+          return Response.json(bridgeCompletion(result, modelId, id), {
             headers: { "cache-control": "no-store" },
           });
         }
@@ -220,7 +264,7 @@ export function createModelBridge(deps: {
             id,
             object: "chat.completion.chunk",
             created: Math.floor(Date.now() / 1000),
-            model: grant.modelId,
+            model: modelId,
           };
           const chunk = (delta: unknown, finish: string | null = null) => ({
             ...base,
@@ -250,7 +294,7 @@ export function createModelBridge(deps: {
                 );
               if (event.type === "error") throw new Error("Model request failed");
               if (event.type === "done") {
-                const completion = bridgeCompletion(event.message, grant.modelId, id);
+                const completion = bridgeCompletion(event.message, modelId, id);
                 yield encode(chunk({}, completion.choices[0]!.finish_reason));
                 if (input.stream_options?.include_usage)
                   yield encode({ ...base, choices: [], usage: completion.usage });

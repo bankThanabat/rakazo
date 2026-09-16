@@ -1,4 +1,9 @@
 import type { IntegrationSetupState } from "@rakazo/contracts";
+import {
+  integrationChoiceProvider,
+  integrationCredentialsUrl,
+  integrationProviderInput,
+} from "@rakazo/core";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -26,6 +31,7 @@ export default function IntegrationSetup() {
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [endpoint, setEndpoint] = useState("");
+  const credentialsUrl = integrationCredentialsUrl(choice, endpoint);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -44,27 +50,27 @@ export default function IntegrationSetup() {
     { id: "composio", label: "Composio" },
     { id: "pipedream", label: "Pipedream" },
     { id: "open-connector", label: "OpenConnector" },
+    { id: "gateway", label: t("Rakazo gateway") },
     { id: "executor", label: "Executor" },
   ];
-  const managed = choice === "composio" || choice === "pipedream" || choice === "open-connector";
-  const configured = state?.providers.find((provider) => provider.id === choice)?.configured;
+  const providerId = integrationChoiceProvider(choice);
+  const managed = providerId !== null;
+  const configured = state?.providers.find((provider) => provider.id === providerId)?.configured;
+  const keyLabel =
+    choice === "gateway"
+      ? t("Runtime key")
+      : choice === "open-connector"
+        ? t("Admin token")
+        : choice === "composio"
+          ? t("API key")
+          : t("Client secret");
   async function save() {
     setBusy(true);
     setError(null);
     try {
       await rpc(
         "integrationSetup/save",
-        choice === "composio"
-          ? { provider: "composio", apiKey: key }
-          : choice === "open-connector"
-            ? { provider: "open-connector", apiKey: key, endpoint }
-            : {
-                provider: "pipedream",
-                clientId,
-                clientSecret: key,
-                projectId,
-                environment: "production",
-              },
+        integrationProviderInput(choice, { apiKey: key, endpoint, clientId, projectId }),
       );
       setKey("");
       router.replace("/integrations");
@@ -113,7 +119,7 @@ export default function IntegrationSetup() {
           {configured ? <Text style={styles.text}>{t("Connected")}</Text> : null}
           {state?.canConfigure ? (
             <>
-              {choice === "open-connector" ? (
+              {choice === "open-connector" || choice === "gateway" ? (
                 <>
                   <Text style={styles.text}>{t("Server URL")}</Text>
                   <TextInput
@@ -149,21 +155,9 @@ export default function IntegrationSetup() {
                   />
                 </>
               ) : null}
-              <Text style={styles.text}>
-                {choice === "open-connector"
-                  ? t("Admin token")
-                  : choice === "composio"
-                    ? t("API key")
-                    : t("Client secret")}
-              </Text>
+              <Text style={styles.text}>{keyLabel}</Text>
               <TextInput
-                accessibilityLabel={
-                  choice === "open-connector"
-                    ? t("Admin token")
-                    : choice === "composio"
-                      ? t("API key")
-                      : t("Client secret")
-                }
+                accessibilityLabel={keyLabel}
                 value={key}
                 onChangeText={setKey}
                 secureTextEntry
@@ -171,15 +165,11 @@ export default function IntegrationSetup() {
                 autoCorrect={false}
                 style={styles.input}
               />
-              {button(t("Get credentials"), () => {
-                void Linking.openURL(
-                  choice === "composio"
-                    ? "https://dashboard.composio.dev"
-                    : choice === "open-connector"
-                      ? "https://github.com/oomol-lab/open-connector/blob/main/docs/programmatic-connections.md"
-                      : "https://pipedream.com/docs/connect/mcp/developers",
-                );
-              })}
+              {credentialsUrl
+                ? button(t("Get credentials"), () => {
+                    void Linking.openURL(credentialsUrl);
+                  })
+                : null}
             </>
           ) : state && !configured ? (
             <Text style={styles.text}>{t("Ask the server owner to configure this provider.")}</Text>

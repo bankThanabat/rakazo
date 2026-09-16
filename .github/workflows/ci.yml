@@ -93,6 +93,22 @@ jobs:
           DATABASE_URL: postgres://rakazo:rakazo@127.0.0.1:5433/rakazo
       - run: pnpm test
 
+  test-customer-runtime:
+    name: Langflow customer runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: infra/langflow/requirements-test.txt
+      - run: python -m pip install -r infra/langflow/requirements-test.txt
+      - run: python -m unittest discover -s infra/langflow/tests -v
+
   test-integration:
     name: Postgres journeys
     runs-on: ubuntu-latest
@@ -118,7 +134,7 @@ jobs:
   publish-mobile-update:
     name: Publish compatible mobile update
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, check, build, test, test-integration, test-e2e]
+    needs: [lint, check, build, test, test-integration, test-customer-runtime, test-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -271,7 +287,7 @@ jobs:
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       vars.PRODUCTION_DEPLOY_ENABLED == 'true'
-    needs: [lint, check, build, test, test-integration, test-e2e]
+    needs: [lint, check, build, test, test-integration, test-customer-runtime, test-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:

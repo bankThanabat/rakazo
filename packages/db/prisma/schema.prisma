@@ -1309,7 +1309,11 @@ model CustomerBehavior {
   actions Json @default("[]")
   botId        String   @id
   bot          Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  credentialId String
+  credentialId String? // Legacy fork configuration, retained for migration inspection.
+  runtime Json?
+  knowledge Json?
+  modelCredentialId String?
+  modelId String?
   knowledgeFilterId String?
   flowId       String
   instructions String   @db.Text
@@ -1333,6 +1337,9 @@ model CustomerChannel {
   ciphertext          String
   enabled             Boolean                @default(true)
   shared              Boolean                @default(false)
+  autoReplies         Boolean                @default(true)
+  relayId             String?                @unique
+  webhookUrl          String?
   websiteOrigins      String[]               @default([])
   dailyMessageLimit   Int                    @default(1000)
   hourlyCustomerLimit Int                    @default(30)
@@ -1455,4 +1462,73 @@ model CustomerVisitorSession {
 
   @@index([expiresAt], map: "customer_visitor_sessions_expiry")
   @@map("customer_visitor_sessions")
+}
+
+// A runtime credential is a customer capability, never an operator credential.
+model GatewayRuntime {
+  id        String   @id @default(cuid())
+  spaceId   String
+  userId    String
+  name      String
+  tokenHash String   @unique
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  accounts  GatewayAccount[]
+  @@index([spaceId, userId])
+  @@map("gateway_runtimes")
+}
+
+model GatewayAccount {
+  id          String @id @default(cuid())
+  runtimeId   String
+  runtime     GatewayRuntime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+  providerRef String @unique
+  provider    String
+  revokedAt   DateTime?
+  routes      GatewayRoute[]
+  @@index([runtimeId])
+  @@map("gateway_accounts")
+}
+
+model GatewayRoute {
+  id               String @id @default(cuid())
+  accountId        String
+  account          GatewayAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  channelId        String
+  ciphertext       String
+  sourceId         String?
+  endpointId       String?
+  subscriptionId   String?
+  webhookUrl       String?
+  enabled          Boolean @default(false)
+  deliveries       GatewayDelivery[]
+  @@unique([accountId, channelId])
+  @@map("gateway_routes")
+}
+
+model GatewayDelivery {
+  id          String @id
+  routeId     String
+  route       GatewayRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  payload     String? @db.Text
+  receivedAt  DateTime @default(now())
+  nextAttemptAt DateTime @default(now())
+  ackedAt     DateTime?
+  @@index([routeId, ackedAt, receivedAt])
+  @@map("gateway_deliveries")
+}
+
+// Pending OAuth attempts always create a new upstream account. A cancelled or
+// replaced attempt can be collected later without touching the active account.
+model OpenConnectorAttempt {
+  previousAccountId String?
+  id        String @id
+  ref       String
+  endpoint  String
+  spaceId   String
+  userId    String
+  service   String
+  createdAt DateTime @default(now())
+  @@index([endpoint, createdAt])
+  @@map("open_connector_attempts")
 }

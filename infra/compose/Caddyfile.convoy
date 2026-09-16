@@ -1,0 +1,18 @@
+convoy.example.com {
+	tls {
+		issuer acme {
+			disable_tlsalpn_challenge
+		}
+	}
+	@data path /ingest/* /portal-api/events /portal-api/events/* /portal-api/eventdeliveries /portal-api/eventdeliveries/*
+	handle @data {
+		reverse_proxy 127.0.0.1:5008
+	}
+	@internal path /metrics /debug/*
+	handle @internal {
+		respond 404
+	}
+	handle {
+		reverse_proxy 127.0.0.1:5005
+	}
+}

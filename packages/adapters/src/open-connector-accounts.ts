@@ -23,6 +23,7 @@ const Grant = z.object({
   scopes: z.array(z.string()).optional(),
   authType: z.string().optional(),
   actions: z.array(z.string()).optional(),
+  policyAccountId: z.string().optional(),
 });
 export type OpenConnectorGrant = z.infer<typeof Grant>;
 export function needsAuthorization(grant: OpenConnectorGrant, action: OpenConnectorAction) {
@@ -40,10 +41,12 @@ const Account = z.object({
   scopes: z.array(z.string()).default([]),
 });
 export class OpenConnectorAccounts {
+  private cleanupCursor = "";
   constructor(
     private readonly http: OpenConnectorHttp,
     private readonly deps: {
-      prisma: Pick<PrismaClient, "secret">;
+      prisma: Pick<PrismaClient, "secret" | "openConnectorAttempt">;
+      endpoint: string;
       secrets: EncryptedSecretStore;
       identitySecret: string;
     },
@@ -197,7 +200,7 @@ export class OpenConnectorAccounts {
   async reconnect(ref: string, auth: ConnectorAuthInput, context: AdapterContext) {
     let grant = await this.load(ref, context);
     if (grant?.requestId) {
-      const request = await this.requestStatus(ref, grant.requestId, context);
+      const request = await this.requestStatus(grant.requestId, context);
       if (request.status === "connected") {
         const completed = await this.poll(ref, context);
         if (!completed) throw new Error("Authorization is still being processed. Try again.");
@@ -207,12 +210,6 @@ export class OpenConnectorAccounts {
         if (grant.authorizationUrl) return { authorizationUrl: grant.authorizationUrl };
         throw new Error("Check or cancel the pending authorization before reconnecting.");
       }
-      // Fence an expired attempt before replacing it, including an in-flight callback.
-      await this.http.request(
-        `/v1/connection-requests/${encodeURIComponent(grant.requestId)}`,
-        context,
-        { method: "DELETE", headers: { "x-oo-connection-scope": ref } },
-      );
       grant = { ...grant, requestId: undefined, authorizationUrl: undefined };
       await this.save(ref, grant, context);
     }
@@ -243,42 +240,40 @@ export class OpenConnectorAccounts {
     const grant = await this.load(ref, context);
     if (!grant) throw new Error("Connection is unavailable");
     if (auth.type === "oauth2") {
-      const capabilities = z
-        .object({ scopedRequests: z.literal(true), cancelRequests: z.literal(true) })
-        .parse(await this.http.request("/v1/connection-capabilities", context));
-      if (!capabilities) throw new Error("OpenConnector needs scoped OAuth support");
-      const path = grant.accountId
-        ? `/v1/connections/by-id/${encodeURIComponent(grant.accountId)}/connect`
-        : `/v1/connections/${encodeURIComponent(provider.service)}/connect`;
+      // Upstream cannot cancel OAuth. Never target the live account: a late
+      // callback must create an unbound account, not mutate usable credentials.
+      const path = `/v1/connections/${encodeURIComponent(provider.service)}/connect`;
       const pending = z
         .object({ connectionRequestId: z.string(), authorizationUrl: z.string().url() })
         .parse(
           await this.http.request(path, context, {
             method: "POST",
-            headers: { "x-oo-connection-scope": ref },
             body: JSON.stringify({ authorizationOptionIds: auth.authorizationOptionIds }),
           }),
         );
-      try {
-        await this.save(
+      await this.deps.prisma.openConnectorAttempt.create({
+        data: {
+          id: pending.connectionRequestId,
           ref,
-          {
-            ...grant,
-            requestId: pending.connectionRequestId,
-            authorizationUrl: pending.authorizationUrl,
-            authType: auth.type,
-            service: provider.service,
-          },
-          context,
-        );
-      } catch (error) {
-        await this.http.request(
-          `/v1/connection-requests/${encodeURIComponent(pending.connectionRequestId)}`,
-          context,
-          { method: "DELETE", headers: { "x-oo-connection-scope": ref } },
-        );
-        throw error;
-      }
+          endpoint: this.deps.endpoint,
+          spaceId: context.spaceId,
+          userId: context.userId,
+          service: provider.service,
+          previousAccountId: grant.accountId,
+        },
+      });
+      // The durable attempt is collected if saving the local binding fails.
+      await this.save(
+        ref,
+        {
+          ...grant,
+          requestId: pending.connectionRequestId,
+          authorizationUrl: pending.authorizationUrl,
+          authType: auth.type,
+          service: provider.service,
+        },
+        context,
+      );
       return pending.authorizationUrl;
     }
     const raw = z
@@ -322,14 +317,13 @@ export class OpenConnectorAccounts {
     );
     return null;
   }
-  private async requestStatus(ref: string, requestId: string, context: AdapterContext) {
+  private async requestStatus(requestId: string, context: AdapterContext) {
     return z
       .object({ status: z.string(), appId: z.string().nullable(), service: z.string() })
       .parse(
         await this.http.request(
           `/v1/connection-requests/${encodeURIComponent(requestId)}`,
           context,
-          { headers: { "x-oo-connection-scope": ref } },
         ),
       );
   }
@@ -352,8 +346,10 @@ export class OpenConnectorAccounts {
   async poll(ref: string, context: AdapterContext) {
     let grant = await this.load(ref, context);
     if (!grant) throw new Error("Connection is unavailable");
+    const previousAccountId = grant.accountId;
+    const attemptId = grant.requestId;
     if (grant.requestId) {
-      const request = await this.requestStatus(ref, grant.requestId, context);
+      const request = await this.requestStatus(grant.requestId, context);
       if (request.service !== grant.service)
         throw new Error("Authorization does not match the connection");
       if (request.status === "initiated") return null;
@@ -387,6 +383,11 @@ export class OpenConnectorAccounts {
       await this.http.provider(account.service, context),
       context,
     );
+    if (attemptId) {
+      if (previousAccountId && previousAccountId !== account.id)
+        await this.deleteAccount(previousAccountId, account.service, context);
+      await this.deps.prisma.openConnectorAttempt.deleteMany({ where: { id: attemptId } });
+    }
     return { connectionRef: ref };
   }
   async grant(
@@ -415,7 +416,10 @@ export class OpenConnectorAccounts {
       allowedConnections: grant.accountId ? [grant.accountId] : [],
     };
     if (grant.tokenId) {
-      if (JSON.stringify(actions) !== JSON.stringify(grant.actions))
+      if (
+        JSON.stringify(actions) !== JSON.stringify(grant.actions) ||
+        grant.policyAccountId !== grant.accountId
+      )
         await this.http.request(
           `/api/runtime-tokens/${encodeURIComponent(grant.tokenId)}`,
           context,
@@ -430,8 +434,8 @@ export class OpenConnectorAccounts {
       );
       grant = { ...grant, token: created.token, tokenId: created.record.id };
       try {
-        await this.save(ref, { ...grant, actions }, context);
-        return { ...grant, actions };
+        await this.save(ref, { ...grant, actions, policyAccountId: grant.accountId }, context);
+        return { ...grant, actions, policyAccountId: grant.accountId };
       } catch (error) {
         await this.http
           .request(`/api/runtime-tokens/${encodeURIComponent(grant.tokenId!)}`, context, {
@@ -442,8 +446,9 @@ export class OpenConnectorAccounts {
       }
     }
     // Execution may refresh a remote policy, but must never overwrite lifecycle state.
-    if (persist) await this.save(ref, { ...grant, actions }, context);
-    return { ...grant, actions };
+    if (persist)
+      await this.save(ref, { ...grant, actions, policyAccountId: grant.accountId }, context);
+    return { ...grant, actions, policyAccountId: grant.accountId };
   }
   async cancelAuthorization(ref: string, context: AdapterContext) {
     const grant = await this.load(ref, context);
@@ -453,11 +458,6 @@ export class OpenConnectorAccounts {
       return { connected: false };
     }
     if (grant.requestId) {
-      await this.http.request(
-        `/v1/connection-requests/${encodeURIComponent(grant.requestId)}`,
-        context,
-        { method: "DELETE", headers: { "x-oo-connection-scope": ref } },
-      );
       await this.save(
         ref,
         { ...grant, requestId: undefined, authorizationUrl: undefined },
@@ -469,46 +469,13 @@ export class OpenConnectorAccounts {
   async revoke(ref: string, context: AdapterContext) {
     const grant = await this.load(ref, context);
     if (!grant) return;
-    if (grant.requestId) {
-      await this.http.request(
-        `/v1/connection-requests/${encodeURIComponent(grant.requestId)}`,
-        context,
-        { method: "DELETE", headers: { "x-oo-connection-scope": ref } },
-      );
-      const request = z.object({ appId: z.string().nullable() }).parse(
-        await this.http
-          .request(`/v1/connection-requests/${encodeURIComponent(grant.requestId)}`, context, {
-            headers: { "x-oo-connection-scope": ref },
-          })
-          .catch((error) => {
-            if (error instanceof OpenConnectorNotFound) return { appId: null };
-            throw error;
-          }),
-      );
-      if (request.appId) grant.accountId = request.appId;
-    }
     if (grant.tokenId)
       await this.http.request(`/api/runtime-tokens/${encodeURIComponent(grant.tokenId)}`, context, {
         method: "DELETE",
       });
-    if (grant.accountId && grant.authType !== "no_auth") {
-      const raw = await this.http
-        .request(`/v1/connections/by-id/${encodeURIComponent(grant.accountId)}`, context)
-        .catch((error) => {
-          if (error instanceof OpenConnectorNotFound) return null;
-          throw error;
-        });
-      if (raw) {
-        const account = Account.parse(raw);
-        if (grant.service && account.service !== grant.service)
-          throw new Error("Connection provider mismatch");
-        await this.http.request(
-          `/api/connections/${encodeURIComponent(account.service)}?connectionName=${encodeURIComponent(account.alias)}`,
-          context,
-          { method: "DELETE" },
-        );
-      }
-    } else if (grant.service && grant.alias)
+    if (grant.accountId && grant.authType !== "no_auth")
+      await this.deleteAccount(grant.accountId, grant.service, context);
+    else if (grant.service && grant.alias && grant.authType !== "oauth2")
       await this.http.request(
         `/api/connections/${encodeURIComponent(grant.service)}?connectionName=${encodeURIComponent(grant.alias)}`,
         context,
@@ -517,5 +484,53 @@ export class OpenConnectorAccounts {
     await this.deps.prisma.secret.deleteMany({
       where: { id: ref, spaceId: context.spaceId, kind: "open-connector" },
     });
+  }
+  private async deleteAccount(id: string, service: string | undefined, context: AdapterContext) {
+    const raw = await this.http
+      .request(`/v1/connections/by-id/${encodeURIComponent(id)}`, context)
+      .catch((error) => {
+        if (error instanceof OpenConnectorNotFound) return null;
+        throw error;
+      });
+    if (!raw) return;
+    const account = Account.parse(raw);
+    if (!service || account.service !== service) throw new Error("Connection provider mismatch");
+    await this.http.request(
+      `/api/connections/${encodeURIComponent(service)}?connectionName=${encodeURIComponent(account.alias)}`,
+      context,
+      { method: "DELETE" },
+    );
+  }
+  async maintain() {
+    const attempts = await this.deps.prisma.openConnectorAttempt.findMany({
+      where: { endpoint: this.deps.endpoint, id: { gt: this.cleanupCursor } },
+      orderBy: { id: "asc" },
+      take: 100,
+    });
+    for (const attempt of attempts) {
+      this.cleanupCursor = attempt.id;
+      const context: AdapterContext = {
+        ...attempt,
+        operationId: "oauth.cleanup",
+        traceId: attempt.id,
+        signal: AbortSignal.timeout(10000),
+      };
+      const grant = await this.load(attempt.ref, context);
+      if (grant?.requestId === attempt.id) continue;
+      const request = await this.requestStatus(attempt.id, context).catch((error) => {
+        if (error instanceof OpenConnectorNotFound) return null;
+        throw error;
+      });
+      if (request?.appId) {
+        if (request.service !== attempt.service) throw new Error("Authorization provider mismatch");
+        // A completed attempt can remain here if deleting its tracking row failed.
+        if (request.appId !== grant?.accountId)
+          await this.deleteAccount(request.appId, attempt.service, context);
+      } else if (Date.now() - attempt.createdAt.getTime() < 24 * 3600_000) continue;
+      if (attempt.previousAccountId && attempt.previousAccountId !== grant?.accountId)
+        await this.deleteAccount(attempt.previousAccountId, attempt.service, context);
+      await this.deps.prisma.openConnectorAttempt.deleteMany({ where: { id: attempt.id } });
+    }
+    if (attempts.length < 100) this.cleanupCursor = "";
   }
 }

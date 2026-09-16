@@ -9,7 +9,17 @@ const destination = {
 
 describe("credential contracts", () => {
   it.each([
+    "http://localhost:7860",
+    "http://127.0.0.1:8000",
+    "http://[::1]:8000",
+    "http://host.docker.internal:7860",
+    "http://local-service.localhost:8000",
+  ])("accepts explicitly saved local service origin %s", (origin) => {
+    expect(BotSecretDestination.safeParse({ ...destination, origin }).success).toBe(true);
+  });
+  it.each([
     "http://api.example.test",
+    "http://169.254.169.254",
     "https://user:pass@api.example.test",
     "https://api.example.test/path",
     "https://api.example.test?query=1",

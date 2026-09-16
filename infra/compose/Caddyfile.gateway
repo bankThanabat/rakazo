@@ -1,0 +1,10 @@
+# Use inside the existing OpenConnector site when both share a hostname.
+@gateway path /api/integration-gateway /api/integration-gateway/*
+handle @gateway {
+	reverse_proxy 127.0.0.1:3310
+}
+handle {
+	reverse_proxy 127.0.0.1:3000 {
+		header_down Set-Cookie "^(.*)$" "$1; Secure"
+	}
+}

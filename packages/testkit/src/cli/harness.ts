@@ -95,6 +95,7 @@ async function main() {
             "packages/testkit/src/eval-customer-support.postgres.test.ts",
             "packages/testkit/src/customer-archive.postgres.test.ts",
             "packages/adapters/src/customer-conversations.postgres.test.ts",
+            "packages/adapters/src/integration-gateway.postgres.test.ts",
             "apps/api/src/customer-website.postgres.test.ts",
             "packages/testkit/src/journeys.test.ts",
             "packages/testkit/src/authorization.test.ts",

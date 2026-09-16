@@ -2817,7 +2817,7 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 destination = normalizeSecretDestination(args.credential);
               } catch {
                 return finish({
-                  error: "Specify a credential name, HTTPS origin, and auth method.",
+                  error: "Specify a credential name, service origin, and auth method.",
                 });
               }
             }

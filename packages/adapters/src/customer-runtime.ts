@@ -1,83 +1,183 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { CustomerRuntime } from "@rakazo/adapter-kit";
 import { z } from "zod";
 import { readBoundedText } from "./connector-http.js";
 import { createOpenAiCompatibleFetch } from "./pi-openai-compatible-provider.js";
 
-/** Use OpenRAG chat so model, retrieval, and tool configuration remain in OpenRAG. */
-export class OpenRagCustomerRuntime implements CustomerRuntime {
+type Endpoint = { baseUrl: string; apiKey?: string };
+export type CustomerRuntimeConfig = Endpoint & { knowledge?: Endpoint };
+const nodeId = "RakazoCustomerAgent-runtime";
+const componentName = "RakazoCustomerAgent";
+const instructionsHash = (instructions: string) =>
+  createHash("sha256").update(instructions).digest("hex");
+
+/** Calls stock Langflow for execution and stock OpenRAG for scoped retrieval. */
+export class LangflowCustomerRuntime implements CustomerRuntime {
   constructor(
-    private readonly config: { baseUrl: string; apiKey?: string },
+    private readonly config: CustomerRuntimeConfig,
     private readonly request: typeof fetch = createOpenAiCompatibleFetch(),
   ) {}
 
-  private async post(path: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    const response = await this.request(`${this.config.baseUrl.replace(/\/$/, "")}/${path}`, {
-      method: "POST",
+  private async call(
+    endpoint: Endpoint,
+    path: string,
+    signal: AbortSignal,
+    input?: unknown,
+  ): Promise<unknown> {
+    const response = await this.request(`${endpoint.baseUrl.replace(/\/$/, "")}/${path}`, {
+      method: input === undefined ? "GET" : "POST",
       redirect: "error",
       signal,
       headers: {
         "content-type": "application/json",
-        ...(this.config.apiKey ? { "x-api-key": this.config.apiKey } : {}),
+        ...(endpoint.apiKey ? { "x-api-key": endpoint.apiKey } : {}),
       },
-      body: JSON.stringify(input),
+      ...(input === undefined ? {} : { body: JSON.stringify(input) }),
     });
     if (!response.ok) throw new Error("Customer reply service is unavailable");
-    const body = await readBoundedText(response, 1_000_000);
+    const body = await readBoundedText(response, path === "all" ? 16_000_000 : 1_000_000);
     if (body.truncated) throw new Error("Customer runtime response exceeded the size limit");
     return JSON.parse(body.text);
   }
 
-  async publish(input: {
-    staffId: string;
-    instructions: string;
-    knowledgeFilterId?: string;
-    signal: AbortSignal;
-  }) {
-    const result = await this.post(
-      "customer/flows",
-      {
-        staff_id: input.staffId,
-        instructions: input.instructions,
-        knowledge_filter_id: input.knowledgeFilterId,
-      },
-      input.signal,
+  async publish(input: Parameters<NonNullable<CustomerRuntime["publish"]>>[0]) {
+    if (input.knowledgeFilterId) await this.knowledgeFilters(input.knowledgeFilterId, input.signal);
+    // Use the deployed component's schema. Never submit source code supplied by a caller.
+    const catalog = z
+      .object({ rakazo: z.record(z.string(), z.unknown()).optional() })
+      .parse(await this.call(this.config, "all", input.signal));
+    const componentType = `ext:rakazo:${componentName}@extra`;
+    const installed = catalog.rakazo?.[componentType];
+    if (!installed) throw new Error("Install the Rakazo customer component in Langflow");
+    const component = z
+      .object({ template: z.record(z.string(), z.unknown()) })
+      .passthrough()
+      .parse(installed);
+    const field = z.object({ value: z.unknown().optional() }).passthrough();
+    const protocol = field.parse(component.template.protocol_version);
+    if (protocol.value !== "1") throw new Error("Unsupported Rakazo customer component version");
+    for (const name of [
+      "instructions",
+      "transcript",
+      "execution_endpoint",
+      "execution_token",
+      "model_base",
+      "model_key",
+      "model_id",
+    ])
+      field.parse(component.template[name]);
+    const template = {
+      ...component.template,
+      instructions: { ...field.parse(component.template.instructions), value: input.instructions },
+    };
+    const result = z.object({ id: z.string().uuid() }).parse(
+      await this.call(this.config, "flows/", input.signal, {
+        name: `Customer ${input.staffId} ${randomUUID()}`,
+        description: `Rakazo customer protocol 1; instructions ${instructionsHash(input.instructions)}`,
+        is_component: false,
+        data: {
+          nodes: [
+            {
+              id: nodeId,
+              type: "genericNode",
+              position: { x: 0, y: 0 },
+              data: { id: nodeId, type: componentType, node: { ...component, template } },
+            },
+          ],
+          edges: [],
+        },
+      }),
     );
-    return z.object({ flow_id: z.string().min(1) }).parse(result).flow_id;
+    return `langflow:1:${result.id}:${instructionsHash(input.instructions)}`;
   }
 
-  async search(input: { query: string; knowledgeFilterId: string; signal: AbortSignal }) {
-    return this.post(
-      "customer/search",
-      { query: input.query, filter_id: input.knowledgeFilterId, limit: 10 },
-      input.signal,
-    );
+  private async knowledgeFilters(id: string, signal: AbortSignal) {
+    if (!this.config.knowledge)
+      throw new Error("Configure a separate OpenRAG knowledge connection");
+    const response = z
+      .object({ filter: z.object({ query_data: z.unknown() }) })
+      .parse(
+        await this.call(
+          this.config.knowledge,
+          `knowledge-filters/${encodeURIComponent(id)}`,
+          signal,
+        ),
+      );
+    const raw = response.filter.query_data;
+    const query = z
+      .object({
+        filters: z.object({
+          data_sources: z.array(z.string().trim().min(1)).min(1),
+          document_types: z.array(z.string()).optional(),
+          owners: z.array(z.string()).optional(),
+          connector_types: z.array(z.string()).optional(),
+        }),
+      })
+      .parse(typeof raw === "string" ? JSON.parse(raw) : raw);
+    if (Object.values(query.filters).some((values) => values?.some((value) => /[*?]/.test(value))))
+      throw new Error("Customer knowledge requires explicit data sources");
+    return query.filters;
+  }
+
+  async search(input: Parameters<NonNullable<CustomerRuntime["search"]>>[0]) {
+    const filters = await this.knowledgeFilters(input.knowledgeFilterId, input.signal);
+    // Pass the checked concrete filters, avoiding a second mutable filter lookup upstream.
+    return this.call(this.config.knowledge!, "search", input.signal, {
+      query: input.query,
+      filters,
+      limit: 10,
+    });
   }
 
   async reply(input: Parameters<CustomerRuntime["reply"]>[0]): Promise<string> {
-    // A fresh upstream session replays only the scoped public transcript.
-    const response = await this.post(
-      "chat",
-      {
-        flow_id: input.flowId,
-        ...(input.executionContext ? { execution_context: input.executionContext } : {}),
-        ...(input.knowledgeFilterId
-          ? { filter_id: input.knowledgeFilterId }
-          : { filters: { _id: ["rakazo:no-customer-knowledge"] } }),
-        stream: false,
-        message: JSON.stringify({
+    const match = /^langflow:1:([a-f0-9-]{36}):([a-f0-9]{64})$/.exec(input.flowId);
+    if (!match || match[2] !== instructionsHash(input.instructions))
+      throw new Error("Republish customer behavior for the Langflow runtime");
+    if (!input.executionContext || !input.model)
+      throw new Error("Customer execution credentials are required");
+    const sessionId = randomUUID();
+    const response = await this.call(this.config, `run/${match[1]}?stream=false`, input.signal, {
+      input_type: "chat",
+      output_type: "chat",
+      output_component: nodeId,
+      session_id: sessionId,
+      tweaks: {
+        [nodeId]: {
+          // Reassert the committed revision's instructions even if an operator edits a flow.
           instructions: input.instructions,
-          conversation: input.conversationId,
-          messages: input.messages,
-        }),
+          transcript: JSON.stringify(input.messages),
+          execution_endpoint: input.executionContext.endpoint,
+          execution_token: input.executionContext.token,
+          model_base: input.model.baseUrl,
+          model_key: input.model.apiKey,
+          model_id: input.model.id,
+        },
       },
-      input.signal,
-    );
+    });
     const result = z
       .object({
-        flow_id: z.literal(input.flowId),
-        response: z.string().trim().min(1).max(16_000),
+        session_id: z.literal(sessionId),
+        outputs: z
+          .array(
+            z.object({
+              outputs: z
+                .array(
+                  z.object({
+                    component_id: z.literal(nodeId),
+                    outputs: z.object({
+                      message: z.object({
+                        message: z.string().trim().min(1).max(16_000),
+                        type: z.literal("text"),
+                      }),
+                    }),
+                  }),
+                )
+                .length(1),
+            }),
+          )
+          .length(1),
       })
       .parse(response);
-    return result.response;
+    return result.outputs[0]!.outputs[0]!.outputs.message.message;
   }
 }

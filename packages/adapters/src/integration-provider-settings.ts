@@ -7,6 +7,7 @@ import type {
 import { IntegrationProviderConfigSchema, IntegrationProviderIdSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { ComposioConnector } from "./composio-connector.js";
+import { IntegrationGatewayClient } from "./integration-gateway-client.js";
 import { OpenConnector } from "./open-connector.js";
 import { PipedreamConnector } from "./pipedream-connector.js";
 import type { EncryptedSecretStore } from "./secrets.js";
@@ -32,6 +33,7 @@ export class IntegrationProviderSettings {
   private create(config: IntegrationProviderConfig): ManagedConnectorProvider {
     if (this.factory) return this.factory(config);
     if (config.provider === "open-connector") {
+      if (config.mode === "gateway") return new IntegrationGatewayClient(config);
       return new OpenConnector(
         { ...config, identitySecret: this.identitySecret },
         { prisma: this.prisma, secrets: this.secrets },

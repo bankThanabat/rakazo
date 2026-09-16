@@ -9,11 +9,19 @@ services:
     networks:
       default: {}
       support:
-        aliases: [rakazo-support-rag]
+        aliases: [rakazo-support-rag, rakazo-support-rag.localhost]
   langflow:
+    environment:
+      LANGFLOW_ALLOW_CUSTOM_COMPONENTS: "false"
+      LANGFLOW_DEACTIVATE_TRACING: "true"
+      LANGFLOW_LOG_TRACE_LOCALS: "false"
+    volumes:
+      # Operator-installed extension; preserve the image's existing OpenRAG components.
+      - ../../infra/langflow/components/rakazo:/app/custom_components/rakazo:ro
     networks:
       default: {}
-      support: {}
+      support:
+        aliases: [rakazo-support-langflow.localhost]
 networks:
   support:
     external: true

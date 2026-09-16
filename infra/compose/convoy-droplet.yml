@@ -1,0 +1,109 @@
+name: convoy
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-convoy: &convoy
+  image: getconvoy/convoy:v26.7.6@sha256:f4934cc05e31b3e872b77031c4f7dbccf3c020da18ec407953d9b64c72697f08
+  restart: unless-stopped
+  logging: *logging
+  environment: &environment
+    CONVOY_HOST: ${CONVOY_ORIGIN:?Set the public HTTPS origin}
+    CONVOY_DB_HOST: postgres
+    CONVOY_DB_USERNAME: convoy
+    CONVOY_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set the database password}
+    CONVOY_DB_DATABASE: convoy
+    CONVOY_DB_OPTIONS: sslmode=disable&connect_timeout=30
+    CONVOY_DB_MAX_OPEN_CONN: "10"
+    CONVOY_DB_MAX_IDLE_CONN: "5"
+    CONVOY_REDIS_HOST: redis
+    CONVOY_REDIS_PASSWORD: ${REDIS_PASSWORD:?Set the queue password}
+    CONVOY_JWT_SECRET: ${CONVOY_JWT_SECRET:?Set an independent JWT secret}
+    CONVOY_JWT_REFRESH_SECRET: ${CONVOY_JWT_REFRESH_SECRET:?Set an independent refresh secret}
+    CONVOY_SIGNUP_ENABLED: "false"
+    CONVOY_ANALYTICS_ENABLED: "false"
+    CONVOY_LOGGER_LEVEL: warn
+    CONVOY_DISPATCHER_BLOCK_LIST: 0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,172.16.0.0/12,192.168.0.0/16,224.0.0.0/4,240.0.0.0/4,::/128,::1/128,fc00::/7,fe80::/10,ff00::/8
+    GOMEMLIMIT: 384MiB
+    GOMAXPROCS: "2"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    restart: unless-stopped
+    mem_limit: 768m
+    logging: *logging
+    environment:
+      POSTGRES_USER: convoy
+      POSTGRES_DB: convoy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set the database password}
+    command: [postgres, -c, shared_buffers=128MB, -c, max_connections=60]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U convoy -d convoy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+    restart: unless-stopped
+    mem_limit: 512m
+    logging: *logging
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?Set the queue password}
+    command: [redis-server, /usr/local/etc/redis/redis.conf]
+    volumes:
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    healthcheck:
+      test: [CMD-SHELL, "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    <<: *convoy
+    restart: "no"
+    mem_limit: 512m
+    profiles: [setup]
+    command: [migrate, up]
+
+  server:
+    <<: *convoy
+    mem_limit: 512m
+    command: [server]
+    ports:
+      - "127.0.0.1:5005:5005"
+    healthcheck:
+      test: [CMD, wget, -q, --spider, "http://127.0.0.1:5005/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  agent:
+    <<: *convoy
+    mem_limit: 768m
+    command: [agent]
+    ports:
+      - "127.0.0.1:5008:5008"
+    healthcheck:
+      test: [CMD, wget, -q, --spider, "http://127.0.0.1:5008/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  postgres-data:
+  redis-data:

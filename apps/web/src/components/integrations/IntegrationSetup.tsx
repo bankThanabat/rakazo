@@ -1,12 +1,17 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import type { IntegrationCatalogResult, IntegrationSetupState } from "@rakazo/contracts";
+import type { IntegrationChoice as Choice } from "@rakazo/core";
+import {
+  integrationChoiceProvider,
+  integrationCredentialsUrl,
+  integrationProviderInput,
+} from "@rakazo/core";
 import { Button, Input } from "@rakazo/ui-web";
 import { Check } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { connectMcpOauth } from "../../lib/mcp-connect";
 import { rpc } from "../../lib/rpc";
-
-type Choice = "direct" | "composio" | "pipedream" | "open-connector" | "executor";
+import { GatewaySettings } from "./GatewaySettings";
 
 export function IntegrationSetup({
   onDone,
@@ -33,6 +38,7 @@ export function IntegrationSetup({
   const [clientId, setClientId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [endpoint, setEndpoint] = useState("");
+  const credentialsUrl = integrationCredentialsUrl(choice, endpoint);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<IntegrationCatalogResult[]>([]);
   const [searched, setSearched] = useState(false);
@@ -44,14 +50,16 @@ export function IntegrationSetup({
     { id: "composio", label: "Composio" },
     { id: "pipedream", label: "Pipedream" },
     { id: "open-connector", label: "OpenConnector" },
+    { id: "gateway", label: t`Rakazo gateway` },
     { id: "executor", label: "Executor" },
   ];
-  const managed = choice === "composio" || choice === "pipedream" || choice === "open-connector";
+  const providerId = integrationChoiceProvider(choice);
+  const managed = providerId !== null;
   const hasCredentials = Boolean(apiKey.trim());
   const credentialsReady =
     hasCredentials &&
     (choice !== "pipedream" || Boolean(clientId.trim() && projectId.trim())) &&
-    (choice !== "open-connector" || Boolean(endpoint.trim()));
+    ((choice !== "open-connector" && choice !== "gateway") || Boolean(endpoint.trim()));
   const remoteResults = [
     ...new Map(
       results.flatMap((result) =>
@@ -64,7 +72,7 @@ export function IntegrationSetup({
       ),
     ).values(),
   ];
-  const configured = state?.providers.find((provider) => provider.id === choice)?.configured;
+  const configured = state?.providers.find((provider) => provider.id === providerId)?.configured;
   useEffect(() => {
     if (!serverSetup || initialState) return;
     void rpc.integrationSetup
@@ -88,17 +96,7 @@ export function IntegrationSetup({
   async function saveProvider() {
     await run(async () => {
       await rpc.integrationSetup.save(
-        choice === "composio"
-          ? { provider: "composio", apiKey }
-          : choice === "open-connector"
-            ? { provider: "open-connector", endpoint, apiKey }
-            : {
-                provider: "pipedream",
-                clientId,
-                clientSecret: apiKey,
-                projectId,
-                environment: "production",
-              },
+        integrationProviderInput(choice, { apiKey, endpoint, clientId, projectId }),
       );
       setApiKey("");
       setState(await rpc.integrationSetup.get());
@@ -144,7 +142,11 @@ export function IntegrationSetup({
           {choices
             .filter(
               ({ id }) =>
-                !managedOnly || id === "composio" || id === "pipedream" || id === "open-connector",
+                !managedOnly ||
+                id === "composio" ||
+                id === "pipedream" ||
+                id === "open-connector" ||
+                id === "gateway",
             )
             .map(({ id, label }) => (
               <button
@@ -174,7 +176,7 @@ export function IntegrationSetup({
           ) : null}
           {state?.canConfigure ? (
             <>
-              {choice === "open-connector" ? (
+              {choice === "open-connector" || choice === "gateway" ? (
                 <label htmlFor={`${fieldId}-endpoint`} className="block text-sm">
                   <Trans>Server URL</Trans>
                   <Input
@@ -212,11 +214,13 @@ export function IntegrationSetup({
                 </>
               ) : null}
               <label htmlFor={`${fieldId}-key`} className="block text-sm">
-                {choice === "open-connector"
-                  ? t`Admin token`
-                  : choice === "composio"
-                    ? t`API key`
-                    : t`Client secret`}
+                {choice === "gateway"
+                  ? t`Runtime key`
+                  : choice === "open-connector"
+                    ? t`Admin token`
+                    : choice === "composio"
+                      ? t`API key`
+                      : t`Client secret`}
                 <Input
                   id={`${fieldId}-key`}
                   className="mt-2"
@@ -226,20 +230,16 @@ export function IntegrationSetup({
                   autoComplete="new-password"
                 />
               </label>
-              <a
-                className="text-sm text-muted-foreground underline"
-                href={
-                  choice === "composio"
-                    ? "https://dashboard.composio.dev"
-                    : choice === "open-connector"
-                      ? "https://github.com/oomol-lab/open-connector/blob/main/docs/programmatic-connections.md"
-                      : "https://pipedream.com/docs/connect/mcp/developers"
-                }
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Trans>Get credentials</Trans>
-              </a>
+              {credentialsUrl ? (
+                <a
+                  className="text-sm text-muted-foreground underline"
+                  href={credentialsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <Trans>Get credentials</Trans>
+                </a>
+              ) : null}
               {!onDone ? (
                 <Button
                   className="ml-3"
@@ -257,6 +257,7 @@ export function IntegrationSetup({
           ) : null}
         </>
       ) : null}
+      {choice === "open-connector" && configured && !managedOnly ? <GatewaySettings /> : null}
       {choice === "direct" ? (
         <>
           <form
