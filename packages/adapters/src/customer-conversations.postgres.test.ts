@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { AdapterContext, CustomerRuntime, JobPublisher } from "@rakazo/adapter-kit";
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import {
+  configureCustomerReplies,
   createCustomerInbox,
   createCustomerRepos,
   createDb,
@@ -235,6 +236,163 @@ describe.skipIf(!enabled)(
         where: { channelId: fixture.channel.id },
       });
     }
+    it("auto replies toggle resumes existing chats, ignores the backlog and preserves manual replies", async () => {
+      const a = await setup();
+      const configure = (enabled: boolean) =>
+        configureCustomerReplies(db.prisma, a.owner, {
+          connectionId: a.account.id,
+          enabled,
+        });
+      await configure(false);
+      const c = await receive(a);
+      await service.process(c.id);
+      expect(reply).not.toHaveBeenCalled();
+      expect(sends).toHaveLength(0);
+      await configure(true);
+      await service.process(c.id);
+      expect(sends).toHaveLength(0);
+      await receive(a, [incoming("two")]);
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      await receive(a, [incoming("three")]);
+      await configure(false);
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      await receive(a, [incoming("four")]);
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      const inbox = createCustomerInbox(db.prisma);
+      await inbox.reply(a.owner, { id: c.id, body: "Manual reply", nonce: randomUUID() });
+      // Repeated off requests must not cancel a human's queued reply.
+      await configure(false);
+      await service.process(c.id);
+      expect(sends).toHaveLength(2);
+      expect(sends[1]?.input).toMatchObject({ texts: ["Manual reply"] });
+      await configure(true);
+      expect(
+        await db.prisma.customerConversation.findUnique({ where: { id: c.id } }),
+      ).toMatchObject({ owner: "staff" });
+    });
+
+    it("still sends a queued handoff notice after auto replies are turned off", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        await service.tools.execute(request.executionContext!.token, {
+          name: "request_human",
+          callId: "handoff",
+          arguments: { reason: "Customer asks for a person" },
+        });
+        return "This model continuation must not be delivered";
+      });
+      await service.process(c.id);
+      await configureCustomerReplies(db.prisma, a.owner, {
+        connectionId: a.account.id,
+        enabled: false,
+      });
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      expect(JSON.stringify(sends[0]?.input)).toContain("A support agent will follow up here.");
+    });
+
+    it("turning auto replies off fences generation already in progress", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      let finish!: (text: string) => void;
+      let started!: () => void;
+      const running = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      reply.mockImplementation(async () => {
+        started();
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      });
+      const processing = service.process(c.id);
+      await running;
+      await configureCustomerReplies(db.prisma, a.owner, {
+        connectionId: a.account.id,
+        enabled: false,
+      });
+      finish("Do not send this");
+      await processing;
+      expect(sends).toHaveLength(0);
+    });
+
+    it("reply assignment requires an owned active staff agent and configured customer behavior", async () => {
+      const a = await setup();
+      const b = await setup();
+      await expect(
+        configureCustomerReplies(db.prisma, b.owner, {
+          connectionId: a.account.id,
+          enabled: false,
+        }),
+      ).rejects.toThrow();
+      await expect(
+        configureCustomerReplies(
+          db.prisma,
+          { ...a.owner, spaceId: b.owner.spaceId },
+          {
+            connectionId: a.account.id,
+            enabled: false,
+          },
+        ),
+      ).rejects.toThrow();
+      await expect(
+        configureCustomerReplies(db.prisma, a.owner, {
+          connectionId: a.account.id,
+          enabled: true,
+          botId: b.owner.botId,
+        }),
+      ).rejects.toThrow();
+      const bot = await db.prisma.bot.create({
+        data: {
+          spaceId: a.owner.spaceId,
+          userId: a.owner.userId,
+          name: "Other staff",
+          color: "blue",
+        },
+      });
+      await expect(
+        configureCustomerReplies(db.prisma, a.owner, {
+          connectionId: a.account.id,
+          enabled: true,
+          botId: bot.id,
+        }),
+      ).rejects.toThrow("Set up customer replies");
+      await configureCustomerReplies(db.prisma, a.owner, {
+        connectionId: a.account.id,
+        enabled: false,
+        botId: bot.id,
+      });
+      expect(
+        await db.prisma.customerChannel.findUnique({ where: { id: a.channel.id } }),
+      ).toMatchObject({ botId: bot.id, autoReplies: false, enabled: true });
+      const behavior = await db.prisma.customerBehavior.findUniqueOrThrow({
+        where: { botId: a.owner.botId },
+      });
+      await db.prisma.customerBehavior.create({
+        data: { botId: bot.id, flowId: behavior.flowId, instructions: behavior.instructions },
+      });
+      await configureCustomerReplies(db.prisma, a.owner, {
+        connectionId: a.account.id,
+        enabled: true,
+        botId: bot.id,
+      });
+      expect(
+        await db.prisma.customerChannel.findUnique({ where: { id: a.channel.id } }),
+      ).toMatchObject({ botId: bot.id, autoReplies: true });
+      await db.prisma.bot.update({ where: { id: bot.id }, data: { archivedAt: new Date() } });
+      await expect(
+        configureCustomerReplies(db.prisma, a.owner, {
+          connectionId: a.account.id,
+          enabled: true,
+          botId: bot.id,
+        }),
+      ).rejects.toThrow();
+    });
+
     it("keeps polling other customers and checkpoints after a sender exceeds their quota", async () => {
       const a = await setup();
       await db.prisma.customerChannel.update({

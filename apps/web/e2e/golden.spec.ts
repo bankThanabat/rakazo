@@ -136,8 +136,8 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
 
   await page.getByText("Integrations").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
-  const available = page.getByRole("region", { name: "Available integrations", exact: true });
-  await expect(available).toContainText(
+  const list = page.locator("#integration-list");
+  await expect(list).toContainText(
     /Gmail[\s\S]*Google Calendar[\s\S]*Google Drive[\s\S]*Slack[\s\S]*Notion/,
   );
   await expect(page.getByText("GitHub", { exact: true })).toBeVisible();
@@ -147,23 +147,17 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await expect(page.getByRole("button", { name: "Add OpenAPI", exact: true })).toBeHidden();
   await expect(page.getByRole("button", { name: "Add GraphQL", exact: true })).toBeHidden();
   await expect(page.getByText("Tool sources", { exact: true })).toBeHidden();
-  await expect(
-    page.getByText("Connect apps or add Treg, MCP, and OpenAPI tool sources.", { exact: true }),
-  ).toBeHidden();
   await captureScreenshot(page, testInfo, "11-plugins-catalog");
 
   const gmailRow = page.getByTestId("connection-tile-gmail");
-  await gmailRow.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(gmailRow.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
+  await gmailRow.click();
+  const detail = page.getByTestId("connection-detail");
+  await detail.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(gmailRow.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Available actions", { exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "11a-connected-plugins");
 
-  await gmailRow.getByRole("button", { name: "Manage", exact: true }).click();
-  const detail = page.getByTestId("connection-detail");
-  await expect(detail).toBeVisible();
-  await expect(page.getByTestId("connection-accounts")).toBeVisible();
-  await expect(page.getByTestId("connection-tools")).toBeVisible();
-
-  await detail.getByRole("button", { name: "Add another", exact: true }).click();
+  await detail.getByRole("button", { name: "Add account", exact: true }).click();
   await expect(detail.getByLabel("Account label")).toHaveCount(2);
   await detail.getByLabel("Account label").nth(1).fill("Work");
   const renamed = page.waitForResponse(
@@ -177,38 +171,38 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await page.getByRole("button", { name: "Close integrations" }).click();
   await page.getByText("Integrations").click();
   await expect(page.getByPlaceholder("Search apps")).toBeVisible();
-  const gmailTileAgain = page.getByTestId("connection-tile-gmail");
-  await expect(gmailTileAgain.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
-  await gmailTileAgain.getByRole("button", { name: "Manage", exact: true }).click();
+  const gmailRowAgain = page.getByTestId("connection-tile-gmail");
+  await expect(gmailRowAgain.getByText("2 accounts", { exact: true })).toBeVisible();
+  await gmailRowAgain.click();
   const detailAgain = page.getByTestId("connection-detail");
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(2);
   await expect(detailAgain.getByLabel("Account label").nth(1)).toHaveValue("Work");
 
-  await detailAgain.getByRole("button", { name: "Remove", exact: true }).last().click();
+  await detailAgain.getByRole("button", { name: "Disconnect", exact: true }).last().click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(1);
-  await detailAgain.getByRole("button", { name: "Uninstall", exact: true }).click();
-  await expect(page.getByTestId("connection-detail")).toHaveCount(0);
-  const gmailRowEmpty = page.getByTestId("connection-tile-gmail");
-  await expect(gmailRowEmpty.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  await detailAgain.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
+  await expect(detailAgain.getByLabel("Account label")).toHaveCount(0);
+  await expect(gmailRowAgain.getByText("Connected", { exact: true })).toHaveCount(0);
+  await expect(detailAgain.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
   await captureScreenshot(page, testInfo, "11b-connected-plugins-empty");
 
   const linearRow = page.getByTestId("connection-tile-linear");
+  await linearRow.click();
+  const linearDetail = page.getByTestId("connection-detail");
   const connectPopup = page.waitForEvent("popup");
-  await linearRow.getByRole("button", { name: "Connect", exact: true }).click();
+  await linearDetail.getByRole("button", { name: "Connect", exact: true }).click();
   const popup = await connectPopup;
   await popup.close();
-  await expect(linearRow.getByRole("button", { name: "Manage", exact: true })).toBeVisible();
-  await linearRow.getByRole("button", { name: "Manage", exact: true }).click();
-  const linearDetail = page.getByTestId("connection-detail");
-  await expect(linearDetail).toBeVisible();
-  await linearDetail.getByRole("button", { name: "Uninstall", exact: true }).click();
-  await expect(page.getByTestId("connection-detail")).toHaveCount(0);
-  await expect(linearRow.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  await expect(linearRow.getByText("Connected", { exact: true })).toBeVisible();
+  await linearDetail.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
+  await expect(linearRow.getByText("Connected", { exact: true })).toHaveCount(0);
+  await expect(linearDetail.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
 
+  await page.getByRole("button", { name: "Advanced", exact: true }).click();
   const advanced = page.getByTestId("integrations-advanced");
-  await advanced.evaluate((element) => {
-    (element as HTMLDetailsElement).open = true;
-  });
   await expect(page.getByRole("button", { name: "Manage MCP servers", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add MCP server", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add OpenAPI", exact: true })).toBeVisible();

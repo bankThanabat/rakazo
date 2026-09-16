@@ -146,7 +146,9 @@ export function createCustomerInbox(prisma: PrismaClient) {
             lastCustomerSeq: locked.nextSeq + 1,
             state: "open",
             name: input.name,
-            ...(locked.owner === "staff" ? { needsHuman: true, notifiedGeneration: -1 } : {}),
+            ...(!channel.autoReplies || locked.owner === "staff"
+              ? { needsHuman: true, notifiedGeneration: -1 }
+              : {}),
           },
         });
         await tx.customerMessage.create({
@@ -157,7 +159,7 @@ export function createCustomerInbox(prisma: PrismaClient) {
             role: "customer",
             senderId: input.customerId,
             body: input.body,
-            status: next.owner === "bot" ? "queued" : "received",
+            status: channel.autoReplies && next.owner === "bot" ? "queued" : "received",
             generation: next.generation,
           },
         });

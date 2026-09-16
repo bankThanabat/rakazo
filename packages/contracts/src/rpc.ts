@@ -671,6 +671,9 @@ export const appContract = {
       .output(z.array(ConnectionCatalogItemSchema)),
     list: oc.output(z.array(ConnectionSchema)),
     setupIncoming: oc.input(IncomingSetupInputSchema).output(IncomingSetupResultSchema),
+    configureReplies: oc
+      .input(z.object({ connectionId: Id, enabled: z.boolean(), botId: Id.optional() }))
+      .output(z.object({ ok: z.literal(true) })),
     begin: oc
       .input(
         z.object({

@@ -54,7 +54,7 @@ import {
   isComputerScreenUnavailable,
   isSandboxGoneError,
   isScratchpadStatus,
-  listConnectionWebhooks,
+  listConnectionIncoming,
   listPiCatalog,
   listScratchpadItems,
   McpOAuthBroker,
@@ -114,6 +114,7 @@ import {
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
+  configureCustomerReplies,
   connectionAccessWhere,
   createCustomerInbox,
   createCustomerRepos,
@@ -486,6 +487,11 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("CONFLICT", { message: error.message });
   }
   return error;
+}
+
+/** Only messages our own code threw reach the client; library errors get the generic text. */
+function deliberateMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.constructor === Error ? error.message : fallback;
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -3336,27 +3342,51 @@ export function createRouter(deps: RouterDeps) {
       }),
     },
     connections: {
+      configureReplies: authed.connections.configureReplies.handler(async ({ context, input }) => {
+        try {
+          await configureCustomerReplies(deps.prisma, context.actor, input);
+          return { ok: true as const };
+        } catch (error) {
+          if (error instanceof IsolationError) throw new ORPCError("NOT_FOUND");
+          throw new ORPCError("BAD_REQUEST", {
+            message: deliberateMessage(error, "Could not save auto replies."),
+          });
+        }
+      }),
       setupIncoming: authed.connections.setupIncoming.handler(async ({ context, input }) => {
         if (!deps.integrationSettings) throw new ORPCError("SERVICE_UNAVAILABLE");
-        return setupCustomerIncoming(
-          {
-            prisma: deps.prisma,
-            secrets: deps.secrets,
-            integrations: deps.integrationSettings,
-            apiUrl: deps.env.apiUrl,
-          },
-          context.actor,
-          input,
-        );
+        try {
+          return await setupCustomerIncoming(
+            {
+              prisma: deps.prisma,
+              secrets: deps.secrets,
+              integrations: deps.integrationSettings,
+              apiUrl: deps.env.apiUrl,
+            },
+            context.actor,
+            input,
+          );
+        } catch (error) {
+          if (error instanceof ORPCError) throw error;
+          // The account owner can act on these failures, so keep the cause in the log and
+          // hand back the message instead of an opaque 500.
+          getLogger().error("rpc connections/setupIncoming failed", error);
+          throw new ORPCError(error instanceof IsolationError ? "NOT_FOUND" : "BAD_REQUEST", {
+            message: deliberateMessage(error, "Could not set up incoming messages."),
+          });
+        }
       }),
       setup: authed.connections.setup.handler(async ({ context, input }) => {
         const provider = deps.connectors.managed(input.connectorId);
         if (input.connectorId !== "open-connector" || !provider?.setup)
           throw new ORPCError("BAD_REQUEST");
-        return provider.setup(
-          input.provider,
-          connectionContext(context.actor, "connections.setup", context.signal),
-        );
+        return {
+          ...(await provider.setup(
+            input.provider,
+            connectionContext(context.actor, "connections.setup", context.signal),
+          )),
+          incomingSecrets: customerIncomingTemplate(input.provider)?.secrets,
+        };
       }),
       configureOAuth: authed.connections.configureOAuth.handler(async ({ context, input }) => {
         if (!context.actor.isDeploymentOwner) throw new ORPCError("FORBIDDEN");
@@ -3488,7 +3518,7 @@ export function createRouter(deps: RouterDeps) {
         const rows = await deps.prisma.connection.findMany({
           where: connectionAccessWhere(context.actor),
         });
-        const webhookUrls = await listConnectionWebhooks(
+        const incoming = await listConnectionIncoming(
           { prisma: deps.prisma, apiUrl: deps.env.apiUrl },
           context.actor,
           rows,
@@ -3508,19 +3538,26 @@ export function createRouter(deps: RouterDeps) {
                     )
                     .catch(() => ({}))
                 : {};
+            const canManage = row.userId === context.actor.userId;
+            const channel = incoming.get(row.id);
             return {
               ...state,
               // Authorization URLs belong to the creator, even for team-shared accounts.
-              authorizationUrl:
-                row.userId === context.actor.userId ? state.authorizationUrl : undefined,
+              authorizationUrl: canManage ? state.authorizationUrl : undefined,
               id: row.id,
-              webhookUrl: webhookUrls.get(row.id)?.url,
-              automaticReplies: webhookUrls.get(row.id)?.autoReplies,
+              webhookUrl: channel?.url,
+              automaticReplies: channel?.autoReplies,
+              // Only the manager can reassign staff, so only they learn who is assigned.
+              replyBotId: canManage ? channel?.botId : undefined,
+              replyBotName: canManage ? channel?.botName : undefined,
               incomingSecrets:
                 row.connectorId === "open-connector"
-                  ? customerIncomingTemplate(row.provider)?.secrets
+                  ? customerIncomingTemplate(row.provider)?.secrets.map((secret) => ({
+                      ...secret,
+                      saved: channel?.savedSecrets.includes(secret.key) ?? false,
+                    }))
                   : undefined,
-              canManage: row.userId === context.actor.userId,
+              canManage,
               connectorId: row.connectorId,
               provider: row.provider,
               displayName: row.displayName,

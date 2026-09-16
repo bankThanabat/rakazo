@@ -1,3 +1,4 @@
+export { AppIcon } from "./app-icon.js";
 export { type AvatarStyle, AvatarStyleProvider, useAvatarStyle } from "./avatar-style.js";
 export { BotAvatar, Wordmark } from "./bot-avatar.js";
 export * from "./components/ui/alert-dialog.js";
@@ -26,7 +27,6 @@ export * from "./components/ui/textarea.js";
 export * from "./components/ui/toggle.js";
 export * from "./components/ui/tooltip.js";
 export { GroupAvatar, type GroupAvatarMember, type GroupAvatarProps } from "./group-avatar.js";
-export { IntegrationCard } from "./integration-card.js";
 export { cn } from "./lib/utils.js";
 export { ModelThinkingOptions } from "./model-thinking-options.js";
 export { ProfileAvatar } from "./profile-avatar.js";

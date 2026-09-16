@@ -24,6 +24,7 @@ import {
   invalidateCustomerConversations,
   Prisma,
   requireCustomerAccess,
+  setCustomerChannelReplies,
 } from "@rakazo/db";
 import { normalizeSecretDestination } from "./bot-secrets.js";
 import {
@@ -251,7 +252,9 @@ export function createCustomerConversations(deps: {
       activeMessage = message.id;
       if (
         message.generation !== row.generation ||
-        (message.role === "customer" && row.owner !== "bot")
+        (message.role === "customer" && row.owner !== "bot") ||
+        // Handoff notices (system) still go out when auto replies are off.
+        ((message.role === "customer" || message.role === "bot") && !row.channel.autoReplies)
       ) {
         await prisma.customerMessage.update({
           where: { id: message.id },
@@ -348,7 +351,7 @@ export function createCustomerConversations(deps: {
               ...fence,
               owner: "bot",
               generation: row.generation,
-              channel: { enabled: true },
+              channel: { enabled: true, autoReplies: true },
             },
             data: { nextSeq: { increment: 1 } },
           });
@@ -385,7 +388,7 @@ export function createCustomerConversations(deps: {
           where: {
             ...fence,
             generation: row.generation,
-            channel: { enabled: true },
+            channel: { enabled: true, ...(outbound.role === "bot" ? { autoReplies: true } : {}) },
             ...(outbound.role === "bot" ? { owner: "bot" } : {}),
           },
           data: { updatedAt: new Date(), leaseUntil: new Date(Date.now() + leaseMs) },
@@ -409,7 +412,14 @@ export function createCustomerConversations(deps: {
         if (
           !(
             await prisma.customerConversation.updateMany({
-              where: { ...fence, generation: row.generation, channel: liveChannel },
+              where: {
+                ...fence,
+                generation: row.generation,
+                channel: {
+                  ...liveChannel,
+                  ...(outbound.role === "bot" ? { autoReplies: true } : {}),
+                },
+              },
               data: { leaseUntil: new Date(Date.now() + leaseMs) },
             })
           ).count
@@ -684,6 +694,7 @@ export function createCustomerConversations(deps: {
               name: input.name,
               ciphertext: "",
               websiteOrigins: origins,
+              autoReplies: true,
               startedAt: new Date(),
             },
             update: { name: input.name, websiteOrigins: origins },
@@ -703,23 +714,16 @@ export function createCustomerConversations(deps: {
         };
       }
       if (operation === "channel") {
-        const { id, ...settings } = CustomerChannelSettingsInput.parse(args);
-        if (
-          settings.autoReplies &&
-          !(await prisma.customerBehavior.findUnique({ where: { botId } }))
-        )
-          throw new Error("Configure customer behavior before enabling automatic replies");
+        const { id, autoReplies, ...settings } = CustomerChannelSettingsInput.parse(args);
         await prisma.$transaction(async (tx) => {
-          const changed = await tx.customerChannel.updateMany({
+          await tx.$queryRaw`SELECT id FROM customer_channels WHERE id = ${id} FOR UPDATE`;
+          const channel = await tx.customerChannel.findFirst({
             where: { id, botId, userId: actor.userId, spaceId: actor.spaceId },
-            data: settings,
           });
-          if (!changed.count) throw new IsolationError();
-          if (
-            settings.enabled === false ||
-            settings.shared === false ||
-            settings.autoReplies === false
-          )
+          if (!channel) throw new IsolationError();
+          if (autoReplies !== undefined) await setCustomerChannelReplies(tx, channel, autoReplies);
+          await tx.customerChannel.update({ where: { id }, data: settings });
+          if (settings.enabled === false || settings.shared === false)
             await invalidateCustomerConversations(tx, { channelId: id }, "staff");
         });
         return { ok: true };

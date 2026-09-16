@@ -159,7 +159,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
     shared: false,
     enabled: true,
     startedAt: new Date("2026-01-01"),
-    bot: { archivedAt: null },
+    botId: "support-staff",
+    autoReplies: false,
+    bot: { archivedAt: null, name: "Support staff" },
     binding: JSON.parse(
       readFileSync(
         new URL("../../../docs/self-host/customer-bindings.json", import.meta.url),
@@ -184,12 +186,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
     },
     customerChannel: {
       findMany: vi.fn(async ({ where }) => {
-        const { connectionId, enabled, startedAt, bot, ...scope } = where;
-        return matches(channel, scope) &&
-          connectionId.in.includes(channel.connectionId) &&
-          channel.enabled === enabled &&
-          channel.startedAt !== startedAt.not &&
-          channel.bot.archivedAt === bot.archivedAt
+        const { connectionId, startedAt, bot, ...scope } = where;
+        const live = !startedAt || (channel.startedAt && channel.bot.archivedAt === bot.archivedAt);
+        return live && matches(channel, scope) && connectionId.in.includes(channel.connectionId)
           ? [channel]
           : [];
       }),
@@ -221,8 +220,12 @@ it("lists team connections and discovers tools for teammates while keeping manag
       id: "team-account",
       canManage: false,
       webhookUrl: "https://public.example.test/api/customer-events/customer-channel",
+      automaticReplies: false,
     }),
   ]);
+  // Who answers a shared account is the manager's business, not the teammate's.
+  expect(connections[0]).not.toHaveProperty("replyBotId");
+  expect(JSON.stringify(connections)).not.toContain("Support staff");
   expect(JSON.stringify(connections)).not.toContain("LINE_CHANNEL_SECRET_RECORD");
   expect((await rpc("list", {}, actor)).body.json[0]).not.toHaveProperty("webhookUrl");
   channel.shared = true;

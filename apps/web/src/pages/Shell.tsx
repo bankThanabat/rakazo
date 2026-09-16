@@ -4088,15 +4088,14 @@ export function ShellPage() {
         {pluginsOpen ? (
           <PluginsOverlay
             activeBotId={activeBotId.current}
-            onOpenAssistant={(assistant) => {
-              setPluginsOpen(false);
-              setInboxTab("staff");
-              navigate(`/app/${assistant.botId}`);
-            }}
             onClose={() => setPluginsOpen(false)}
             onOpenMcp={() => {
               setPluginsOpen(false);
               setMcpOpen(true);
+            }}
+            onNavigate={(path) => {
+              setPluginsOpen(false);
+              navigate(path);
             }}
           />
         ) : null}

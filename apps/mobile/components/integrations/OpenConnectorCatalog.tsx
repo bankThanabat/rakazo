@@ -111,13 +111,35 @@ export function OpenConnectorCatalog({
       const bots = await rpc<Array<{ id: string; name: string }>>("bots/list");
       if (!bots.length) throw new Error(t("Create an assistant first."));
       presentMessageActionSheet({
-        title: t("Choose an assistant"),
+        title: t("Assign staff"),
         cancel: t("Cancel"),
         more: t("More"),
         colorScheme,
         actions: bots.map((bot) => ({
           text: bot.name,
           onPress: () => setIncoming({ connectionId, botId: bot.id, secrets: {} }),
+        })),
+      });
+    });
+  }
+  async function configureReplies(row: Connection, enabled: boolean, botId?: string) {
+    await run(async () => {
+      await rpc("connections/configureReplies", { connectionId: row.id, enabled, botId });
+      await onRefresh();
+    });
+  }
+  async function assignStaff(row: Connection) {
+    await run(async () => {
+      const bots = await rpc<Array<{ id: string; name: string }>>("bots/list");
+      if (!bots.length) throw new Error(t("Create an assistant first."));
+      presentMessageActionSheet({
+        title: t("Assign staff"),
+        cancel: t("Cancel"),
+        more: t("More"),
+        colorScheme,
+        actions: bots.map((bot) => ({
+          text: bot.name,
+          onPress: () => void configureReplies(row, row.automaticReplies ?? false, bot.id),
         })),
       });
     });
@@ -411,10 +433,24 @@ export function OpenConnectorCatalog({
                   {button(t("Disconnect"), () => disconnect(row))}
                 </View>
               ) : null}
-              {row.automaticReplies !== undefined ? (
-                <Text style={styles.text}>
-                  {row.automaticReplies ? t("Automatic replies on") : t("Automatic replies off")}
-                </Text>
+              {row.webhookUrl ? (
+                <View style={styles.group}>
+                  <View style={styles.row}>
+                    <Switch
+                      accessibilityLabel={t("Auto reply messages")}
+                      value={row.automaticReplies ?? false}
+                      disabled={busy || row.canManage === false}
+                      onValueChange={(enabled) => void configureReplies(row, enabled)}
+                    />
+                    <Text style={styles.text}>{t("Auto reply messages")}</Text>
+                  </View>
+                  <Text style={styles.text}>{t("Assign staff")}</Text>
+                  {button(
+                    row.replyBotName ?? t("Choose staff"),
+                    () => void assignStaff(row),
+                    busy || row.canManage === false,
+                  )}
+                </View>
               ) : null}
               {row.webhookUrl ? (
                 <View style={styles.group}>

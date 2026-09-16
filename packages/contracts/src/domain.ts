@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { IncomingSecretSchema } from "./connector-auth.js";
 import { ThreadMessageSchema } from "./events.js";
 import { Id, MemoryScope, RunStatus, SandboxKind } from "./ids.js";
 import { McpHeadersSchema, McpRemoteEndpointSchema, McpTransportSchema } from "./mcp.js";
@@ -561,8 +562,12 @@ export const ConnectionSchema = z.object({
   id: Id,
   webhookUrl: z.string().url().optional(),
   automaticReplies: z.boolean().optional(),
+  replyBotId: Id.optional(),
+  replyBotName: z.string().optional(),
   /** Present when this provider can receive customer messages; lists the secrets setup needs. */
-  incomingSecrets: z.array(z.object({ key: z.string(), label: z.string() })).optional(),
+  incomingSecrets: z
+    .array(IncomingSecretSchema.extend({ saved: z.boolean().optional() }))
+    .optional(),
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),
   authorizationUrl: z.string().url().optional(),
