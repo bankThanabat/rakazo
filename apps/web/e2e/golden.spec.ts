@@ -179,10 +179,10 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await expect(detailAgain.getByLabel("Account label").nth(1)).toHaveValue("Work");
 
   await detailAgain.getByRole("button", { name: "Disconnect", exact: true }).last().click();
-  await detailAgain.getByRole("button", { name: "Disconnect account", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(1);
   await detailAgain.getByRole("button", { name: "Disconnect", exact: true }).click();
-  await detailAgain.getByRole("button", { name: "Disconnect account", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
   await expect(detailAgain.getByLabel("Account label")).toHaveCount(0);
   await expect(gmailRowAgain.getByText("Connected", { exact: true })).toHaveCount(0);
   await expect(detailAgain.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
@@ -197,7 +197,7 @@ test("takeover, routine, plugins, and export are reachable", async ({ page }, te
   await popup.close();
   await expect(linearRow.getByText("Connected", { exact: true })).toBeVisible();
   await linearDetail.getByRole("button", { name: "Disconnect", exact: true }).click();
-  await linearDetail.getByRole("button", { name: "Disconnect account", exact: true }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
   await expect(linearRow.getByText("Connected", { exact: true })).toHaveCount(0);
   await expect(linearDetail.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
 

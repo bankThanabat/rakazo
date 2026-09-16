@@ -253,7 +253,7 @@ for (const viewport of [
       },
     });
     await page.getByRole("button", { name: "Disconnect", exact: true }).click();
-    await page.getByRole("button", { name: "Disconnect account", exact: true }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Disconnect account" }).click();
     await expect(page.getByLabel("Account label")).toHaveCount(0);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

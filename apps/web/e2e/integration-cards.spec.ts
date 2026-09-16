@@ -44,7 +44,10 @@ test("integration list groups connected apps and adapts to the viewport", async 
   await page.setViewportSize({ width: 1280, height: 900 });
 
   await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
-  await detail.getByRole("button", { name: "Disconnect account", exact: true }).click();
+  const confirm = page.getByRole("alertdialog");
+  await expect(confirm).toBeVisible();
+  await captureScreenshot(page, testInfo, "integration-disconnect-confirm");
+  await confirm.getByRole("button", { name: "Disconnect account" }).click();
   await expect(connected).toHaveCount(0);
   await expect(gmail.getByText("Connected", { exact: true })).toHaveCount(0);
   await expect(detail.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();

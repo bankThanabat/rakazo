@@ -2,6 +2,14 @@ import { Trans, useLingui } from "@lingui/react/macro";
 import type { Connection, ConnectionCatalogItem, ConnectorSetup } from "@rakazo/contracts";
 import { humanizeToolName, waitForConnectionAuthorization } from "@rakazo/core";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
   AppIcon,
   Button,
   Checkbox,
@@ -332,9 +340,42 @@ export function AppDetail({
     tools?.filter((tool) =>
       `${tool.name} ${tool.description}`.toLowerCase().includes(toolQuery.toLowerCase()),
     ) ?? [];
+  const removingAccount = accounts.find((row) => row.id === removing);
 
   return (
     <div data-testid="connection-detail" className="space-y-6 p-5 sm:p-6">
+      <AlertDialog
+        open={Boolean(removingAccount)}
+        onOpenChange={(open) => {
+          if (!open && !pending) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              <Trans>Disconnect {removingAccount?.displayName}?</Trans>
+            </AlertDialogTitle>
+            {item.scope === "team" ? (
+              <AlertDialogDescription>
+                <Trans>Everyone in the team loses access to this account.</Trans>
+              </AlertDialogDescription>
+            ) : null}
+          </AlertDialogHeader>
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>
+              <Trans>Cancel</Trans>
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={pending}
+              onClick={() => removing && void remove(removing)}
+            >
+              {pending ? <Trans>Disconnecting…</Trans> : <Trans>Disconnect account</Trans>}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="flex items-start gap-3">
         <Button
           variant="ghost"
@@ -419,6 +460,7 @@ export function AppDetail({
                         disabled={pending}
                         onClick={() => {
                           closeForm();
+                          setError(null);
                           setRemoving(row.id);
                         }}
                       >
@@ -434,28 +476,6 @@ export function AppDetail({
                   onError={setError}
                   onRefresh={onRefresh}
                 />
-                {removing === row.id ? (
-                  <div className="flex flex-wrap items-center gap-3 text-sm">
-                    <span>
-                      {item.scope === "team" ? (
-                        <Trans>Disconnect this account for everyone in the team?</Trans>
-                      ) : (
-                        <Trans>Disconnect this account?</Trans>
-                      )}
-                    </span>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => void remove(row.id)}
-                    >
-                      <Trans>Disconnect account</Trans>
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setRemoving(null)}>
-                      <Trans>Cancel</Trans>
-                    </Button>
-                  </div>
-                ) : null}
               </li>
             );
           })}
