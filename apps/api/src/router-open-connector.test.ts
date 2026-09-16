@@ -159,7 +159,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
     shared: false,
     enabled: true,
     startedAt: new Date("2026-01-01"),
-    bot: { archivedAt: null },
+    botId: "support-staff",
+    autoReplies: false,
+    bot: { archivedAt: null, name: "Support staff" },
     binding: JSON.parse(
       readFileSync(
         new URL("../../../docs/self-host/customer-bindings.json", import.meta.url),
@@ -184,12 +186,8 @@ it("lists team connections and discovers tools for teammates while keeping manag
     },
     customerChannel: {
       findMany: vi.fn(async ({ where }) => {
-        const { connectionId, enabled, startedAt, bot, ...scope } = where;
-        return matches(channel, scope) &&
-          connectionId.in.includes(channel.connectionId) &&
-          channel.enabled === enabled &&
-          channel.startedAt !== startedAt.not &&
-          channel.bot.archivedAt === bot.archivedAt
+        const { connectionId, ...scope } = where;
+        return matches(channel, scope) && connectionId.in.includes(channel.connectionId)
           ? [channel]
           : [];
       }),
@@ -221,6 +219,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
       id: "team-account",
       canManage: false,
       webhookUrl: "https://public.example.test/api/customer-events/customer-channel",
+      replyBotId: "support-staff",
+      replyBotName: "Support staff",
+      automaticReplies: false,
     }),
   ]);
   expect(JSON.stringify(connections)).not.toContain("LINE_CHANNEL_SECRET_RECORD");

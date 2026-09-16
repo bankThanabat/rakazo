@@ -20,6 +20,8 @@ for (const viewport of [
     const accounts: Connection[] = [];
     const started: Record<string, unknown>[] = [];
     const incomingRequests: Record<string, unknown>[] = [];
+    const replyRequests: Record<string, unknown>[] = [];
+    let failReplySave = false;
     const catalog = [
       {
         connectorId: "open-connector",
@@ -96,6 +98,8 @@ for (const viewport of [
                   },
                 ],
           oauthConfigured: false,
+          incomingSecrets:
+            input.provider === "line" ? [{ key: "channelSecret", label: "Channel secret" }] : [],
         };
       else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
       else if (path === "connections/list") result = accounts;
@@ -124,20 +128,39 @@ for (const viewport of [
         incomingRequests.push(input);
         accounts[0]!.webhookUrl = "https://relay.example.test/ingest/fixture-source";
         accounts[0]!.automaticReplies = false;
+        accounts[0]!.replyBotId = "setup-assistant";
+        accounts[0]!.replyBotName = "Support assistant";
         result = { id: "fixture-channel", webhookUrl: accounts[0]!.webhookUrl };
+      } else if (path === "connections/configureReplies") {
+        replyRequests.push(input);
+        if (failReplySave) {
+          await route.fulfill({
+            status: 400,
+            json: {
+              json: {
+                defined: false,
+                code: "BAD_REQUEST",
+                status: 400,
+                message: "Could not save auto replies.",
+              },
+            },
+          });
+          return;
+        }
+        const account = accounts.find((row) => row.id === input.connectionId)!;
+        account.automaticReplies = input.enabled;
+        if (input.botId) account.replyBotId = input.botId;
+        result = { ok: true };
       } else if (path === "connections/revoke") {
         accounts.find((row) => row.id === input.connectionId)!.status = "revoked";
         result = { ok: true };
       } else if (path === "connections/tools")
         result = [{ name: `${input.provider}.send`, description: "Send text" }];
+      else if (path === "onboarding/appConnected") result = { ok: true };
       else if (path !== "capabilities/list") throw new Error(`Unexpected RPC: ${path}`);
       await route.fulfill({ json: { json: result } });
     });
     await page.goto("/e2e/fixtures/open-connector.html");
-    await expect(page.getByRole("dialog", { name: "Integrations", exact: true })).not.toContainText(
-      "Sample app",
-    );
-    await page.getByRole("button", { name: "Browse apps", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Future app, Connect", exact: true }),
     ).toBeVisible();
@@ -153,24 +176,19 @@ for (const viewport of [
     await expect(futureCard.getByText("F", { exact: true })).toBeVisible();
     await captureScreenshot(page, testInfo, `openconnector-catalog-${viewport.width}`);
     await page.getByRole("button", { name: "Sample app, Connect", exact: true }).click();
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
     const token = page.getByLabel("API key", { exact: true });
     await expect(token).toHaveAttribute("type", "password");
     await token.fill("fake-account-token");
+    // The channel secret is collected in the same form; one bot means no assistant picker.
+    const channelSecret = page.getByLabel("Channel secret", { exact: true });
+    await expect(channelSecret).toHaveAttribute("type", "password");
+    await expect(page.getByRole("combobox", { name: "Assign staff", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Connect account", exact: true })).toBeDisabled();
+    await channelSecret.fill("fixture-channel-secret");
     await captureScreenshot(page, testInfo, `openconnector-api-key-auth-${viewport.width}`);
     await page.getByRole("button", { name: "Connect account", exact: true }).click();
     await expect(page.getByLabel("Account label")).toHaveValue("Sample app");
     const webhookUrl = page.getByRole("textbox", { name: "Webhook URL", exact: true });
-    await expect(webhookUrl).toHaveCount(0);
-    await page.getByRole("button", { name: "Set up incoming messages", exact: true }).click();
-    await expect(page.getByRole("combobox", { name: "Assistant", exact: true })).toHaveValue(
-      "setup-assistant",
-    );
-    const channelSecret = page.getByLabel("Channel secret", { exact: true });
-    await expect(channelSecret).toHaveAttribute("type", "password");
-    await channelSecret.fill("fixture-channel-secret");
-    await captureScreenshot(page, testInfo, `openconnector-incoming-setup-${viewport.width}`);
-    await page.getByRole("button", { name: "Enable incoming messages", exact: true }).click();
     expect(incomingRequests).toEqual([
       {
         connectionId: accounts[0]!.id,
@@ -178,7 +196,30 @@ for (const viewport of [
         secrets: { channelSecret: "fixture-channel-secret" },
       },
     ]);
-    await expect(page.getByText("Automatic replies off", { exact: true })).toBeVisible();
+    const autoReplies = page.getByRole("switch", { name: "Auto reply messages", exact: true });
+    await expect(page.getByRole("switch", { name: "Incoming messages", exact: true })).toHaveCount(
+      0,
+    );
+    await expect(autoReplies).not.toBeChecked();
+    await expect(autoReplies).toBeEnabled();
+    const staff = page.getByRole("combobox", { name: "Assign staff", exact: true });
+    await expect(staff).toHaveValue("setup-assistant");
+    await staff.selectOption("setup-assistant");
+    await autoReplies.click();
+    await expect(autoReplies).toBeChecked();
+    await captureScreenshot(page, testInfo, `openconnector-auto-replies-${viewport.width}`);
+    await autoReplies.click();
+    await expect(autoReplies).not.toBeChecked();
+    expect(replyRequests).toEqual([
+      { connectionId: accounts[0]!.id, enabled: false, botId: "setup-assistant" },
+      { connectionId: accounts[0]!.id, enabled: true },
+      { connectionId: accounts[0]!.id, enabled: false },
+    ]);
+    failReplySave = true;
+    await autoReplies.click();
+    await expect(page.getByRole("alert")).toContainText("Could not save auto replies.");
+    await expect(autoReplies).not.toBeChecked();
+    failReplySave = false;
     await expect(channelSecret).toHaveCount(0);
     await expect(webhookUrl).toHaveValue(accounts[0]!.webhookUrl!);
     await expect(webhookUrl).toHaveAttribute("readonly", "");
@@ -193,10 +234,11 @@ for (const viewport of [
       auth: { type: "api_key", values: { apiKey: "fake-account-token" } },
     });
     await captureScreenshot(page, testInfo, `openconnector-connected-${viewport.width}`);
-    await page.getByRole("button", { name: "Back to apps", exact: true }).click();
-    await page.getByLabel("Search OpenConnector apps").fill("future");
+    // Narrow layouts push the detail over the list, so step back before picking another app.
+    if (viewport.width < 640)
+      await page.getByRole("button", { name: "Back to apps", exact: true }).click();
+    await page.getByLabel("Search apps").fill("future");
     await page.getByRole("button", { name: "Future app, Connect", exact: true }).click();
-    await page.getByRole("button", { name: "Connect", exact: true }).click();
     await page.getByLabel("Workspace", { exact: true }).fill("example");
     await expect(page.getByLabel("Secret", { exact: true })).toHaveAttribute("type", "password");
     await page.getByLabel("Secret", { exact: true }).fill("fake-custom-secret");
@@ -306,7 +348,6 @@ test("a teammate can inspect a shared account without management controls", asyn
     await route.fulfill({ json: { json: result } });
   });
   await page.goto("/e2e/fixtures/open-connector.html");
-  await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   await page.getByRole("button", { name: "Sample app, Manage", exact: true }).click();
   const label = page.getByLabel("Account label");
   await expect(label).toHaveValue("Support");
@@ -355,8 +396,8 @@ test("large catalogs stay bounded and restore focus after browsing more results"
               : [];
     await route.fulfill({ json: { json: result } });
   });
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/e2e/fixtures/open-connector.html");
-  await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   const entries = page.getByRole("button", { name: /^App \d+, Connect$/ });
   await expect(entries).toHaveCount(60);
   await page.getByRole("button", { name: "Show more", exact: true }).click();
@@ -364,7 +405,7 @@ test("large catalogs stay bounded and restore focus after browsing more results"
   await page.getByRole("button", { name: "App 119, Connect", exact: true }).click();
   await page.getByRole("button", { name: "Back to apps", exact: true }).click();
   await expect(page.getByRole("button", { name: "App 119, Connect", exact: true })).toBeFocused();
-  await page.getByLabel("Search OpenConnector apps").fill("App 1499");
+  await page.getByLabel("Search apps").fill("App 1499");
   await expect(entries).toHaveCount(1);
   await expect(page.getByRole("button", { name: "App 1499, Connect", exact: true })).toBeVisible();
 });
@@ -433,16 +474,12 @@ test("OAuth reconnect survives reload and cancellation preserves the existing ac
     await route.fulfill({ json: { json: result } });
   });
   await page.goto("/e2e/fixtures/open-connector.html");
-  await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   await page.getByRole("button", { name: "OAuth app, Manage", exact: true }).click();
   await expect(page.getByText("Reconnect required", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Reconnect", exact: true }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByText("Waiting for authorization", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Back to apps", exact: true }).click();
   await expect(page.getByText("Authorization failed.", { exact: true })).toBeHidden();
   await page.reload();
-  await page.getByRole("button", { name: "Browse apps", exact: true }).click();
   await page.getByRole("button", { name: "OAuth app, Manage", exact: true }).click();
   await expect(page.getByText("Waiting for authorization", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Open authorization", exact: true })).toBeEnabled();

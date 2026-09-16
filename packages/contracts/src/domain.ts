@@ -561,8 +561,12 @@ export const ConnectionSchema = z.object({
   id: Id,
   webhookUrl: z.string().url().optional(),
   automaticReplies: z.boolean().optional(),
+  replyBotId: Id.optional(),
+  replyBotName: z.string().optional(),
   /** Present when this provider can receive customer messages; lists the secrets setup needs. */
-  incomingSecrets: z.array(z.object({ key: z.string(), label: z.string() })).optional(),
+  incomingSecrets: z
+    .array(z.object({ key: z.string(), label: z.string(), saved: z.boolean().optional() }))
+    .optional(),
   canManage: z.boolean().optional(),
   reconnectRequired: z.boolean().optional(),
   authorizationUrl: z.string().url().optional(),

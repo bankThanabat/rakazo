@@ -114,6 +114,7 @@ import {
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
+  configureCustomerReplies,
   connectionAccessWhere,
   createCustomerInbox,
   createCustomerRepos,
@@ -3336,27 +3337,51 @@ export function createRouter(deps: RouterDeps) {
       }),
     },
     connections: {
+      configureReplies: authed.connections.configureReplies.handler(async ({ context, input }) => {
+        try {
+          await configureCustomerReplies(deps.prisma, context.actor, input);
+          return { ok: true as const };
+        } catch (error) {
+          if (error instanceof IsolationError) throw new ORPCError("NOT_FOUND");
+          throw new ORPCError("BAD_REQUEST", {
+            message: error instanceof Error ? error.message : "Could not save auto replies.",
+          });
+        }
+      }),
       setupIncoming: authed.connections.setupIncoming.handler(async ({ context, input }) => {
         if (!deps.integrationSettings) throw new ORPCError("SERVICE_UNAVAILABLE");
-        return setupCustomerIncoming(
-          {
-            prisma: deps.prisma,
-            secrets: deps.secrets,
-            integrations: deps.integrationSettings,
-            apiUrl: deps.env.apiUrl,
-          },
-          context.actor,
-          input,
-        );
+        try {
+          return await setupCustomerIncoming(
+            {
+              prisma: deps.prisma,
+              secrets: deps.secrets,
+              integrations: deps.integrationSettings,
+              apiUrl: deps.env.apiUrl,
+            },
+            context.actor,
+            input,
+          );
+        } catch (error) {
+          if (error instanceof ORPCError) throw error;
+          // The account owner can act on these failures, so keep the cause in the log and
+          // hand back the message instead of an opaque 500.
+          getLogger().error("rpc connections/setupIncoming failed", error);
+          throw new ORPCError(error instanceof IsolationError ? "NOT_FOUND" : "BAD_REQUEST", {
+            message: error instanceof Error ? error.message : "Could not set up incoming messages.",
+          });
+        }
       }),
       setup: authed.connections.setup.handler(async ({ context, input }) => {
         const provider = deps.connectors.managed(input.connectorId);
         if (input.connectorId !== "open-connector" || !provider?.setup)
           throw new ORPCError("BAD_REQUEST");
-        return provider.setup(
-          input.provider,
-          connectionContext(context.actor, "connections.setup", context.signal),
-        );
+        return {
+          ...(await provider.setup(
+            input.provider,
+            connectionContext(context.actor, "connections.setup", context.signal),
+          )),
+          incomingSecrets: customerIncomingTemplate(input.provider)?.secrets,
+        };
       }),
       configureOAuth: authed.connections.configureOAuth.handler(async ({ context, input }) => {
         if (!context.actor.isDeploymentOwner) throw new ORPCError("FORBIDDEN");
@@ -3516,9 +3541,14 @@ export function createRouter(deps: RouterDeps) {
               id: row.id,
               webhookUrl: webhookUrls.get(row.id)?.url,
               automaticReplies: webhookUrls.get(row.id)?.autoReplies,
+              replyBotId: webhookUrls.get(row.id)?.botId,
+              replyBotName: webhookUrls.get(row.id)?.botName,
               incomingSecrets:
                 row.connectorId === "open-connector"
-                  ? customerIncomingTemplate(row.provider)?.secrets
+                  ? customerIncomingTemplate(row.provider)?.secrets.map((secret) => ({
+                      ...secret,
+                      saved: webhookUrls.get(row.id)?.savedSecrets.includes(secret.key) ?? false,
+                    }))
                   : undefined,
               canManage: row.userId === context.actor.userId,
               connectorId: row.connectorId,

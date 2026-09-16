@@ -105,5 +105,20 @@ export function filterConnectionCatalogItems(
   );
 }
 
+/** Free-text catalog search over name, slug, description, and categories. Empty query keeps every item. */
+export function searchConnectionCatalog(
+  catalog: readonly ConnectionCatalogItem[],
+  query: string,
+): ConnectionCatalogItem[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...catalog];
+  return catalog.filter((item) =>
+    [item.name, item.slug, item.description ?? "", ...(item.categories ?? [])]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle),
+  );
+}
+
 export const EMPTY_PLUGIN_CATALOG_MESSAGE =
   "Configure a plugin catalog on the server to connect apps.";

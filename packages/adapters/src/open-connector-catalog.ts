@@ -93,6 +93,24 @@ export function authMethods(provider: OpenConnectorProvider): ConnectorAuthMetho
 
 export class OpenConnectorNotFound extends Error {}
 
+/** Keeps the status and OpenConnector's own reason; without them every failure looks the same. */
+async function failureMessage(response: Response) {
+  const detail = await response
+    .text()
+    .then((text) => {
+      const body: unknown = JSON.parse(text);
+      const reason =
+        body && typeof body === "object"
+          ? ((body as { error?: { message?: unknown } | unknown; message?: unknown }).message ??
+            (body as { error?: { message?: unknown } }).error?.message ??
+            (body as { error?: unknown }).error)
+          : undefined;
+      return typeof reason === "string" ? reason.slice(0, 200) : "";
+    })
+    .catch(() => "");
+  return `OpenConnector could not complete the request (HTTP ${response.status}${detail ? `: ${detail}` : ""}).`;
+}
+
 export class OpenConnectorHttp {
   private cached?: { providers: OpenConnectorProvider[]; etag: string | null; until: number };
   private loading?: Promise<OpenConnectorProvider[]>;
@@ -109,10 +127,7 @@ export class OpenConnectorHttp {
     const response = await this.fetch(path, context, init, token);
     if (response.status === 404 && init.method === "DELETE") return {};
     if (response.status === 404) throw new OpenConnectorNotFound("Connection is unavailable");
-    if (!response.ok)
-      throw new Error(
-        "OpenConnector could not complete the request. Check the connection and try again.",
-      );
+    if (!response.ok) throw new Error(await failureMessage(response));
     const value = await this.read(response, context);
     if (path.startsWith("/v1/") && !path.startsWith("/v1/actions/"))
       return z.object({ success: z.literal(true), data: z.unknown() }).parse(value).data;

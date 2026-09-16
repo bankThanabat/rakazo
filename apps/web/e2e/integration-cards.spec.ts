@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 
-test("integration cards separate connected apps and adapt to the viewport", async ({
+test("integration list groups connected apps and adapts to the viewport", async ({
   page,
 }, testInfo) => {
   await signup(
@@ -13,45 +13,39 @@ test("integration cards separate connected apps and adapt to the viewport", asyn
   await completeOnboarding(page);
   await page.getByText("Integrations", { exact: true }).click();
 
-  const connected = page.getByRole("region", { name: "Your integrations", exact: true });
-  const available = page.getByRole("region", { name: "Available integrations", exact: true });
+  const connected = page.getByRole("region", { name: "Connected", exact: true });
   const gmail = page.getByTestId("connection-tile-gmail");
+  const detail = page.getByTestId("connection-detail");
   const search = page.getByRole("textbox", { name: "Search apps", exact: true });
-  await expect(available).toBeVisible();
+  await expect(gmail).toBeVisible();
   await expect(connected).toHaveCount(0);
-  await gmail.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(connected.getByRole("group", { name: "Gmail", exact: true })).toBeVisible();
-  await expect(available.getByRole("group", { name: "Gmail", exact: true })).toHaveCount(0);
-  await expect(gmail.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(detail).toHaveCount(0);
 
-  for (const [width, columns] of [
-    [1280, 3],
-    [768, 2],
-    [390, 1],
-  ]) {
-    await page.setViewportSize({ width, height: 900 });
-    await expect
-      .poll(() =>
-        available
-          .locator(":scope > .grid")
-          .evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length),
-      )
-      .toBe(columns);
-    const list = page.locator("#integration-list");
-    expect(await list.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    await captureScreenshot(page, testInfo, `integration-cards-${width}`);
-  }
+  await gmail.click();
+  await detail.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(connected.getByTestId("connection-tile-gmail")).toBeVisible();
+  await expect(gmail.getByText("Connected", { exact: true })).toBeVisible();
+  await expect(detail.getByLabel("Account label")).toHaveValue("Gmail");
 
   await search.fill("gmail");
   await expect(gmail).toBeVisible();
-  await expect(available).toHaveCount(0);
-  await gmail.getByRole("button", { name: "Manage", exact: true }).click();
-  const detail = page.getByTestId("connection-detail");
-  await expect(detail.getByLabel("Account label")).toHaveCount(1);
-  await detail.getByRole("button", { name: "Uninstall", exact: true }).click();
-  await expect(connected).toHaveCount(0);
-  await expect(available.getByRole("group", { name: "Gmail", exact: true })).toBeVisible();
-  await expect(gmail.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
+  await expect(page.getByTestId("connection-tile-linear")).toHaveCount(0);
   await search.fill("no-such-integration");
   await expect(page.getByRole("status")).toHaveText("No apps match your search.");
+  await search.fill("");
+
+  for (const width of [1280, 768, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await captureScreenshot(page, testInfo, `integration-cards-${width}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  await detail.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await detail.getByRole("button", { name: "Disconnect account", exact: true }).click();
+  await expect(connected).toHaveCount(0);
+  await expect(gmail.getByText("Connected", { exact: true })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Connect", exact: true })).toBeEnabled();
 });

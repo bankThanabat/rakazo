@@ -36,6 +36,8 @@ export const ConnectorSetupSchema = z.object({
   oauthFields: z.array(ConnectorCredentialFieldSchema).optional(),
   oauthSetupUrl: z.string().url().optional(),
   oauthCallbackUrl: z.string().optional(),
+  /** Secrets the incoming-message setup will ask for, so the connect form can collect them up front. */
+  incomingSecrets: z.array(z.object({ key: z.string(), label: z.string() })).optional(),
 });
 export type ConnectorCredentialField = z.infer<typeof ConnectorCredentialFieldSchema>;
 export type ConnectorAuthMethod = z.infer<typeof ConnectorAuthMethodSchema>;

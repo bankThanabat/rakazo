@@ -2,6 +2,7 @@ import type { Actor } from "@rakazo/contracts";
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import type { Connection, PrismaClient } from "@rakazo/db";
 import { customerChannelAccessWhere } from "@rakazo/db";
+import { customerIncomingTemplate } from "./customer-incoming.js";
 
 export const liveCustomerWebhookChannel = {
   enabled: true,
@@ -30,27 +31,57 @@ export async function listConnectionWebhooks(
     .map((row) => row.id);
   const channels = ids.length
     ? await deps.prisma.customerChannel.findMany({
-        where: {
-          ...customerChannelAccessWhere(actor),
-          ...liveCustomerWebhookChannel,
-          connectionId: { in: ids },
-        },
+        where: { ...customerChannelAccessWhere(actor), connectionId: { in: ids } },
         select: {
           id: true,
           connectionId: true,
+          provider: true,
           binding: true,
           webhookUrl: true,
           autoReplies: true,
+          botId: true,
+          enabled: true,
+          startedAt: true,
+          bot: { select: { archivedAt: true, name: true } },
         },
       })
     : [];
-  const urls = new Map<string, { url: string; autoReplies: boolean }>();
+  // Secrets persist before provisioning finishes, so a channel can hold them without being live.
+  const secretIds = channels.flatMap((channel) =>
+    (customerIncomingTemplate(channel.provider)?.secrets ?? []).map(
+      (secret) => `customer-webhook:${channel.id}:${secret.key}`,
+    ),
+  );
+  const saved = new Set(
+    secretIds.length
+      ? (
+          await deps.prisma.secret.findMany({
+            where: { id: { in: secretIds }, userId: actor.userId, kind: "customer-webhook" },
+            select: { id: true },
+          })
+        ).map((row) => row.id)
+      : [],
+  );
+  const urls = new Map<
+    string,
+    { url?: string; autoReplies?: boolean; botId: string; botName: string; savedSecrets: string[] }
+  >();
   for (const channel of channels) {
-    if (channel.connectionId && customerWebhookBinding(channel.binding))
-      urls.set(channel.connectionId, {
-        url: channel.webhookUrl ?? customerWebhookUrl(deps.apiUrl, channel.id),
-        autoReplies: channel.autoReplies,
-      });
+    if (!channel.connectionId) continue;
+    const live =
+      channel.enabled &&
+      channel.startedAt &&
+      !channel.bot.archivedAt &&
+      customerWebhookBinding(channel.binding);
+    urls.set(channel.connectionId, {
+      url: live ? (channel.webhookUrl ?? customerWebhookUrl(deps.apiUrl, channel.id)) : undefined,
+      autoReplies: live ? channel.autoReplies : undefined,
+      botId: channel.botId,
+      botName: channel.bot.name,
+      savedSecrets: (customerIncomingTemplate(channel.provider)?.secrets ?? [])
+        .map((secret) => secret.key)
+        .filter((key) => saved.has(`customer-webhook:${channel.id}:${key}`)),
+    });
   }
   return urls;
 }

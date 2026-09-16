@@ -6,6 +6,7 @@ import {
   filterConnectionCatalogItems,
   matchFeaturedConnectorId,
   resolveFeaturedCatalogItem,
+  searchConnectionCatalog,
 } from "./featured-connectors.js";
 
 function item(slug: string, name: string, connected = false): ConnectionCatalogItem {
@@ -87,5 +88,21 @@ describe("featured connectors", () => {
     expect(filterConnectionCatalogItems(catalog, "pipedream").map(({ name }) => name)).toEqual([
       "Notion",
     ]);
+  });
+
+  it("searches name, slug, description, and categories without dropping featured apps", () => {
+    const catalog = [
+      item("gmail", "Gmail"),
+      { ...item("line", "LINE"), description: "Chat with customers", categories: ["Messaging"] },
+    ];
+
+    expect(searchConnectionCatalog(catalog, " ").map(({ name }) => name)).toEqual([
+      "Gmail",
+      "LINE",
+    ]);
+    expect(searchConnectionCatalog(catalog, "MAIL").map(({ name }) => name)).toEqual(["Gmail"]);
+    expect(searchConnectionCatalog(catalog, "customers").map(({ name }) => name)).toEqual(["LINE"]);
+    expect(searchConnectionCatalog(catalog, "messaging").map(({ name }) => name)).toEqual(["LINE"]);
+    expect(searchConnectionCatalog(catalog, "zzz")).toEqual([]);
   });
 });

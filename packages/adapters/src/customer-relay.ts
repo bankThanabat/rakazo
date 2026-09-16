@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AdapterContext, JobPublisher } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import { CustomerBindingSchema, IncomingSetupInputSchema } from "@rakazo/contracts";
@@ -5,6 +6,7 @@ import type { PrismaClient } from "@rakazo/db";
 import { IsolationError } from "@rakazo/db";
 import { z } from "zod";
 import { createCustomerConnector } from "./customer-connector.js";
+import type { CustomerIncomingTemplate } from "./customer-incoming.js";
 import { customerIncomingTemplate } from "./customer-incoming.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { customerField } from "./customer-mapping.js";
@@ -20,6 +22,71 @@ type Dependencies = {
   apiUrl?: string;
 };
 
+/** Confirms the stored credential works before provisioning, and names the fix when it does not. */
+async function verifyAccount(
+  connector: ReturnType<typeof createCustomerConnector>,
+  actor: Actor,
+  connectionId: string,
+  lookup: { action: string; path: string[] },
+) {
+  try {
+    const result = await connector.execute(
+      actor,
+      connectionId,
+      lookup.action,
+      {},
+      // A verification is a fresh read, not a replay of another attempt's cached result.
+      randomUUID(),
+    );
+    return z.string().min(1).parse(customerField(result, lookup.path));
+  } catch (cause) {
+    const detail = cause instanceof Error && cause.message ? ` (${cause.message})` : "";
+    throw new Error(
+      `Could not verify the account. Check its credentials, then try again.${detail}`,
+      {
+        cause,
+      },
+    );
+  }
+}
+
+/** Encrypts newly entered secrets and reuses stored ones, returning every plaintext setup needs. */
+async function storeSecrets(
+  deps: Dependencies,
+  actor: Actor,
+  context: AdapterContext,
+  template: CustomerIncomingTemplate,
+  entered: Record<string, string>,
+  secretIds: Record<string, string>,
+) {
+  const values: Record<string, string> = {};
+  for (const secret of template.secrets) {
+    const id = secretIds[secret.key]!;
+    const value = entered[secret.key];
+    if (value) {
+      const record = await deps.secrets.put(value, context, id);
+      await deps.prisma.secret.upsert({
+        where: { id },
+        create: {
+          ...record,
+          userId: actor.userId,
+          spaceId: actor.spaceId,
+          kind: "customer-webhook",
+        },
+        update: { ciphertext: record.ciphertext },
+      });
+      values[secret.key] = value;
+      continue;
+    }
+    const stored = await deps.prisma.secret.findFirst({
+      where: { id, userId: actor.userId, kind: "customer-webhook" },
+    });
+    if (!stored) throw new Error(`${secret.label} is required`);
+    values[secret.key] = deps.secrets.load(stored.ciphertext, stored.id);
+  }
+  return values;
+}
+
 /** Turns a connected messaging account into a receiving channel using the
  * provider's incoming template. Nothing here knows which app it is setting up. */
 export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, raw: unknown) {
@@ -29,29 +96,10 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
   if (account.userId !== actor.userId) throw new IsolationError();
   const template = customerIncomingTemplate(account.provider);
   if (!template) throw new Error("Incoming messages are not available for this app");
-  const missing = template.secrets.find((secret) => !input.secrets[secret.key]);
-  if (missing) throw new Error(`${missing.label} is required`);
   const bot = await deps.prisma.bot.findFirst({
     where: { id: input.botId, userId: actor.userId, spaceId: actor.spaceId, archivedAt: null },
   });
   if (!bot) throw new IsolationError();
-  const accountId = template.account
-    ? z
-        .string()
-        .min(1)
-        .parse(
-          customerField(
-            await connector.execute(
-              actor,
-              account.id,
-              template.account.action,
-              {},
-              "incoming.verify",
-            ),
-            template.account.path,
-          ),
-        )
-    : "";
   const context: AdapterContext = {
     ...actor,
     operationId: "incoming.setup",
@@ -87,11 +135,11 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
   const secretIds = Object.fromEntries(
     template.secrets.map((secret) => [secret.key, `customer-webhook:${channel.id}:${secret.key}`]),
   );
-  const stored = await Promise.all(
-    template.secrets.map((secret) =>
-      deps.secrets.put(input.secrets[secret.key]!, context, secretIds[secret.key]),
-    ),
-  );
+  // Secrets are saved before anything can fail, so a retry never asks for them again.
+  const secrets = await storeSecrets(deps, actor, context, template, input.secrets, secretIds);
+  const accountId = template.account
+    ? await verifyAccount(connector, actor, account.id, template.account)
+    : "";
   const binding = CustomerBindingSchema.parse(template.binding({ account: accountId, secretIds }));
   const webhook = binding.receive.webhook;
   const webhookKey = Object.keys(secretIds).find((key) => secretIds[key] === webhook?.secretId);
@@ -101,7 +149,7 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
       ? await adapter.incoming(
           account.providerRef!,
           channel.id,
-          { webhookSecret: input.secrets[webhookKey]!, verification: webhook },
+          { webhookSecret: secrets[webhookKey]!, verification: webhook },
           context,
         )
       : null;
@@ -111,17 +159,6 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
     const current = await tx.connection.findUniqueOrThrow({ where: { id: account.id } });
     if (current.status !== "connected" || current.providerRef !== account.providerRef)
       throw new IsolationError();
-    for (const record of stored)
-      await tx.secret.upsert({
-        where: { id: record.id },
-        create: {
-          ...record,
-          userId: actor.userId,
-          spaceId: actor.spaceId,
-          kind: "customer-webhook",
-        },
-        update: { ciphertext: record.ciphertext },
-      });
     await tx.customerChannel.update({
       where: { id: channel.id },
       data: {
