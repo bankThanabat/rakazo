@@ -161,6 +161,7 @@ model Member {
 }
 
 model Space {
+  knowledgeLibrary KnowledgeLibrary?
   aiDataConsents AiDataConsent[]
   id                          String                       @id
   organizationId              String
@@ -337,6 +338,8 @@ model SpaceVoicePreference {
 }
 
 model Bot {
+  knowledgeLibraryId String?
+  knowledgeLibrary KnowledgeLibrary? @relation(fields: [knowledgeLibraryId], references: [id], onDelete: SetNull)
   screenGeneration Int @default(0)
   id                String            @id @default(cuid())
   spaceId           String
@@ -1553,4 +1556,54 @@ model OpenConnectorAttempt {
   createdAt DateTime @default(now())
   @@index([endpoint, createdAt])
   @@map("open_connector_attempts")
+}
+
+model KnowledgeLibrary {
+  id String @id @default(cuid())
+  spaceId String @unique
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId String
+  baseUrl String
+  ciphertext String
+  createdAt DateTime @default(now())
+  bots Bot[]
+  sources KnowledgeSource[]
+  @@map("knowledge_libraries")
+}
+
+model KnowledgeSource {
+  id String @id @default(cuid())
+  libraryId String
+  library KnowledgeLibrary @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  name String
+  internal Boolean @default(true)
+  activeRevisionId String? @unique
+  pendingRevisionId String? @unique
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  revisions KnowledgeRevision[]
+  @@index([libraryId, deletedAt])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeRevision {
+  id String @id @default(cuid())
+  sourceId String
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  name String
+  storageKey String
+  mimeType String
+  providerDocumentKey String @unique
+  submittedAt DateTime?
+  providerTaskId String?
+  cleanupAttempts Int @default(0)
+  cleanupAfter DateTime?
+  status String @default("queued")
+  error String?
+  leaseUntil DateTime?
+  claimId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status, leaseUntil])
+  @@map("knowledge_revisions")
 }

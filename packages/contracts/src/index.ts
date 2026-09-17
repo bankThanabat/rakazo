@@ -11,6 +11,7 @@ export * from "./http-url.js";
 export * from "./ids.js";
 export * from "./integration-gateway.js";
 export * from "./integration-settings.js";
+export * from "./knowledge.js";
 export * from "./local-settings.js";
 export * from "./mcp.js";
 export * from "./openai-compatible-ui.js";

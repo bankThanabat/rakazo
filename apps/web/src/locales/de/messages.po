@@ -4068,3 +4068,93 @@ msgstr ""
 #: src/components/integrations/OpenConnectorCatalog.tsx:631
 msgid "Set up incoming messages"
 msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Add document"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Choose a file smaller than 10 MiB."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connect knowledge"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connection"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not load documents. Try again."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not save the document change. Try again."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Delete document?"
+msgstr ""
+
+#: src/pages/KnowledgeSection.tsx
+msgid "Documents"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Download"
+msgstr ""
+
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal"
+msgstr ""
+
+#. placeholder {0}: source.name
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal: {0}"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Knowledge service URL"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "No documents yet."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing failed. Replace the file to retry."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Ready"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Replace"
+msgstr ""
+
+#: src/components/integrations/AppDetail.tsx
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/PluginsOverlay.tsx
+msgid "Retry"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Update failed. Previous version is available."
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Updating"
+msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Use shared knowledge"
+msgstr ""

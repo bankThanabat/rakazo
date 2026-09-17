@@ -1,6 +1,10 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ConnectorTool, CustomerRuntime } from "@rakazo/adapter-kit";
-import { CustomerActionGrantSchema, CustomerBindingSchema } from "@rakazo/contracts";
+import {
+  CustomerActionGrantSchema,
+  CustomerBindingSchema,
+  KnowledgeSearchInput,
+} from "@rakazo/contracts";
 import { stableJsonValue } from "@rakazo/core/node/approval-effect-key";
 import type { PrismaClient } from "@rakazo/db";
 import { handoffCustomer, Prisma } from "@rakazo/db";
@@ -8,6 +12,7 @@ import { z } from "zod";
 import type { createCustomerConnector } from "./customer-connector.js";
 import { customerDeliveryId, customerField, customerInput } from "./customer-mapping.js";
 import { customerToolReply } from "./customer-tool-reply.js";
+import type { KnowledgeService } from "./knowledge.js";
 import {
   CATALOG_EXECUTE,
   CATALOG_LOAD,
@@ -99,6 +104,7 @@ export function validateCustomerGrants(value: unknown) {
 }
 
 export function createCustomerBusinessTools(deps: {
+  knowledge?: KnowledgeService;
   prisma: PrismaClient;
   connector: ReturnType<typeof createCustomerConnector>;
   runtime: (
@@ -187,7 +193,7 @@ export function createCustomerBusinessTools(deps: {
           ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
         ),
       );
-      if (behavior.knowledgeFilterId)
+      if (scope.channel.bot.knowledgeLibraryId || behavior.knowledgeFilterId)
         tools.push({
           name: "search_knowledge",
           description: "Search approved business knowledge",
@@ -262,7 +268,10 @@ export function createCustomerBusinessTools(deps: {
         });
         if (prior) {
           // Catalog reads rerun against the current policy; a stored list or schema may be stale.
-          const rerun = isCatalogRead(action) && isCatalogRead(prior.actionId);
+          const knowledgeRead = call.name === "search_knowledge" && prior.name === call.name;
+          if (knowledgeRead && prior.requestHash !== requestHash) throw denied();
+          // A knowledge read has no side effects, so a failed one may be retried as well.
+          const rerun = (isCatalogRead(action) && isCatalogRead(prior.actionId)) || knowledgeRead;
           if (!rerun && (prior.requestHash !== requestHash || prior.status !== "completed"))
             throw new Error("Customer action outcome is uncertain; do not replay");
           return { callId: prior.callId, replay: !rerun, result: prior.result };
@@ -303,18 +312,28 @@ export function createCustomerBusinessTools(deps: {
           await prisma.$transaction((tx) => handoffCustomer(tx, scope.conversation.id, reason));
           result = { handedOff: true };
         } else if (call.name === "search_knowledge") {
-          if (!scope.behavior.knowledgeFilterId) throw denied();
-          const { query } = z
-            .object({ query: z.string().trim().min(1).max(4000) })
-            .strict()
-            .parse(call.arguments);
-          const runtime = await deps.runtime(scope.channel, scope.behavior);
-          if (!runtime.search) throw denied();
-          result = await runtime.search({
-            query,
-            knowledgeFilterId: scope.behavior.knowledgeFilterId,
-            signal: AbortSignal.timeout(20_000),
-          });
+          if (!scope.channel.bot.knowledgeLibraryId && !scope.behavior.knowledgeFilterId)
+            throw denied();
+          const { query } = KnowledgeSearchInput.parse(call.arguments);
+          if (scope.channel.bot.knowledgeLibraryId) {
+            if (!deps.knowledge) throw denied();
+            result = await deps.knowledge.search(
+              scope.channel,
+              scope.channel.botId,
+              "customer",
+              query,
+              AbortSignal.timeout(20_000),
+            );
+          } else {
+            const runtime = await deps.runtime(scope.channel, scope.behavior);
+            if (!runtime.search || !scope.behavior.knowledgeFilterId) throw denied();
+            result = await runtime.search({
+              query,
+              knowledgeFilterId: scope.behavior.knowledgeFilterId,
+              signal: AbortSignal.timeout(20_000),
+            });
+          }
+          await authenticate(token);
         } else if (shared) {
           await authenticate(token);
           result = await deps.connector.executeTool(

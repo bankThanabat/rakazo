@@ -4068,3 +4068,93 @@ msgstr "Create an assistant first."
 #: src/components/integrations/OpenConnectorCatalog.tsx:631
 msgid "Set up incoming messages"
 msgstr "Set up incoming messages"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Add document"
+msgstr "Add document"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Choose a file smaller than 10 MiB."
+msgstr "Choose a file smaller than 10 MiB."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connect knowledge"
+msgstr "Connect knowledge"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connection"
+msgstr "Connection"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not load documents. Try again."
+msgstr "Could not load documents. Try again."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not save the document change. Try again."
+msgstr "Could not save the document change. Try again."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Delete document?"
+msgstr "Delete document?"
+
+#: src/pages/KnowledgeSection.tsx
+msgid "Documents"
+msgstr "Documents"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Download"
+msgstr "Download"
+
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal"
+msgstr "Internal"
+
+#. placeholder {0}: source.name
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal: {0}"
+msgstr "Internal: {0}"
+
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Knowledge service URL"
+msgstr "Knowledge service URL"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "No documents yet."
+msgstr "No documents yet."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing"
+msgstr "Processing"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing failed. Replace the file to retry."
+msgstr "Processing failed. Replace the file to retry."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Ready"
+msgstr "Ready"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Replace"
+msgstr "Replace"
+
+#: src/components/integrations/AppDetail.tsx
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/PluginsOverlay.tsx
+msgid "Retry"
+msgstr "Retry"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Update failed. Previous version is available."
+msgstr "Update failed. Previous version is available."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Updating"
+msgstr "Updating"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Use shared knowledge"
+msgstr "Use shared knowledge"

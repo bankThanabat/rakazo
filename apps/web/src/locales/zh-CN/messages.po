@@ -4068,3 +4068,93 @@ msgstr ""
 #: src/components/integrations/OpenConnectorCatalog.tsx:631
 msgid "Set up incoming messages"
 msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Add document"
+msgstr "添加文档"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Choose a file smaller than 10 MiB."
+msgstr "请选择小于 10 MiB 的文件。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connect knowledge"
+msgstr "连接知识库"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connection"
+msgstr "连接"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not load documents. Try again."
+msgstr "无法加载文档，请重试。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not save the document change. Try again."
+msgstr "无法保存文档更改，请重试。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Delete document?"
+msgstr "删除文档？"
+
+#: src/pages/KnowledgeSection.tsx
+msgid "Documents"
+msgstr "文档"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Download"
+msgstr "下载"
+
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal"
+msgstr "内部"
+
+#. placeholder {0}: source.name
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal: {0}"
+msgstr "内部：{0}"
+
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Knowledge service URL"
+msgstr "知识服务 URL"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "No documents yet."
+msgstr "暂无文档。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing"
+msgstr "处理中"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing failed. Replace the file to retry."
+msgstr "处理失败，请替换文件后重试。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Ready"
+msgstr "就绪"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Replace"
+msgstr "替换"
+
+#: src/components/integrations/AppDetail.tsx
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/PluginsOverlay.tsx
+msgid "Retry"
+msgstr "重试"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Update failed. Previous version is available."
+msgstr "更新失败，仍可使用上一版本。"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Updating"
+msgstr "更新中"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Use shared knowledge"
+msgstr "使用共享知识库"
