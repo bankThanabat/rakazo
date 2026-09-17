@@ -14,6 +14,7 @@ import { databaseCapacityBackoffMs, GraphileJobWorkerHost } from "./wakeup.js";
 
 function handlers(): BackgroundJobHandlers {
   return {
+    "knowledge.process": vi.fn(async () => undefined),
     "run.continue": vi.fn(async () => undefined),
     "routine.wakeup": vi.fn(async () => undefined),
     "computer.update": vi.fn(async () => undefined),

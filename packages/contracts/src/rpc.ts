@@ -94,6 +94,11 @@ import {
   IntegrationProviderConfigSchema,
   IntegrationSetupStateSchema,
 } from "./integration-settings.js";
+import {
+  KnowledgeConfigureInput,
+  KnowledgeStateSchema,
+  KnowledgeUploadInput,
+} from "./knowledge.js";
 import { MessageReactionSchema } from "./reactions.js";
 import { RunsListOutputSchema } from "./runs.js";
 import { SearchQueryOutputSchema } from "./search.js";
@@ -758,6 +763,19 @@ export const appContract = {
   autoReview: {
     get: oc.output(ActionAutoReviewSettingsSchema),
     set: oc.input(z.object({ enabled: z.boolean() })).output(ActionAutoReviewSettingsSchema),
+  },
+  knowledge: {
+    state: oc.input(botId).output(KnowledgeStateSchema),
+    configure: oc.input(KnowledgeConfigureInput).output(KnowledgeStateSchema),
+    attach: oc.input(botId.extend({ enabled: z.boolean() })).output(KnowledgeStateSchema),
+    upload: oc.input(KnowledgeUploadInput).output(KnowledgeStateSchema),
+    visibility: oc
+      .input(botId.extend({ sourceId: Id, internal: z.boolean() }))
+      .output(KnowledgeStateSchema),
+    remove: oc.input(botId.extend({ sourceId: Id })).output(KnowledgeStateSchema),
+    download: oc
+      .input(botId.extend({ sourceId: Id }))
+      .output(z.object({ name: z.string(), mimeType: z.string(), contentBase64: z.string() })),
   },
   artifacts: {
     list: oc.input(botId).output(z.array(ArtifactSchema)),

@@ -491,6 +491,7 @@ export interface VoiceTranscribeRequest {
 }
 
 export interface BackgroundJobPayloads {
+  "knowledge.process": { revisionId: string };
   "customer.process": { conversationId?: string };
   "customer.poll": { channelId: string };
   "run.continue": { runId: string };

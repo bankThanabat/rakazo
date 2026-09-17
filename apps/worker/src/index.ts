@@ -1,5 +1,5 @@
 import type { JobPublisher, JobWorkerHost } from "@rakazo/adapter-kit";
-import { ComposioConnector, IntegrationProviderSettings } from "@rakazo/adapters";
+import { ComposioConnector, createKnowledge, IntegrationProviderSettings } from "@rakazo/adapters";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 
 loadRootEnv();
@@ -163,7 +163,9 @@ async function main() {
     });
   // One provider instance so emulator launches and polls share the same Map.
   const cloudAgent = createCloudAgentConnection();
+  const knowledge = createKnowledge({ prisma, artifacts, secrets, jobs });
   const customers = createCustomerConversations({
+    knowledge,
     webOrigin: process.env.WEB_ORIGIN,
     notifications: new ExpoPushProvider(dataDir),
     apiUrl: process.env.API_URL ?? "http://127.0.0.1:3100",
@@ -212,6 +214,7 @@ async function main() {
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    knowledge,
     customers,
     executor,
     prisma,
@@ -254,6 +257,7 @@ async function main() {
     reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
     reconcileCustomers: customers.reconcile,
+    reconcileKnowledge: knowledge.reconcile,
   });
   reconciler.start();
 

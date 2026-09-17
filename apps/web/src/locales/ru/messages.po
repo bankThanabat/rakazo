@@ -4050,3 +4050,93 @@ msgstr ""
 #: src/components/integrations/OpenConnectorCatalog.tsx:631
 msgid "Set up incoming messages"
 msgstr ""
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Add document"
+msgstr "Добавить документ"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Choose a file smaller than 10 MiB."
+msgstr "Выберите файл размером менее 10 МиБ."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connect knowledge"
+msgstr "Подключить базу знаний"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Connection"
+msgstr "Подключение"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not load documents. Try again."
+msgstr "Не удалось загрузить документы. Повторите попытку."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Could not save the document change. Try again."
+msgstr "Не удалось сохранить изменение документа. Повторите попытку."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Delete document?"
+msgstr "Удалить документ?"
+
+#: src/pages/KnowledgeSection.tsx
+msgid "Documents"
+msgstr "Документы"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Download"
+msgstr "Скачать"
+
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal"
+msgstr "Внутреннее"
+
+#. placeholder {0}: source.name
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Internal: {0}"
+msgstr "Внутреннее: {0}"
+
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Knowledge service URL"
+msgstr "URL сервиса базы знаний"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "No documents yet."
+msgstr "Документов пока нет."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing"
+msgstr "Обработка"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Processing failed. Replace the file to retry."
+msgstr "Ошибка обработки. Замените файл, чтобы повторить попытку."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Ready"
+msgstr "Готово"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Replace"
+msgstr "Заменить"
+
+#: src/components/integrations/AppDetail.tsx
+#: src/components/integrations/ConnectionActions.tsx
+#: src/pages/KnowledgeDocuments.tsx
+#: src/pages/PluginsOverlay.tsx
+msgid "Retry"
+msgstr "Повторить"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Update failed. Previous version is available."
+msgstr "Не удалось обновить. Предыдущая версия доступна."
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Updating"
+msgstr "Обновление"
+
+#: src/pages/KnowledgeDocuments.tsx
+msgid "Use shared knowledge"
+msgstr "Использовать общую базу знаний"

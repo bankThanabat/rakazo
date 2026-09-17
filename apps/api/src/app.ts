@@ -27,6 +27,7 @@ import {
   createCustomerConversations,
   createCustomerIngress,
   createJobReconciler,
+  createKnowledge,
   createMessagingContextLoader,
   createMessagingTeamChatSender,
   createModelBridge,
@@ -366,7 +367,9 @@ export async function createApp(
     CLOUD_AGENT_SPACE_ID: env.cloudAgentSpaceId,
   });
   const shutdown = new AbortController();
+  const knowledge = createKnowledge({ prisma, artifacts, secrets, jobs });
   const customers = createCustomerConversations({
+    knowledge,
     webOrigin: env.webOrigin,
     notifications,
     apiUrl: env.apiUrl,
@@ -417,6 +420,7 @@ export async function createApp(
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    knowledge,
     customers,
     executor,
     prisma,
@@ -442,6 +446,7 @@ export async function createApp(
         reconcileCloudAgents: () => reconcileCloudAgents({ prisma, jobs, cloudAgent }),
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
         reconcileCustomers: customers.reconcile,
+        reconcileKnowledge: knowledge.reconcile,
       })
     : undefined;
   reconciler?.start();
@@ -452,6 +457,7 @@ export async function createApp(
     integrations: integrationSettings,
   });
   const router = createRouter({
+    knowledge,
     cloudAgent,
     prisma,
     events,

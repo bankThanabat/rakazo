@@ -17,12 +17,14 @@ import { performComputerUpdate } from "./computer-update.js";
 import type { CustomerConversationService } from "./customer-conversations.js";
 import type { createRunExecutor } from "./executor.js";
 import { compactHistory } from "./history-compaction.js";
+import type { KnowledgeService } from "./knowledge.js";
 import type { MemoryProviderResolver } from "./memory-provider-factory.js";
 import { deliverMessagingOutbound, mirrorMessagingOutbound } from "./messaging-delivery.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 export function createBackgroundJobHandlers(deps: {
+  knowledge?: KnowledgeService;
   customers?: CustomerConversationService;
   executor: ReturnType<typeof createRunExecutor>;
   prisma: PrismaClient;
@@ -54,6 +56,9 @@ export function createBackgroundJobHandlers(deps: {
   };
 
   return {
+    "knowledge.process": async ({ revisionId }) => {
+      await deps.knowledge?.process(revisionId);
+    },
     // Drain jobs queued before native customer channels were retired.
     "customer.process": async ({ conversationId }) => {
       if (conversationId) await deps.customers?.process(conversationId);

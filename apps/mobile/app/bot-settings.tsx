@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { BotAvatar } from "../components/bot-avatar";
 import { ComputerModePicker } from "../components/computer-mode-picker";
+import { KnowledgeDocuments } from "../components/knowledge-documents";
 import {
   type MobileBot,
   type MobileMe,
@@ -391,6 +392,7 @@ export default function BotSettingsScreen() {
         </Pressable>
         {advancedOpen ? (
           <View>
+            {botId ? <KnowledgeDocuments key={botId} botId={botId} /> : null}
             <Text
               style={{
                 color: tokens.mutedForeground,

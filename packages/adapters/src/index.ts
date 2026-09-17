@@ -69,6 +69,8 @@ export * from "./integration-gateway-client.js";
 export * from "./integration-provider-settings.js";
 export * from "./job-reconciler.js";
 export * from "./keyless-http-web.js";
+export type { KnowledgeService } from "./knowledge.js";
+export { createKnowledge } from "./knowledge.js";
 export * from "./mcp-connector.js";
 export * from "./mcp-emulator.js";
 export * from "./mcp-oauth.js";

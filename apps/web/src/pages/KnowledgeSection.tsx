@@ -12,6 +12,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { downloadArtifactBytes } from "../lib/artifact-open";
 import { rpc } from "../lib/rpc";
+import { KnowledgeDocuments } from "./KnowledgeDocuments";
 
 const fieldClass = "mt-2 w-full font-mono text-[13px] leading-relaxed";
 
@@ -35,6 +36,9 @@ export function KnowledgeSection({
     <section className="mt-6" data-testid="bot-knowledge">
       <Tabs defaultValue="memory">
         <TabsList aria-label={t`Knowledge`}>
+          <TabsTrigger value="documents">
+            <Trans>Documents</Trans>
+          </TabsTrigger>
           <TabsTrigger value="memory">
             <Trans>Memory</Trans>
           </TabsTrigger>
@@ -42,6 +46,9 @@ export function KnowledgeSection({
             <Trans>Skills</Trans>
           </TabsTrigger>
         </TabsList>
+        <TabsContent value="documents">
+          <KnowledgeDocuments key={botId} botId={botId} />
+        </TabsContent>
         <TabsContent value="memory">
           <MemoryDocumentList
             key={botId}

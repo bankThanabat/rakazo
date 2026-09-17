@@ -698,4 +698,26 @@ export const RU_MESSAGES: Record<string, string> = {
   "Reset to default": "Сбросить по умолчанию",
   "Reset {name} to default": "Сбросить «{name}» по умолчанию",
   "Use defaults": "Использовать настройки по умолчанию",
+  Documents: "Документы",
+  "Add document": "Добавить документ",
+  "Choose a file smaller than 10 MiB.": "Выберите файл размером менее 10 МиБ.",
+  "Connect knowledge": "Подключить базу знаний",
+  Connection: "Подключение",
+  "Could not load documents. Try again.": "Не удалось загрузить документы. Повторите попытку.",
+  "Could not save the document change. Try again.":
+    "Не удалось сохранить изменение документа. Повторите попытку.",
+  "Knowledge service URL": "URL сервиса базы знаний",
+  "No documents yet.": "Документов пока нет.",
+  Processing: "Обработка",
+  "Processing failed. Replace the file to retry.":
+    "Ошибка обработки. Замените файл, чтобы повторить попытку.",
+  Ready: "Готово",
+  Replace: "Заменить",
+  "Update failed. Previous version is available.":
+    "Не удалось обновить. Предыдущая версия доступна.",
+  Updating: "Обновление",
+  "Use shared knowledge": "Использовать общую базу знаний",
+  "Delete document?": "Удалить документ?",
+  "File sharing is unavailable on this device.": "На этом устройстве недоступна отправка файлов.",
+  Download: "Скачать",
 };

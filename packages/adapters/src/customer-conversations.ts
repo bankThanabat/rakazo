@@ -40,6 +40,7 @@ import type { CustomerRuntimeConfig } from "./customer-runtime.js";
 import { LangflowCustomerRuntime } from "./customer-runtime.js";
 import { customerWebhookUrl } from "./customer-webhooks.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
+import type { KnowledgeService } from "./knowledge.js";
 import { createModelBridge } from "./model-bridge.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -52,6 +53,7 @@ const liveChannel = {
 };
 
 export function createCustomerConversations(deps: {
+  knowledge?: KnowledgeService;
   prisma: PrismaClient;
   integrations: IntegrationProviderSettings;
   secrets: EncryptedSecretStore;
@@ -141,7 +143,12 @@ export function createCustomerConversations(deps: {
     };
     return deps.runtime?.(config) ?? new LangflowCustomerRuntime(config);
   };
-  const tools = createCustomerBusinessTools({ prisma, connector, runtime: runtimeFor });
+  const tools = createCustomerBusinessTools({
+    prisma,
+    connector,
+    runtime: runtimeFor,
+    knowledge: deps.knowledge,
+  });
 
   async function poll(channelId: string) {
     const token = randomUUID();
@@ -653,6 +660,17 @@ export function createCustomerConversations(deps: {
           }))
         )
           throw new IsolationError();
+        const agent = await prisma.bot.findUniqueOrThrow({ where: { id: channel.botId } });
+        if (agent.knowledgeLibraryId) {
+          if (!deps.knowledge) throw new Error("Knowledge is unavailable");
+          return deps.knowledge.search(
+            channel,
+            channel.botId,
+            "staff",
+            input.query,
+            AbortSignal.timeout(20_000),
+          );
+        }
         const behavior = await prisma.customerBehavior.findUniqueOrThrow({
           where: { botId: channel.botId },
         });
@@ -812,6 +830,13 @@ export function createCustomerConversations(deps: {
         // Publish first. A failed publication leaves the active revision untouched.
         return prisma.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM bots WHERE id = ${botId} FOR UPDATE`;
+          if (
+            input.knowledgeFilterId &&
+            (await tx.bot.findUniqueOrThrow({ where: { id: botId } })).knowledgeLibraryId
+          )
+            throw new Error(
+              "Manage attached knowledge through Documents; detach it before using a legacy filter",
+            );
           const current = await tx.customerBehavior.findUnique({ where: { botId } });
           if (current?.revision !== existing?.revision)
             throw new Error("Customer behavior changed; inspect and retry");

@@ -13,6 +13,8 @@ import { createConnectionActionSettings } from "./connection-action-settings.js"
 import { createCustomerConversations } from "./customer-conversations.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
+import { createKnowledge } from "./knowledge.js";
+import { createKnowledgeFixture } from "./knowledge-test-fixture.js";
 import { createModelBridge } from "./model-bridge.js";
 import { createOpenConnectorFixture, sampleAction } from "./open-connector-test-fixture.js";
 import { serializeModelSecret } from "./pi-oauth.js";
@@ -56,6 +58,8 @@ describe.skipIf(!enabled)(
     let db: ReturnType<typeof createDb>;
     let f: ReturnType<typeof createOpenConnectorFixture>;
     let service: ReturnType<typeof createCustomerConversations>;
+    let knowledge: ReturnType<typeof createKnowledge>;
+    let knowledgeFixture: ReturnType<typeof createKnowledgeFixture>;
     let owners: Array<Awaited<ReturnType<typeof provisionMessagingIdentity>>>;
     let feeds: Map<string, unknown[]>;
     let reply: ReturnType<typeof vi.fn<CustomerRuntime["reply"]>>;
@@ -124,7 +128,16 @@ describe.skipIf(!enabled)(
       }
       reply = vi.fn(async (request) => `reply from ${request.flowId}`);
       search = vi.fn(async () => ({ results: [] }));
+      knowledgeFixture = createKnowledgeFixture();
+      knowledge = createKnowledge({
+        prisma: db.prisma,
+        artifacts: knowledgeFixture.artifacts,
+        jobs: knowledgeFixture.jobs,
+        secrets: f.secrets,
+        provider: () => knowledgeFixture.provider,
+      });
       service = createCustomerConversations({
+        knowledge,
         prisma: db.prisma,
         secrets: f.secrets,
         integrations: new IntegrationProviderSettings(db.prisma, f.secrets, "test", {
@@ -1071,6 +1084,111 @@ describe.skipIf(!enabled)(
         }),
       ).toBe(0);
     });
+
+    async function uploadPolicy(a: Awaited<ReturnType<typeof setup>>) {
+      await knowledge.configure(a.owner, {
+        botId: a.owner.botId,
+        baseUrl: "http://localhost:8000/v1",
+        apiKey: "fixture-key",
+      });
+      await knowledge.attach(a.owner, a.owner.botId, true);
+      const state = await knowledge.upload(a.owner, {
+        botId: a.owner.botId,
+        name: "policy.txt",
+        mimeType: "text/plain",
+        contentBase64: Buffer.from("Thirty day return policy").toString("base64"),
+      });
+      const source = state.sources[0]!;
+      const revision = await db.prisma.knowledgeRevision.findFirstOrThrow({
+        where: { sourceId: source.id },
+      });
+      await knowledge.process(revision.id);
+      await knowledge.process(revision.id);
+      return source;
+    }
+
+    it("keeps a customer turn running when an internal document is deleted", async () => {
+      const a = await setup();
+      const source = await uploadPolicy(a);
+      const c = await receive(a);
+      reply.mockImplementationOnce(async () => {
+        await knowledge.remove(a.owner, a.owner.botId, source.id);
+        return "Still here";
+      });
+      await service.process(c.id);
+      expect(
+        await db.prisma.customerConversation.findUniqueOrThrow({ where: { id: c.id } }),
+      ).toMatchObject({ owner: "bot", needsHuman: false });
+    });
+
+    it.each(["restrict", "replace", "delete"])(
+      "revokes cached knowledge and direct replies when sources %s during a customer turn",
+      async (change) => {
+        const a = await setup();
+        const source = await uploadPolicy(a);
+        await knowledge.setInternal(a.owner, a.owner.botId, source.id, false);
+        const c = await receive(a);
+        reply.mockImplementationOnce(async (request) => {
+          const token = request.executionContext!.token;
+          expect((await service.tools.list(token)).tools.map((tool) => tool.name)).toContain(
+            "search_knowledge",
+          );
+          const search = () =>
+            service.tools.execute(token, {
+              name: "search_knowledge",
+              callId: "knowledge-1",
+              arguments: { query: "returns" },
+            });
+          // A failed read has no side effects, so the same call may be retried.
+          knowledgeFixture.provider.search.mockRejectedValueOnce(new Error("offline"));
+          await expect(search()).rejects.toThrow();
+          expect(await search()).toMatchObject([
+            { sourceId: source.id, text: "Thirty day return policy" },
+          ]);
+          await search();
+          expect(knowledgeFixture.provider.search).toHaveBeenCalledTimes(3);
+          if (change === "restrict") {
+            await knowledge.setInternal(a.owner, a.owner.botId, source.id, true);
+          } else if (change === "delete") {
+            await knowledge.remove(a.owner, a.owner.botId, source.id);
+          } else {
+            await knowledge.upload(a.owner, {
+              botId: a.owner.botId,
+              sourceId: source.id,
+              name: "updated.txt",
+              mimeType: "text/plain",
+              contentBase64: Buffer.from("Sixty day return policy").toString("base64"),
+            });
+            const updated = await db.prisma.knowledgeSource.findUniqueOrThrow({
+              where: { id: source.id },
+            });
+            await knowledge.process(updated.pendingRevisionId!);
+            await knowledge.process(updated.pendingRevisionId!);
+          }
+          await expect(search()).rejects.toThrow();
+          await expect(
+            service.tools.execute(token, {
+              name: "openconnector_execute_tool",
+              callId: "reply-1",
+              arguments: {
+                id: `${a.account.id}:sample.send`,
+                arguments: { to: "thread", texts: ["Thirty day return policy"] },
+              },
+            }),
+          ).rejects.toThrow();
+          return "Obsolete automatic reply";
+        });
+        await service.process(c.id);
+        await reply.mock.results[0]!.value;
+        expect(sends).toHaveLength(0);
+        expect(
+          await db.prisma.customerConversation.findUniqueOrThrow({ where: { id: c.id } }),
+        ).toMatchObject({ owner: "staff", needsHuman: true });
+        expect(
+          await service.manage(a.owner, a.owner.botId, "knowledge", { query: "returns" }),
+        ).toMatchObject(change === "delete" ? [] : [{ sourceId: source.id }]);
+      },
+    );
 
     it("shares the provider tools, binds the reply target, and delivers an explicit reply only once", async () => {
       const a = await setup();

@@ -25,6 +25,7 @@ import type {
   EncryptedSecretStore,
   IntegrationGateway,
   IntegrationProviderSettings,
+  KnowledgeService,
   MemoryProviderResolver,
   PiOAuthLogins,
   RemoteConnectorDependencies,
@@ -431,6 +432,7 @@ function mcpAssignmentDto(row: {
 }
 
 export interface RouterDeps {
+  knowledge: KnowledgeService;
   cloudAgent?: CloudAgentConnection | null;
   prisma: PrismaClient;
   events: ThreadEvents;
@@ -496,6 +498,7 @@ function deliberateMessage(error: unknown, fallback: string) {
 }
 
 export function createRouter(deps: RouterDeps) {
+  const { knowledge } = deps;
   const actionSettings = createConnectionActionSettings({
     prisma: deps.prisma,
     provider: (id) => deps.connectors.managed(id),
@@ -681,6 +684,8 @@ export function createRouter(deps: RouterDeps) {
               data: { state: "stopped", providerRef: null },
             });
           }
+          await assertClaim();
+          await knowledge.purge(input.spaceId);
           await assertClaim();
           claimActive = false;
           if (claimRenewal) {
@@ -4723,6 +4728,29 @@ export function createRouter(deps: RouterDeps) {
         });
         return loadAutoReviewSettings(deps, context.actor);
       }),
+    },
+    knowledge: {
+      state: authed.knowledge.state.handler(({ context, input }) =>
+        knowledge.state(context.actor, input.botId),
+      ),
+      configure: authed.knowledge.configure.handler(({ context, input }) =>
+        knowledge.configure(context.actor, input),
+      ),
+      attach: authed.knowledge.attach.handler(({ context, input }) =>
+        knowledge.attach(context.actor, input.botId, input.enabled),
+      ),
+      upload: authed.knowledge.upload.handler(({ context, input }) =>
+        knowledge.upload(context.actor, input),
+      ),
+      visibility: authed.knowledge.visibility.handler(({ context, input }) =>
+        knowledge.setInternal(context.actor, input.botId, input.sourceId, input.internal),
+      ),
+      remove: authed.knowledge.remove.handler(({ context, input }) =>
+        knowledge.remove(context.actor, input.botId, input.sourceId),
+      ),
+      download: authed.knowledge.download.handler(({ context, input }) =>
+        knowledge.download(context.actor, input.botId, input.sourceId),
+      ),
     },
     artifacts: {
       list: authed.artifacts.list.handler(async ({ context, input }) => {
