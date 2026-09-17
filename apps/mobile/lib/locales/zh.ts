@@ -675,6 +675,7 @@ export const ZH_MESSAGES: Record<string, string> = {
     "内部操作仅供员工使用。关闭后客户助手也可以使用。",
   "Internal: {name}": "内部：{name}",
   "No actions available.": "没有可用操作。",
+  "What is Internal?": "什么是“内部”？",
   "Reset to default": "恢复默认",
   "Reset {name} to default": "将{name}恢复默认",
   "Use defaults": "使用默认设置",

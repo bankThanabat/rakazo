@@ -695,6 +695,7 @@ export const RU_MESSAGES: Record<string, string> = {
     "Внутренние действия доступны только сотрудникам. Отключите, чтобы разрешить их и клиентским агентам.",
   "Internal: {name}": "Внутреннее: {name}",
   "No actions available.": "Нет доступных действий.",
+  "What is Internal?": "Что означает «Внутреннее»?",
   "Reset to default": "Сбросить по умолчанию",
   "Reset {name} to default": "Сбросить «{name}» по умолчанию",
   "Use defaults": "Использовать настройки по умолчанию",
