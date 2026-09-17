@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
     list: vi.fn(),
     setup: vi.fn(),
     tools: vi.fn(),
+    actions: vi.fn(),
     setupIncoming: vi.fn(),
   },
   integrationSetup: { get: vi.fn() },
@@ -48,6 +49,10 @@ vi.mock("@rakazo/ui-web", () => {
     NativeSelect: (props: ComponentProps<"select">) => <select {...props} />,
     NativeSelectOption: (props: ComponentProps<"option">) => <option {...props} />,
     Skeleton: () => <div data-skeleton="" />,
+    Popover: ({ children }: Props) => children,
+    PopoverTrigger: (props: ButtonProps) => <button {...strip(props)} />,
+    PopoverContent: () => null,
+    PopoverDescription: Box,
     Switch: ({
       checked,
       onCheckedChange,
@@ -110,6 +115,7 @@ beforeEach(() => {
     input.connectorId === "open-connector" ? [line, future] : [gmail],
   );
   api.connections.list.mockResolvedValue([lineAccount]);
+  api.connections.actions.mockResolvedValue([]);
   api.connections.setup.mockResolvedValue({
     methods: [{ type: "api_key", fields: [] }],
     oauthConfigured: false,
@@ -189,6 +195,7 @@ it("opens a detail pane and loads setup only for OpenConnector apps", async () =
     connectorId: "open-connector",
     provider: "line",
   });
+  expect(api.connections.actions).toHaveBeenCalledWith({ connectionId: lineAccount.id });
   const labels = [...detail().querySelectorAll("button")].map((b) => b.textContent);
   expect(labels).toEqual(expect.arrayContaining(["Disconnect", "Add account"]));
   // API-key accounts cannot reconnect without a new secret, so no Reconnect shortcut is offered.
