@@ -23,7 +23,7 @@ import { ArrowLeft } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { rpc } from "../../lib/rpc";
 import { AccountIncoming } from "./AccountIncoming";
-import { ActionList, ActionsDisclosure } from "./ActionList";
+import { ActionList, ActionsSection } from "./ActionList";
 import { ConnectionActions } from "./ConnectionActions";
 import { OpenConnectorFields } from "./OpenConnectorFields";
 
@@ -108,6 +108,10 @@ export function AppDetail({
   useEffect(() => {
     if (awaitingIncoming.length || accounts.some((row) => row.webhookUrl)) ensureBots();
   }, [awaitingIncoming.length, accounts.some((row) => row.webhookUrl)]);
+
+  useEffect(() => {
+    if (connected && !managedSetup) loadTools();
+  }, [connected, managedSetup]);
 
   function ensureBots() {
     if (botsRequested.current) return;
@@ -735,15 +739,9 @@ export function AppDetail({
       {connected && managedSetup ? (
         <ConnectionActions accounts={accounts.filter((row) => row.status === "connected")} />
       ) : connected ? (
-        <ActionsDisclosure
-          onOpenChange={(open) => {
-            if (open) loadTools();
-          }}
-        >
-          <div className="mt-3 space-y-3">
-            <ActionList actions={tools} />
-          </div>
-        </ActionsDisclosure>
+        <ActionsSection>
+          <ActionList actions={tools} />
+        </ActionsSection>
       ) : null}
     </div>
   );

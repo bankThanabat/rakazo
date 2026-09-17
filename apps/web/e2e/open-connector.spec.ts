@@ -261,9 +261,28 @@ for (const viewport of [
       auth: { type: "api_key", values: { apiKey: "fake-account-token" } },
     });
     await captureScreenshot(page, testInfo, `openconnector-connected-${viewport.width}`);
-    await page.getByText("Available actions", { exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Available actions", exact: true }),
+    ).toBeVisible();
     const internalSend = page.getByRole("switch", { name: "Internal: Send message", exact: true });
     await expect(internalSend).toBeChecked();
+    await expect(page.getByText("Internal", { exact: true })).toHaveCount(1);
+    const internalHelp = page.getByRole("button", { name: "What is Internal?", exact: true });
+    const explanation = page.getByText(
+      "Internal is for staff only. Turn it off to also allow customer agents.",
+      { exact: true },
+    );
+    await expect(explanation).toBeHidden();
+    await internalHelp.click();
+    await expect(explanation).toBeVisible();
+    await expect(internalSend).toBeChecked();
+    expect(actionRequests).toEqual([]);
+    await captureScreenshot(page, testInfo, `openconnector-internal-help-${viewport.width}`);
+    await page.keyboard.press("Escape");
+    await expect(explanation).toBeHidden();
+    await expect(internalHelp).toBeFocused();
+    await expect(page.locator("summary").filter({ hasText: "Available actions" })).toHaveCount(0);
+    await captureScreenshot(page, testInfo, `openconnector-actions-${viewport.width}`);
     await internalSend.click();
     await expect(internalSend).not.toBeChecked();
     expect(actionRequests.at(-1)).toEqual({
@@ -271,19 +290,29 @@ for (const viewport of [
       action: "sample.send_message",
       internal: false,
     });
-    await page.getByRole("button", { name: "Reset Send message to default", exact: true }).click();
-    await expect(internalSend).not.toBeChecked();
-    await page.getByRole("button", { name: "Use defaults", exact: true }).click();
+    const reset = page.getByRole("button", { name: "Reset to default", exact: true });
+    await expect(reset).toHaveCount(1);
+    await expect(
+      page.getByRole("button", { name: "Reset Send message to default", exact: true }),
+    ).toHaveCount(0);
+    const internalPublish = page.getByRole("switch", {
+      name: "Internal: Publish media",
+      exact: true,
+    });
+    await internalPublish.click();
+    await expect(internalPublish).not.toBeChecked();
+    await captureScreenshot(page, testInfo, `openconnector-single-reset-${viewport.width}`);
+    await page.getByRole("button", { name: "Reset to default", exact: true }).click();
     const defaultsDialog = page.getByRole("alertdialog");
     await expect(defaultsDialog).toContainText("Customer agents will have access");
     await expect(defaultsDialog).toContainText("Send message");
-    await defaultsDialog.getByRole("button", { name: "Use defaults", exact: true }).click();
+    await defaultsDialog.getByRole("button", { name: "Reset to default", exact: true }).click();
     await expect(defaultsDialog).toHaveCount(0);
     await expect(internalSend).not.toBeChecked();
     await expect(
       page.getByRole("switch", { name: "Internal: Publish media", exact: true }),
     ).toBeChecked();
-    await expect(page.getByRole("button", { name: "Use defaults", exact: true })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Reset to default", exact: true })).toBeEnabled();
     await captureScreenshot(page, testInfo, `openconnector-action-settings-${viewport.width}`);
     // Narrow layouts push the detail over the list, so step back before picking another app.
     if (viewport.width < 640)
@@ -415,10 +444,10 @@ test("a teammate can inspect a shared account without management controls", asyn
   await label.blur();
   await expect(page.getByRole("button", { name: "Disconnect", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toHaveCount(0);
-  await page.getByText("Available actions", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Available actions", exact: true })).toBeVisible();
   await expect(page.getByText("Send text", { exact: true })).toBeVisible();
   await expect(page.getByRole("switch", { name: "Internal: Send", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Use defaults", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reset to default", exact: true })).toHaveCount(0);
   expect(mutations).toEqual([]);
 });
 
@@ -531,6 +560,7 @@ test("OAuth reconnect survives reload and cancellation preserves the existing ac
       cancelled = true;
       result = { ok: true };
     } else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
+    else if (path === "connections/actions") result = [];
     else if (path !== "capabilities/list") mutations.push(path);
     await route.fulfill({ json: { json: result } });
   });

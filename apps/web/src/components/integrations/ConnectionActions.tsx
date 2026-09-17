@@ -13,16 +13,19 @@ import {
   Button,
   NativeSelect,
   NativeSelectOption,
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTrigger,
   Switch,
 } from "@rakazo/ui-web";
-import { RotateCcw } from "lucide-react";
+import { CircleHelp, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { rpc } from "../../lib/rpc";
-import { ActionList, ActionsDisclosure } from "./ActionList";
+import { ActionList, ActionsSection } from "./ActionList";
 
 export function ConnectionActions({ accounts }: { accounts: Connection[] }) {
   const { t } = useLingui();
-  const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(accounts[0]?.id ?? "");
   const account = accounts.find((row) => row.id === selected) ?? accounts[0];
   const connectionId = account?.id;
@@ -33,7 +36,7 @@ export function ConnectionActions({ accounts }: { accounts: Connection[] }) {
   const [confirmDefaults, setConfirmDefaults] = useState(false);
   const sharedDefaults = actions?.filter((action) => !action.defaultInternal) ?? [];
   useEffect(() => {
-    if (!open || !connectionId) return;
+    if (!connectionId) return;
     let current = true;
     setActions(null);
     setError(null);
@@ -48,9 +51,9 @@ export function ConnectionActions({ accounts }: { accounts: Connection[] }) {
     return () => {
       current = false;
     };
-  }, [open, connectionId, revision]);
+  }, [connectionId, revision]);
 
-  async function configure(change?: { action: string; internal: boolean | null }) {
+  async function configure(change?: { action: string; internal: boolean }) {
     if (!connectionId || pending || account?.canManage === false) return;
     setPending(true);
     setError(null);
@@ -66,89 +69,94 @@ export function ConnectionActions({ accounts }: { accounts: Connection[] }) {
   }
   if (!account) return null;
   return (
-    <ActionsDisclosure onOpenChange={setOpen}>
-      {open ? (
-        <div className="mt-3 space-y-3">
-          {accounts.length > 1 ? (
-            <NativeSelect
-              aria-label={t`Account`}
-              value={connectionId}
-              disabled={pending}
-              onChange={(event) => setSelected(event.target.value)}
-            >
-              {accounts.map((row) => (
-                <NativeSelectOption key={row.id} value={row.id}>
-                  {row.displayName}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          ) : null}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
-              <Trans>Internal is for staff only. Turn it off to also allow customer agents.</Trans>
+    <ActionsSection
+      action={
+        account.canManage !== false ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t`Reset to default`}
+            title={t`Reset to default`}
+            disabled={pending || !actions?.length}
+            onClick={() => setConfirmDefaults(true)}
+          >
+            <RotateCcw className="size-3.5" />
+          </Button>
+        ) : null
+      }
+    >
+      <div className="space-y-3">
+        {accounts.length > 1 ? (
+          <NativeSelect
+            aria-label={t`Account`}
+            value={connectionId}
+            disabled={pending}
+            onChange={(event) => setSelected(event.target.value)}
+          >
+            {accounts.map((row) => (
+              <NativeSelectOption key={row.id} value={row.id}>
+                {row.displayName}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        ) : null}
+        {error ? (
+          <div className="flex items-center gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              {error}
             </p>
-            {account.canManage !== false ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={pending || !actions?.length}
-                onClick={() => setConfirmDefaults(true)}
-              >
-                <Trans>Use defaults</Trans>
-              </Button>
-            ) : null}
+            <Button variant="ghost" size="sm" onClick={() => setRevision((value) => value + 1)}>
+              <Trans>Retry</Trans>
+            </Button>
           </div>
-          {error ? (
-            <div className="flex items-center gap-2">
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-              <Button variant="ghost" size="sm" onClick={() => setRevision((value) => value + 1)}>
-                <Trans>Retry</Trans>
-              </Button>
-            </div>
-          ) : null}
-          {actions || !error ? (
-            <ActionList
-              actions={actions}
-              control={(action, label) => (
-                <div className="flex shrink-0 items-center gap-2">
-                  {action.overridden && account.canManage !== false ? (
+        ) : null}
+        {actions || !error ? (
+          <ActionList
+            actions={actions}
+            controlHeading={
+              <Popover>
+                <PopoverTrigger
+                  aria-label={t`What is Internal?`}
+                  render={
                     <Button
                       variant="ghost"
-                      size="icon-sm"
-                      aria-label={t`Reset ${label} to default`}
-                      title={t`Reset to default`}
-                      disabled={pending}
-                      onClick={() => void configure({ action: action.name, internal: null })}
-                    >
-                      <RotateCcw className="size-3.5" />
-                    </Button>
-                  ) : null}
-                  <div className="flex min-h-9 items-center gap-2 text-xs text-muted-foreground">
-                    <span aria-hidden="true">
-                      <Trans>Internal</Trans>
-                    </span>
-                    <Switch
-                      aria-label={t`Internal: ${label}`}
-                      checked={action.internal}
-                      disabled={pending || account.canManage === false}
-                      onCheckedChange={(internal) =>
-                        void configure({ action: action.name, internal })
-                      }
+                      size="sm"
+                      className="min-w-16 gap-1 px-1 text-xs text-muted-foreground"
                     />
-                  </div>
-                </div>
-              )}
-            />
-          ) : null}
-        </div>
-      ) : null}
+                  }
+                >
+                  <span>
+                    <Trans>Internal</Trans>
+                  </span>
+                  <CircleHelp aria-hidden="true" className="size-3.5" />
+                </PopoverTrigger>
+                <PopoverContent align="end" aria-label={t`What is Internal?`}>
+                  <PopoverDescription>
+                    <Trans>
+                      Internal is for staff only. Turn it off to also allow customer agents.
+                    </Trans>
+                  </PopoverDescription>
+                </PopoverContent>
+              </Popover>
+            }
+            control={(action, label) => (
+              <div className="flex min-h-9 min-w-16 shrink-0 items-center justify-center">
+                <Switch
+                  aria-label={t`Internal: ${label}`}
+                  checked={action.internal}
+                  disabled={pending || account.canManage === false}
+                  onCheckedChange={(internal) => void configure({ action: action.name, internal })}
+                />
+              </div>
+            )}
+          />
+        ) : null}
+      </div>
       <AlertDialog open={confirmDefaults} onOpenChange={setConfirmDefaults}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              <Trans>Use defaults</Trans>
+              <Trans>Reset to default</Trans>
             </AlertDialogTitle>
             <AlertDialogDescription>
               {sharedDefaults.length ? (
@@ -178,11 +186,11 @@ export function ConnectionActions({ accounts }: { accounts: Connection[] }) {
                 void configure();
               }}
             >
-              <Trans>Use defaults</Trans>
+              <Trans>Reset to default</Trans>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </ActionsDisclosure>
+    </ActionsSection>
   );
 }
