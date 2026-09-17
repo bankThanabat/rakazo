@@ -1,6 +1,7 @@
 export * from "./ai-consent.js";
 export * from "./attachments.js";
 export * from "./bot-secrets.js";
+export * from "./connector-actions.js";
 export * from "./connector-auth.js";
 export * from "./customer.js";
 export * from "./desktop.js";

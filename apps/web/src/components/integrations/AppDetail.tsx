@@ -1,6 +1,6 @@
 import { Trans, useLingui } from "@lingui/react/macro";
 import type { Connection, ConnectionCatalogItem, ConnectorSetup } from "@rakazo/contracts";
-import { humanizeToolName, waitForConnectionAuthorization } from "@rakazo/core";
+import { waitForConnectionAuthorization } from "@rakazo/core";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,10 +19,12 @@ import {
   NativeSelectOption,
   Skeleton,
 } from "@rakazo/ui-web";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { rpc } from "../../lib/rpc";
 import { AccountIncoming } from "./AccountIncoming";
+import { ActionList, ActionsDisclosure } from "./ActionList";
+import { ConnectionActions } from "./ConnectionActions";
 import { OpenConnectorFields } from "./OpenConnectorFields";
 
 /** Only OpenConnector exposes a setup contract (credential forms, reconnect, cancel). Other connectors authorize in a popup. */
@@ -78,7 +80,6 @@ export function AppDetail({
   const botsRequested = useRef(false);
   const [botId, setBotId] = useState("");
   const [tools, setTools] = useState<Tool[] | null>(null);
-  const [toolQuery, setToolQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const controller = useRef<AbortController | null>(null);
   /** Incoming-message secrets entered in the connect form, applied once the account is connected. */
@@ -336,10 +337,6 @@ export function AppDetail({
     (auth?.fields ?? []).every((field) => !field.required || values[field.key]?.trim()) &&
     incomingFields.every((secret) => incomingValues[secret.key]?.trim()) &&
     (!incomingFields.length || Boolean(botId));
-  const visibleTools =
-    tools?.filter((tool) =>
-      `${tool.name} ${tool.description}`.toLowerCase().includes(toolQuery.toLowerCase()),
-    ) ?? [];
   const removingAccount = accounts.find((row) => row.id === removing);
 
   return (
@@ -735,54 +732,18 @@ export function AppDetail({
         </div>
       ) : null}
 
-      {connected ? (
-        <details
-          className="group"
-          onToggle={(event) => {
-            if (event.currentTarget.open) loadTools();
+      {connected && managedSetup ? (
+        <ConnectionActions accounts={accounts.filter((row) => row.status === "connected")} />
+      ) : connected ? (
+        <ActionsDisclosure
+          onOpenChange={(open) => {
+            if (open) loadTools();
           }}
         >
-          <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm font-medium text-foreground [&::-webkit-details-marker]:hidden">
-            <ChevronRight
-              aria-hidden="true"
-              className="size-4 text-muted-foreground transition-transform group-open:rotate-90"
-            />
-            <span>
-              <Trans>Available actions</Trans>
-            </span>
-          </summary>
           <div className="mt-3 space-y-3">
-            {tools && tools.length > 10 ? (
-              <Input
-                aria-label={t`Search actions`}
-                placeholder={t`Search actions`}
-                value={toolQuery}
-                onChange={(event) => setToolQuery(event.target.value)}
-                className="h-8"
-              />
-            ) : null}
-            {!tools ? (
-              <Skeleton className="h-10" />
-            ) : tools.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                <Trans>No actions available.</Trans>
-              </p>
-            ) : (
-              <ul className="rk-scroll max-h-64 divide-y divide-border overflow-y-auto">
-                {visibleTools.map((tool) => (
-                  <li key={tool.name} className="py-2">
-                    <p className="break-words text-sm font-medium text-foreground">
-                      {humanizeToolName(tool.name)}
-                    </p>
-                    {tool.description ? (
-                      <p className="text-sm text-muted-foreground">{tool.description}</p>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            )}
+            <ActionList actions={tools} />
           </div>
-        </details>
+        </ActionsDisclosure>
       ) : null}
     </div>
   );

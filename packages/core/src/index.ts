@@ -15,6 +15,7 @@ export * from "./composer-mentions.js";
 export * from "./composer-slash.js";
 export * from "./computer-updates.js";
 export * from "./connection-authorization.js";
+export * from "./connector-action-policy.js";
 export * from "./cron.js";
 export * from "./customer-delivery.js";
 export * from "./events.js";

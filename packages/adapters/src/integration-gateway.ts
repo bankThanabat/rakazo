@@ -134,6 +134,7 @@ export class IntegrationGateway {
         };
         if ("ref" in command) owned(command.ref);
         if ("connections" in command) {
+          context.actionAccess = command.actionAccess;
           context.connectedConnections = command.connections.map((connection) => {
             const row = owned(connection.providerRef);
             if (row.provider !== connection.externalId) throw new IsolationError();

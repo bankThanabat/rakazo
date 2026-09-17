@@ -334,10 +334,15 @@ export function fitsNameIndexBudget(groups: Array<{ group: string; names: string
   return Buffer.byteLength(formatNameIndexText(groups), "utf8") <= NAME_INDEX_MAX_BYTES;
 }
 
+/** The id a catalog search returns and a catalog load accepts for one account's action. */
+export function catalogActionId(connectionId: string, action: string): string {
+  return `${connectionId}:${encodeURIComponent(action)}`;
+}
+
 function catalogEntryId(tool: ConnectorTool): string {
   const route = tool.route;
   if (!route?.resourceId) return tool.name;
-  return `${route.resourceId}:${encodeURIComponent(route.toolName)}`;
+  return catalogActionId(route.resourceId, route.toolName);
 }
 
 function catalogGroupOf(tool: ConnectorTool): string {

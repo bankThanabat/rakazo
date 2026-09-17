@@ -123,7 +123,14 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
     return false;
   }
   discoverTools(context: AdapterContext): Promise<ConnectorTool[]> {
-    return this.request({ op: "discover", connections: this.connections(context) }, context.signal);
+    return this.request(
+      {
+        op: "discover",
+        connections: this.connections(context),
+        actionAccess: context.actionAccess,
+      },
+      context.signal,
+    );
   }
   resolveCall(
     call: ConnectorCall,
@@ -132,6 +139,7 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
     return this.request(
       {
         op: "resolve",
+        actionAccess: context.actionAccess,
         call: call as Extract<GatewayCommand, { op: "resolve" }>["call"],
         connections: this.connections(context),
       },
@@ -142,6 +150,7 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
     const events = await this.request<ConnectorEvent[]>(
       {
         op: "execute",
+        actionAccess: context.actionAccess,
         call: call as Extract<GatewayCommand, { op: "execute" }>["call"],
         connections: this.connections(context),
       },

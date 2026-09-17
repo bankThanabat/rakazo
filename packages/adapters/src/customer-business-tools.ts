@@ -1,13 +1,20 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { CustomerRuntime } from "@rakazo/adapter-kit";
-import { CustomerActionGrantSchema } from "@rakazo/contracts";
+import type { ConnectorTool, CustomerRuntime } from "@rakazo/adapter-kit";
+import { CustomerActionGrantSchema, CustomerBindingSchema } from "@rakazo/contracts";
 import { stableJsonValue } from "@rakazo/core/node/approval-effect-key";
 import type { PrismaClient } from "@rakazo/db";
 import { handoffCustomer, Prisma } from "@rakazo/db";
 import { z } from "zod";
 import type { createCustomerConnector } from "./customer-connector.js";
-import { customerField, customerInput } from "./customer-mapping.js";
-import { parseConnectorToolArgs } from "./lazy-tool-catalog.js";
+import { customerDeliveryId, customerField, customerInput } from "./customer-mapping.js";
+import { customerToolReply } from "./customer-tool-reply.js";
+import {
+  CATALOG_EXECUTE,
+  CATALOG_LOAD,
+  CATALOG_SEARCH,
+  catalogActionId,
+  parseConnectorToolArgs,
+} from "./lazy-tool-catalog.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest();
 export function customerPolicyHash(behavior: {
@@ -44,6 +51,9 @@ const Call = z
   .strict();
 const grants = (value: unknown) => z.array(CustomerActionGrantSchema).parse(value);
 const denied = () => new Error("Customer operation is unavailable");
+const BUILT_IN_TOOLS = ["search_knowledge", "request_human"];
+const isCatalogRead = (action?: string | null) =>
+  action === CATALOG_SEARCH || action === CATALOG_LOAD;
 
 /** Expand only approved templates. Model input never selects an account or a tool. */
 export function customerWorkflowInput(
@@ -66,7 +76,7 @@ export function validateCustomerGrants(value: unknown) {
   const actions = grants(value);
   if (
     new Set(actions.map((a) => a.name)).size !== actions.length ||
-    actions.some((a) => ["search_knowledge", "request_human"].includes(a.name))
+    actions.some((a) => BUILT_IN_TOOLS.includes(a.name) || a.name.startsWith("openconnector_"))
   )
     throw new Error("Customer action names must be unique");
   for (const action of actions) {
@@ -123,6 +133,7 @@ export function createCustomerBusinessTools(deps: {
       !conversation.leaseUntil ||
       conversation.leaseUntil <= new Date() ||
       !channel?.enabled ||
+      !channel.autoReplies ||
       channel.bot.archivedAt ||
       (channel.provider !== "web" && !channel.connectionId) ||
       !channel.bot.customerBehavior ||
@@ -133,14 +144,49 @@ export function createCustomerBusinessTools(deps: {
     if (channel.provider !== "web") await deps.connector.connection(channel, channel.connectionId!);
     return { message: row, conversation, channel, behavior: channel.bot.customerBehavior };
   }
+  type Scope = Awaited<ReturnType<typeof authenticate>>;
+  /** A workflow runs only while the account policy shares every action it uses. */
+  function workflowShared(scope: Scope, grant: ReturnType<typeof grants>[number]) {
+    return deps.connector.actionsAllowed(
+      scope.channel,
+      grant.connectionId,
+      grant.steps.map((step) => step.action),
+    );
+  }
+  const recipient = (scope: Scope) => ({
+    customerId: scope.message.senderId!,
+    threadId: scope.conversation.externalThreadId,
+  });
+  function connectionIds(scope: Scope) {
+    return [
+      ...new Set([
+        ...(scope.channel.connectionId ? [scope.channel.connectionId] : []),
+        ...grants(scope.behavior.actions).map((grant) => grant.connectionId),
+      ]),
+    ];
+  }
   return {
     async list(token: string) {
-      const { behavior } = await authenticate(token);
-      const tools = grants(behavior.actions).map(({ name, description, inputSchema }) => ({
-        name,
-        description,
-        inputSchema,
-      }));
+      const scope = await authenticate(token);
+      const { behavior } = scope;
+      const availableGrants = (
+        await Promise.all(
+          grants(behavior.actions).map(async (grant) =>
+            (await workflowShared(scope, grant)) ? grant : null,
+          ),
+        )
+      ).filter((grant) => grant !== null);
+      const tools: Pick<ConnectorTool, "name" | "description" | "inputSchema">[] =
+        availableGrants.map(({ name, description, inputSchema }) => ({
+          name,
+          description,
+          inputSchema,
+        }));
+      tools.push(
+        ...(await deps.connector.discover(scope.channel, connectionIds(scope))).map(
+          ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
+        ),
+      );
       if (behavior.knowledgeFilterId)
         tools.push({
           name: "search_knowledge",
@@ -168,11 +214,33 @@ export function createCustomerBusinessTools(deps: {
     async execute(token: string, raw: unknown) {
       const call = Call.parse(raw);
       const scope = await authenticate(token);
+      const grant = grants(scope.behavior.actions).find((g) => g.name === call.name);
+      if (grant && !(await workflowShared(scope, grant))) throw denied();
+      const shared =
+        !grant && !BUILT_IN_TOOLS.includes(call.name)
+          ? await deps.connector.resolveTool(
+              scope.channel,
+              connectionIds(scope),
+              call.name,
+              call.arguments,
+              `customer.tool:${scope.message.id}:${call.callId}`,
+            )
+          : undefined;
+      const action = shared?.call.route?.toolName;
+      if (action === CATALOG_EXECUTE) throw denied();
+      const replyBody = shared
+        ? customerToolReply(
+            scope.channel.binding,
+            scope.channel.connectionId,
+            shared.call,
+            recipient(scope),
+          )
+        : null;
       const requestHash = hash(
         stableJsonValue({ name: call.name, arguments: call.arguments }),
       ).toString("hex");
-      const key = { messageId: scope.message.id, callId: call.callId };
-      const cached = await prisma.$transaction(async (tx) => {
+      const messageId = scope.message.id;
+      const ledger = await prisma.$transaction(async (tx) => {
         await tx.$queryRaw`SELECT id FROM customer_conversations WHERE id = ${scope.conversation.id} FOR UPDATE`;
         const live = await tx.customerMessage.count({
           where: {
@@ -190,21 +258,41 @@ export function createCustomerBusinessTools(deps: {
         });
         if (!live) throw denied();
         const prior = await tx.customerToolCall.findFirst({
-          where: { messageId: key.messageId, OR: [{ callId: key.callId }, { requestHash }] },
+          where: { messageId, OR: [{ callId: call.callId }, { requestHash }] },
         });
         if (prior) {
-          if (prior.requestHash !== requestHash || prior.status !== "completed")
+          // Catalog reads rerun against the current policy; a stored list or schema may be stale.
+          const rerun = isCatalogRead(action) && isCatalogRead(prior.actionId);
+          if (!rerun && (prior.requestHash !== requestHash || prior.status !== "completed"))
             throw new Error("Customer action outcome is uncertain; do not replay");
-          return { found: true, result: prior.result };
+          return { callId: prior.callId, replay: !rerun, result: prior.result };
         }
-        if ((await tx.customerToolCall.count({ where: { messageId: key.messageId } })) >= 16)
+        if ((await tx.customerToolCall.count({ where: { messageId } })) >= 16)
           throw new Error("Customer action limit reached");
+        if (
+          replyBody !== null &&
+          (await tx.customerToolCall.count({
+            where: { messageId, replyBody: { not: null } },
+          }))
+        )
+          throw new Error("This customer turn already has a reply");
         await tx.customerToolCall.create({
-          data: { ...key, name: call.name, requestHash, status: "executing" },
+          data: {
+            messageId,
+            callId: call.callId,
+            name: call.name,
+            requestHash,
+            status: "executing",
+            replyBody,
+            // A workflow is recorded by name and account; its grant fixes the steps.
+            connectionId: shared?.call.route?.resourceId ?? grant?.connectionId,
+            actionId: action,
+          },
         });
-        return { found: false, result: null };
+        return { callId: call.callId, replay: false, result: null };
       });
-      if (cached.found) return cached.result;
+      if (ledger.replay) return ledger.result;
+      const key = { messageId, callId: ledger.callId };
       try {
         let result: unknown;
         if (call.name === "request_human") {
@@ -227,8 +315,32 @@ export function createCustomerBusinessTools(deps: {
             knowledgeFilterId: scope.behavior.knowledgeFilterId,
             signal: AbortSignal.timeout(20_000),
           });
+        } else if (shared) {
+          await authenticate(token);
+          result = await deps.connector.executeTool(
+            scope.channel,
+            connectionIds(scope),
+            shared.call,
+          );
+          const binding = CustomerBindingSchema.safeParse(scope.channel.binding);
+          if (
+            action === CATALOG_LOAD &&
+            binding.success &&
+            scope.channel.connectionId &&
+            shared.call.args.id ===
+              catalogActionId(scope.channel.connectionId, binding.data.send.action)
+          )
+            // Supply the current recipient without changing the shared provider schema.
+            // Execution still checks the target against the server's conversation.
+            result = {
+              ...z.record(z.string(), z.unknown()).parse(result),
+              suggestedArguments: customerInput(binding.data.send.input, {
+                ...recipient(scope),
+                body: "<your reply text>",
+                messageId: customerDeliveryId(messageId, 0),
+              }),
+            };
         } else {
-          const grant = grants(scope.behavior.actions).find((g) => g.name === call.name);
           if (!grant) throw denied();
           const input = parseConnectorToolArgs(grant.inputSchema, call.arguments);
           const values = {
@@ -246,7 +358,8 @@ export function createCustomerBusinessTools(deps: {
               grant.connectionId,
               step.action,
               customerWorkflowInput(step.input, values),
-              `customer.tool:${scope.message.id}:${call.callId}:${step.name}`,
+              `customer.tool:${messageId}:${call.callId}:${step.name}`,
+              "customer",
             );
             if (step.check) {
               const expected = customerWorkflowInput({ value: step.check.equals }, values).value;
@@ -258,7 +371,8 @@ export function createCustomerBusinessTools(deps: {
             values.steps[step.name] = result;
           }
         }
-        const safeResult = z.json().parse(result ?? null);
+        // Store what the caller receives: JSON drops a provider's undefined fields.
+        const safeResult = z.json().parse(JSON.parse(JSON.stringify(result ?? null)));
         await prisma.customerToolCall.update({
           where: { messageId_callId: key },
           data: { status: "completed", result: safeResult === null ? Prisma.JsonNull : safeResult },

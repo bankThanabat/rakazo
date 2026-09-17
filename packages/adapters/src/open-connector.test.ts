@@ -450,3 +450,45 @@ it("requires reconnect when a refreshed OAuth action needs a scope the account d
     expect.objectContaining({ type: "result" }),
   ]);
 });
+
+it("filters the shared catalog and rechecks access when a previously resolved action executes", async () => {
+  const f = fixture();
+  f.providers[0]!.actions.push({ ...action, id: "sample.publish" });
+  const { state } = await connect(f.adapter);
+  const staff = connected(state);
+  const customer = { ...staff, actionAccess: { "connection-1": [action.id] } };
+  const tools = await f.adapter.discoverTools(customer);
+  expect(JSON.stringify(tools)).toContain("sample.send");
+  expect(JSON.stringify(tools)).not.toContain("sample.publish");
+  expect(JSON.stringify(await f.adapter.discoverTools(staff))).toContain("sample.publish");
+  const resolved = await f.adapter.resolveCall(call(), customer);
+  expect(resolved!.tool.inputSchema).toEqual(
+    (await f.adapter.resolveCall(call(), staff))!.tool.inputSchema,
+  );
+  customer.actionAccess["connection-1"] = [];
+  expect(await collect(f.adapter.execute(resolved!.call, customer))).toEqual([
+    expect.objectContaining({ type: "error" }),
+  ]);
+  expect(f.sent).toHaveLength(0);
+  expect(await collect(f.adapter.execute(call(), staff))).toEqual([
+    expect.objectContaining({ type: "result" }),
+  ]);
+});
+
+it("recommends sharing only the Instagram reply actions and lists only executable actions", async () => {
+  const f = fixture();
+  f.providers[0]!.actions.push(
+    ...["send_message", "reply_to_comment", "create_comment", "publish_media"].map((name) => ({
+      ...action,
+      id: `instagram.${name}`,
+    })),
+    { ...action, id: "sample.remote_only", execution: { locallyExecutable: false } },
+  );
+  const listed = await f.adapter.listActions("sample", owner);
+  expect(listed.map((row) => row.name)).not.toContain("sample.remote_only");
+  expect(listed.filter((row) => row.sharedByDefault).map((row) => row.name)).toEqual([
+    "instagram.send_message",
+    "instagram.reply_to_comment",
+    "instagram.create_comment",
+  ]);
+});

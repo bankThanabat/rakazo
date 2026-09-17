@@ -33,6 +33,7 @@ import {
   customerPolicyHash,
   validateCustomerGrants,
 } from "./customer-business-tools.js";
+import type { ConnectorAudience } from "./customer-connector.js";
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerDeliveryId, customerInput, customerPage } from "./customer-mapping.js";
 import type { CustomerRuntimeConfig } from "./customer-runtime.js";
@@ -82,6 +83,7 @@ export function createCustomerConversations(deps: {
     spec: { action?: string; input: Record<string, unknown> },
     values: Record<string, unknown>,
     executionId: string,
+    audience: ConnectorAudience = "staff",
   ) {
     if (
       !spec.action ||
@@ -101,6 +103,7 @@ export function createCustomerConversations(deps: {
       spec.action,
       customerInput(spec.input, values),
       executionId,
+      audience,
     );
   }
 
@@ -316,7 +319,8 @@ export function createCustomerConversations(deps: {
           },
           { expiresAt: new Date(Date.now() + 60_000) },
         );
-        let body: string;
+        let body = "";
+        let runtimeFailed = false;
         try {
           body = await runtime.reply({
             model: {
@@ -342,9 +346,18 @@ export function createCustomerConversations(deps: {
               })),
             signal: AbortSignal.timeout(60_000),
           });
+        } catch {
+          runtimeFailed = true;
         } finally {
           await modelBridge.revoke(row.channel, modelGrant.id);
         }
+        const explicitReply = await prisma.customerToolCall.findFirst({
+          where: { messageId: message.id, replyBody: { not: null } },
+        });
+        if (explicitReply && explicitReply.status !== "completed")
+          throw new Error("Customer reply outcome is uncertain; do not send another reply");
+        if (runtimeFailed && !explicitReply)
+          throw new Error("Customer reply service did not finish");
         const generated = await prisma.$transaction(async (tx) => {
           const changed = await tx.customerConversation.updateMany({
             where: {
@@ -367,10 +380,11 @@ export function createCustomerConversations(deps: {
             data: {
               conversationId,
               seq: current.nextSeq,
-              body,
+              body: explicitReply?.replyBody ?? body,
               role: "bot",
               senderId: message.senderId,
-              status: "queued",
+              status: explicitReply ? "sent" : "queued",
+              sentAt: explicitReply ? new Date() : undefined,
               generation: row.generation,
               behaviorRevision: behavior.revision,
               inReplyToSeq: message.seq,
@@ -381,6 +395,7 @@ export function createCustomerConversations(deps: {
         outbound = generated;
         activeMessage = outbound.id;
       }
+      if (outbound.status === "sent") return;
       // Takeover and dispatch compete on the conversation row. Once dispatch wins, a
       // provider may accept the send even if takeover occurs while the HTTP call is in flight.
       const dispatch = await prisma.$transaction(async (tx) => {
@@ -441,6 +456,7 @@ export function createCustomerConversations(deps: {
               messageId: customerDeliveryId(outbound.id, index),
             },
             `customer.send:${outbound.id}:${index}`,
+            outbound.role === "bot" ? "customer" : "staff",
           );
         await prisma.customerMessage.updateMany({
           where: { id: outbound.id, status: "sending", conversation: fence },

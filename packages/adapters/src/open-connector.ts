@@ -10,6 +10,7 @@ import type {
 import type { ConnectorAuthInput } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { z } from "zod";
+import { assertConnectorActionAllowed, connectorActionAllowed } from "./connector-action-access.js";
 import { redactConnectorPayload } from "./connector-safety.js";
 import {
   CATALOG_EXECUTE,
@@ -25,6 +26,13 @@ import { needsAuthorization, OpenConnectorAccounts } from "./open-connector-acco
 import { authMethods, OpenConnectorHttp } from "./open-connector-catalog.js";
 import { OpenConnectorIcons } from "./open-connector-icons.js";
 import type { EncryptedSecretStore } from "./secrets.js";
+
+/** Recommended for customer agents. An account shares them only after its owner accepts defaults. */
+const SHARED_BY_DEFAULT = new Set([
+  "instagram.send_message",
+  "instagram.reply_to_comment",
+  "instagram.create_comment",
+]);
 
 /** Catalog-driven accounts and actions; provider translation belongs to OpenConnector. */
 export class OpenConnector implements ManagedConnectorProvider {
@@ -141,7 +149,9 @@ export class OpenConnector implements ManagedConnectorProvider {
         return (provider?.actions ?? [])
           .filter(
             (action) =>
-              action.service === connection.externalId && action.execution?.locallyExecutable,
+              action.service === connection.externalId &&
+              action.execution?.locallyExecutable &&
+              connectorActionAllowed(context, connection.id, action.id),
           )
           .map((action) => ({
             name: `oc_${createHash("sha256").update(`${connection.id}:${action.id}`).digest("hex").slice(0, 32)}`,
@@ -168,10 +178,13 @@ export class OpenConnector implements ManagedConnectorProvider {
     );
   }
   async listActions(provider: string, context: AdapterContext) {
-    return (await this.http.provider(provider, context)).actions.map((action) => ({
-      name: action.id,
-      description: action.description,
-    }));
+    return (await this.http.provider(provider, context)).actions
+      .filter((action) => action.execution?.locallyExecutable)
+      .map((action) => ({
+        name: action.id,
+        description: action.description,
+        sharedByDefault: SHARED_BY_DEFAULT.has(action.id),
+      }));
   }
   private async resolved(call: ConnectorCall, context: AdapterContext) {
     const connection = this.connections(context).find(
@@ -180,6 +193,7 @@ export class OpenConnector implements ManagedConnectorProvider {
     );
     if (!connection || call.route?.connectorId !== "open-connector")
       throw new Error("OpenConnector connection is not authorized");
+    assertConnectorActionAllowed(context, call.route);
     const action = await this.http.action(call.route.toolName, connection.externalId, context);
     const inputSchema = action.inputSchema!;
     const resourceRevision = createHash("sha256").update(JSON.stringify(inputSchema)).digest("hex");
