@@ -684,4 +684,18 @@ export const RU_MESSAGES: Record<string, string> = {
   "Enable incoming messages": "Включить приём сообщений",
   "Rakazo gateway": "Шлюз Rakazo",
   "Runtime key": "Ключ среды выполнения",
+  "All actions will be internal.": "Все действия станут внутренними.",
+  "Could not load actions.": "Не удалось загрузить действия.",
+  "Could not save action settings. Try again.":
+    "Не удалось сохранить настройки действий. Повторите попытку.",
+  "Customer agents will have access to these actions. All other actions will be internal.":
+    "Клиентские агенты получат доступ к этим действиям. Все остальные станут внутренними.",
+  Internal: "Внутреннее",
+  "Internal is for staff only. Turn it off to also allow customer agents.":
+    "Внутренние действия доступны только сотрудникам. Отключите, чтобы разрешить их и клиентским агентам.",
+  "Internal: {name}": "Внутреннее: {name}",
+  "No actions available.": "Нет доступных действий.",
+  "Reset to default": "Сбросить по умолчанию",
+  "Reset {name} to default": "Сбросить «{name}» по умолчанию",
+  "Use defaults": "Использовать настройки по умолчанию",
 };

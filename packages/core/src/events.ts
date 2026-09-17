@@ -303,6 +303,21 @@ export function humanizeToolName(name: string): string {
   return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
 
+/** Provider action ids are namespaced: "instagram.send_message" reads as "Send message". */
+export function connectorActionLabel(name: string): string {
+  return humanizeToolName(name.split(".").at(-1) ?? name);
+}
+
+export function searchConnectorActions<T extends { name: string; description: string }>(
+  actions: T[],
+  query: string,
+): T[] {
+  const wanted = query.toLowerCase();
+  return actions.filter((action) =>
+    `${action.name} ${action.description}`.toLowerCase().includes(wanted),
+  );
+}
+
 export function progressMessageText(
   payload: Record<string, unknown> | undefined,
   previousText = "",

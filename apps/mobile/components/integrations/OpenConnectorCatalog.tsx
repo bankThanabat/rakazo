@@ -26,6 +26,7 @@ import { useI18n } from "../../lib/i18n";
 import { presentMessageActionSheet } from "../../lib/message-action-sheet";
 import { native, useResolvedAppearance, useThemedStyles } from "../../lib/native";
 import { ConnectorIcon } from "../connector-icon";
+import { ConnectionActions } from "./ConnectionActions";
 
 function Fields({
   fields,
@@ -98,8 +99,6 @@ export function OpenConnectorCatalog({
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tools, setTools] = useState<Array<{ name: string; description: string }> | null>(null);
-  const [toolQuery, setToolQuery] = useState("");
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const accounts = connections.filter(
@@ -188,7 +187,6 @@ export function OpenConnectorCatalog({
     setForm(false);
     setValues({});
     setOauthValues({});
-    setTools(null);
     setLabel(item.name);
     await run(async (signal) => {
       const result = await rpc<ConnectorSetup>("connections/setup", {
@@ -670,43 +668,11 @@ export function OpenConnectorCatalog({
               )}
             </View>
           ) : null}
-          {selectedAccounts.some((row) => row.status === "connected")
-            ? button(
-                t("Available actions"),
-                () =>
-                  void run(async () =>
-                    setTools(
-                      await rpc("connections/tools", {
-                        connectorId: "open-connector",
-                        provider: selected.slug,
-                      }),
-                    ),
-                  ),
-              )
-            : null}
-          {tools ? (
-            <>
-              <TextInput
-                accessibilityLabel={t("Search actions")}
-                placeholder={t("Search actions")}
-                style={styles.input}
-                value={toolQuery}
-                onChangeText={setToolQuery}
-              />
-              {tools
-                .filter((tool) =>
-                  `${tool.name} ${tool.description}`
-                    .toLowerCase()
-                    .includes(toolQuery.toLowerCase()),
-                )
-                .map((tool) => (
-                  <View key={tool.name} style={styles.group}>
-                    <Text style={styles.text}>{tool.name}</Text>
-                    <Text style={styles.secondary}>{tool.description}</Text>
-                  </View>
-                ))}
-            </>
-          ) : null}
+          {selectedAccounts
+            .filter((row) => row.status === "connected")
+            .map((account) => (
+              <ConnectionActions key={account.id} account={account} />
+            ))}
         </>
       ) : null}
       {busy ? <ActivityIndicator /> : null}

@@ -14,6 +14,8 @@ export interface AdapterContext {
   signal: AbortSignal;
   /** Connected external accounts available to this run, including their owning connector. */
   connectedConnections?: ConnectedConnector[];
+  /** When present, restrict connector actions to these server-authorized connection/action pairs. */
+  actionAccess?: Record<string, string[]>;
   /** @deprecated Prefer connectedConnections so providers with the same app slug cannot collide. */
   connectedProviders?: string[];
 }

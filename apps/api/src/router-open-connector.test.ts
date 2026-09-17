@@ -236,6 +236,20 @@ it("lists team connections and discovers tools for teammates while keeping manag
     (await rpc("tools", { connectorId: "open-connector", provider: "sample" })).body.json,
   ).toEqual([expect.objectContaining({ name: "sample.send" })]);
   expect((await rpc("list", {}, { ...teammate, spaceId: "empty-team" })).body.json).toEqual([]);
+  expect((await rpc("actions", { connectionId: "team-account" })).body.json).toEqual([
+    expect.objectContaining({ name: "sample.send", internal: true, overridden: false }),
+  ]);
+  expect((await rpc("actions", { connectionId: "foreign-account" })).status).not.toBe(200);
+  expect(
+    (
+      await rpc("configureAction", {
+        connectionId: "team-account",
+        action: "sample.send",
+        internal: false,
+      })
+    ).status,
+  ).not.toBe(200);
+  expect((await rpc("applyActionDefaults", { connectionId: "team-account" })).status).not.toBe(200);
   expect(
     (await rpc("rename", { connectionId: "team-account", displayName: "Changed" })).status,
   ).not.toBe(200);

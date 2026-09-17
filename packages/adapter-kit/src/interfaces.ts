@@ -197,7 +197,14 @@ export interface ManagedConnectorProvider
   listActions?(
     provider: string,
     context: AdapterContext,
-  ): Promise<Array<{ name: string; description: string }>>;
+  ): Promise<
+    Array<{
+      name: string;
+      description: string;
+      /** The provider recommends sharing this action with customer agents. Owners still opt in. */
+      sharedByDefault?: boolean;
+    }>
+  >;
   setup?(provider: string, context: AdapterContext): Promise<ConnectorSetup>;
   connectionStatus?(
     ref: string,

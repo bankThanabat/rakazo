@@ -1,4 +1,5 @@
 import * as z from "zod";
+import { ConnectorActionAccessSchema } from "./connector-actions.js";
 import { ConnectorAuthInputSchema, IncomingSecretSchema } from "./connector-auth.js";
 import { WebhookVerificationSchema } from "./customer.js";
 import { isPlainHttpUrl } from "./http-url.js";
@@ -65,14 +66,20 @@ export const GatewayCommandSchema = z.discriminatedUnion("op", [
     z.object({ op: z.literal(op), ref: id }),
   ),
   z.object({ op: z.literal("reconnect"), ref: id, auth: ConnectorAuthInputSchema }),
-  z.object({ op: z.literal("discover"), connections: z.array(GatewayConnectionSchema).max(100) }),
+  z.object({
+    op: z.literal("discover"),
+    connections: z.array(GatewayConnectionSchema).max(100),
+    actionAccess: ConnectorActionAccessSchema.optional(),
+  }),
   z.object({
     op: z.literal("resolve"),
+    actionAccess: ConnectorActionAccessSchema.optional(),
     call,
     connections: z.array(GatewayConnectionSchema).max(100),
   }),
   z.object({
     op: z.literal("execute"),
+    actionAccess: ConnectorActionAccessSchema.optional(),
     call,
     connections: z.array(GatewayConnectionSchema).max(100),
   }),

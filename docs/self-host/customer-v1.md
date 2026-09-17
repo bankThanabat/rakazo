@@ -90,6 +90,17 @@ handoff, and staff operations. A messaging sender ID is not automatically a CRM
 customer ID. Approved workflows must establish the association before returning
 customer records or making writes.
 
+## Share connector actions
+
+Open a connected account's **Available actions**. Leave **Internal** on for
+Pi staff only, or turn it off to also allow the customer agent. **Use defaults**
+previews the recommended shared actions before saving. Settings apply per account.
+
+After upgrading, share the channel's send action before enabling automatic replies.
+Also share every action used by an existing customer workflow. New actions remain
+internal until explicitly configured. See [shared connector actions](../adr/0003-shared-connector-actions.md)
+for execution scope and rollout details.
+
 ## Model bridge and knowledge scope
 
 Each turn receives an expiring model-bridge capability for the approved connection

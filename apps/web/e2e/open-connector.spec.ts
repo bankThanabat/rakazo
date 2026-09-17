@@ -22,6 +22,9 @@ for (const viewport of [
     const incomingRequests: Record<string, unknown>[] = [];
     const replyRequests: Record<string, unknown>[] = [];
     let failReplySave = false;
+    const actionChoices = new Map<string, boolean>();
+    const actionRequests: Record<string, unknown>[] = [];
+    const overriddenActions = new Set<string>();
     const catalog = [
       {
         connectorId: "open-connector",
@@ -156,7 +159,27 @@ for (const viewport of [
         result = { ok: true };
       } else if (path === "connections/tools")
         result = [{ name: `${input.provider}.send`, description: "Send text" }];
-      else if (path === "onboarding/appConnected") result = { ok: true };
+      else if (path === "connections/actions")
+        result = ["send_message", "publish_media"].map((name) => ({
+          name: `sample.${name}`,
+          description: name === "send_message" ? "Send a message" : "Publish media",
+          internal: actionChoices.get(`${input.connectionId}:${name}`) ?? true,
+          defaultInternal: name !== "send_message",
+          overridden: overriddenActions.has(`${input.connectionId}:${name}`),
+        }));
+      else if (path === "connections/configureAction") {
+        actionRequests.push(input);
+        const key = `${input.connectionId}:${input.action.split(".")[1]}`;
+        actionChoices.set(key, input.internal ?? false);
+        if (input.internal === null) overriddenActions.delete(key);
+        else overriddenActions.add(key);
+        result = { ok: true };
+      } else if (path === "connections/applyActionDefaults") {
+        overriddenActions.clear();
+        actionChoices.set(`${input.connectionId}:send_message`, false);
+        actionChoices.set(`${input.connectionId}:publish_media`, true);
+        result = { ok: true };
+      } else if (path === "onboarding/appConnected") result = { ok: true };
       else if (path !== "capabilities/list") throw new Error(`Unexpected RPC: ${path}`);
       await route.fulfill({ json: { json: result } });
     });
@@ -220,6 +243,10 @@ for (const viewport of [
     await expect(page.getByRole("alert")).toContainText("Could not save auto replies.");
     await expect(autoReplies).not.toBeChecked();
     failReplySave = false;
+    await autoReplies.click();
+    await expect(autoReplies).toBeChecked();
+    await autoReplies.click();
+    await expect(autoReplies).not.toBeChecked();
     await expect(channelSecret).toHaveCount(0);
     await expect(webhookUrl).toHaveValue(accounts[0]!.webhookUrl!);
     await expect(webhookUrl).toHaveAttribute("readonly", "");
@@ -234,6 +261,30 @@ for (const viewport of [
       auth: { type: "api_key", values: { apiKey: "fake-account-token" } },
     });
     await captureScreenshot(page, testInfo, `openconnector-connected-${viewport.width}`);
+    await page.getByText("Available actions", { exact: true }).click();
+    const internalSend = page.getByRole("switch", { name: "Internal: Send message", exact: true });
+    await expect(internalSend).toBeChecked();
+    await internalSend.click();
+    await expect(internalSend).not.toBeChecked();
+    expect(actionRequests.at(-1)).toEqual({
+      connectionId: accounts[0]!.id,
+      action: "sample.send_message",
+      internal: false,
+    });
+    await page.getByRole("button", { name: "Reset Send message to default", exact: true }).click();
+    await expect(internalSend).not.toBeChecked();
+    await page.getByRole("button", { name: "Use defaults", exact: true }).click();
+    const defaultsDialog = page.getByRole("alertdialog");
+    await expect(defaultsDialog).toContainText("Customer agents will have access");
+    await expect(defaultsDialog).toContainText("Send message");
+    await defaultsDialog.getByRole("button", { name: "Use defaults", exact: true }).click();
+    await expect(defaultsDialog).toHaveCount(0);
+    await expect(internalSend).not.toBeChecked();
+    await expect(
+      page.getByRole("switch", { name: "Internal: Publish media", exact: true }),
+    ).toBeChecked();
+    await expect(page.getByRole("button", { name: "Use defaults", exact: true })).toBeEnabled();
+    await captureScreenshot(page, testInfo, `openconnector-action-settings-${viewport.width}`);
     // Narrow layouts push the detail over the list, so step back before picking another app.
     if (viewport.width < 640)
       await page.getByRole("button", { name: "Back to apps", exact: true }).click();
@@ -342,8 +393,16 @@ test("a teammate can inspect a shared account without management controls", asyn
         },
       ];
     else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
-    else if (path === "connections/tools")
-      result = [{ name: "sample.send", description: "Send text" }];
+    else if (path === "connections/actions")
+      result = [
+        {
+          name: "sample.send",
+          description: "Send text",
+          internal: true,
+          defaultInternal: true,
+          overridden: false,
+        },
+      ];
     else if (path !== "capabilities/list") mutations.push(path);
     await route.fulfill({ json: { json: result } });
   });
@@ -358,6 +417,8 @@ test("a teammate can inspect a shared account without management controls", asyn
   await expect(page.getByRole("button", { name: "Uninstall", exact: true })).toHaveCount(0);
   await page.getByText("Available actions", { exact: true }).click();
   await expect(page.getByText("Send text", { exact: true })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "Internal: Send", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Use defaults", exact: true })).toHaveCount(0);
   expect(mutations).toEqual([]);
 });
 

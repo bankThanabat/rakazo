@@ -34,6 +34,7 @@ export * from "./computer-support.js";
 export * from "./computer-tools.js";
 export * from "./computer-update.js";
 export * from "./computer-workspace.js";
+export * from "./connection-action-settings.js";
 export * from "./cursor-cloud-agent.js";
 export { createCustomerBusinessTools } from "./customer-business-tools.js";
 export * from "./customer-conversations.js";

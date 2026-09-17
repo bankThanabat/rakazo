@@ -791,6 +791,8 @@ model AgentSkill {
 }
 
 model Connection {
+  /// Accepted action defaults and owner overrides; missing actions are internal.
+  actionPolicy Json @default("{}")
   id          String   @id @default(cuid())
   spaceId     String
   space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -1414,6 +1416,9 @@ model CustomerConversation {
 }
 
 model CustomerToolCall {
+  connectionId String?
+  actionId String?
+  replyBody String? @db.Text
   name        String          @default("")
   messageId   String
   message     CustomerMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)

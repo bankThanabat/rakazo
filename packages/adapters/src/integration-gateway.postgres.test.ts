@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { JobPublisher } from "@rakazo/adapter-kit";
+import type { AdapterContext, JobPublisher } from "@rakazo/adapter-kit";
 import {
   createCustomerInbox,
   createDb,
@@ -168,6 +168,42 @@ it.skipIf(!enabled)(
         async (_url, init) =>
           Response.json({ data: await command(aliceKey.token, JSON.parse(String(init?.body))) }),
       );
+      const scopedContext: AdapterContext = {
+        ...local,
+        operationId: "test-policy",
+        traceId: "test-policy",
+        signal,
+        connectedConnections: [
+          {
+            id: "local-account",
+            connectorId: "open-connector",
+            externalId: "line",
+            displayName: "LINE",
+            providerRef: first.state,
+          },
+        ],
+        actionAccess: { "local-account": ["line.get_bot_info"] },
+      };
+      const discovery = await client.discoverTools(scopedContext);
+      expect(JSON.stringify(discovery)).toContain("line.get_bot_info");
+      expect(JSON.stringify(discovery)).not.toContain("line.send_push_text");
+      const call = {
+        tool: "line.get_bot_info",
+        args: {},
+        executionId: "policy-call",
+        route: {
+          connectorId: "open-connector",
+          resourceId: "local-account",
+          toolName: "line.get_bot_info",
+        },
+      };
+      const resolved = await client.resolveCall(call, scopedContext);
+      expect(resolved?.tool.inputSchema).toMatchObject({ type: "object" });
+      scopedContext.actionAccess = {};
+      const events = [];
+      for await (const event of client.execute(resolved!.call, scopedContext)) events.push(event);
+      expect(events).toEqual([expect.objectContaining({ type: "error" })]);
+      expect(f.sent).toHaveLength(0);
       const localSettings = new IntegrationProviderSettings(prisma, f.secrets, "local-fixture", {
         "open-connector": client,
       });

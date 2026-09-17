@@ -9,6 +9,7 @@ import {
   provisionMessagingIdentity,
 } from "@rakazo/db";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConnectionActionSettings } from "./connection-action-settings.js";
 import { createCustomerConversations } from "./customer-conversations.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
@@ -185,6 +186,13 @@ describe.skipIf(!enabled)(
           displayName: "Support",
           status: "connected",
           providerRef: auth.state,
+          actionPolicy: {
+            defaults: Object.fromEntries(
+              f.providers
+                .find((item) => item.service === provider)!
+                .actions.map((action) => [action.id, false]),
+            ),
+          },
         },
       });
       const stored = await f.secrets.put(
@@ -1064,6 +1072,239 @@ describe.skipIf(!enabled)(
       ).toBe(0);
     });
 
+    it("shares the provider tools, binds the reply target, and delivers an explicit reply only once", async () => {
+      const a = await setup();
+      const other = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        const token = request.executionContext!.token;
+        expect((await service.tools.list(token)).tools.map((tool) => tool.name)).toContain(
+          "openconnector_execute_tool",
+        );
+        const load = (id: string) =>
+          service.tools.execute(token, {
+            name: "openconnector_load_tool",
+            callId: "load",
+            arguments: { id },
+          });
+        const id = `${a.account.id}:sample.send`;
+        await expect(load(`${other.account.id}:sample.send`)).rejects.toThrow();
+        expect(await load(id)).toMatchObject({
+          inputSchema: { type: "object" },
+          suggestedArguments: { to: "thread", texts: ["<your reply text>"] },
+        });
+        const send = (callId: string, to = "thread") =>
+          service.tools.execute(token, {
+            name: "openconnector_execute_tool",
+            callId,
+            arguments: { id, arguments: { to, texts: ["Explicit reply"] } },
+          });
+        await expect(send("foreign", "someone-else")).rejects.toThrow("target");
+        await send("first");
+        await send("retry");
+        expect(sends).toHaveLength(1);
+        await db.prisma.connection.update({
+          where: { id: a.account.id },
+          data: { actionPolicy: { overrides: { "sample.send": true } } },
+        });
+        await expect(load(id)).rejects.toThrow();
+        await expect(send("first")).rejects.toThrow();
+        return "This final answer must not be sent again";
+      });
+      await service.process(c.id);
+      await reply.mock.results[0]!.value;
+      expect(sends).toHaveLength(1);
+      expect(sends[0]!.input).toMatchObject({
+        to: "thread",
+        texts: ["Explicit reply"],
+        retryKey: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      });
+      expect(
+        await db.prisma.customerMessage.findFirst({ where: { conversationId: c.id, role: "bot" } }),
+      ).toMatchObject({ body: "Explicit reply", status: "sent" });
+      expect(
+        await db.prisma.customerToolCall.count({
+          where: { message: { conversationId: c.id }, name: "openconnector_load_tool" },
+        }),
+      ).toBe(1);
+    });
+
+    it("counts catalog reads toward the turn's call limit", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        const search = (callId: string) =>
+          service.tools.execute(request.executionContext!.token, {
+            name: "openconnector_search_tools",
+            callId,
+            arguments: { query: callId },
+          });
+        for (let index = 0; index < 16; index++) await search(`search-${index}`);
+        await search("search-0");
+        await expect(search("search-16")).rejects.toThrow();
+        return "Done";
+      });
+      await service.process(c.id);
+      await reply.mock.results[0]!.value;
+    });
+
+    it("hides and denies a workflow while one of its steps is internal", async () => {
+      f.providers[0]!.actions.push({
+        ...f.providers[0]!.actions[0]!,
+        id: "sample.order",
+        inputSchema: { type: "object", properties: {}, additionalProperties: true },
+      });
+      const a = await setup();
+      const shared = a.account.actionPolicy as Record<string, unknown>;
+      let lookups = 0;
+      businessHandler = () => {
+        lookups++;
+        return { customerId: "customer" };
+      };
+      await service.manage(a.owner, a.owner.botId, "configure", {
+        runtime: { credential: "runtime", baseUrl: "https://runtime.example.test/api/v1" },
+        modelCredentialId: a.credential.id,
+        modelId: "fixture-model",
+        knowledge: { credential: "knowledge", baseUrl: "https://rag.example.test/v1" },
+        instructions: "Look up orders",
+        actions: [
+          {
+            name: "lookup_order",
+            description: "Look up a customer-owned order",
+            connectionId: a.account.id,
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+            steps: [
+              {
+                name: "owner",
+                action: "sample.order",
+                input: {},
+                effect: "read",
+                check: { path: ["customerId"], equals: "$customerId" },
+              },
+            ],
+          },
+        ],
+      });
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        const token = request.executionContext!.token;
+        const names = async () => (await service.tools.list(token)).tools.map((tool) => tool.name);
+        const lookup = (callId: string) =>
+          service.tools.execute(token, { name: "lookup_order", callId, arguments: {} });
+        expect(await names()).toContain("lookup_order");
+        await db.prisma.connection.update({
+          where: { id: a.account.id },
+          data: { actionPolicy: { ...shared, overrides: { "sample.order": true } } },
+        });
+        expect(await names()).not.toContain("lookup_order");
+        expect(await names()).toContain("request_human");
+        await expect(lookup("internal")).rejects.toThrow();
+        expect(lookups).toBe(0);
+        await db.prisma.connection.update({
+          where: { id: a.account.id },
+          data: { actionPolicy: { ...shared, overrides: { "sample.order": false } } },
+        });
+        expect(await lookup("shared")).toEqual({ customerId: "customer" });
+        return "Done";
+      });
+      await service.process(c.id);
+      await reply.mock.results[0]!.value;
+      expect(lookups).toBe(1);
+      expect(
+        await db.prisma.customerToolCall.findFirstOrThrow({
+          where: { message: { conversationId: c.id }, status: "completed" },
+        }),
+      ).toMatchObject({ name: "lookup_order", connectionId: a.account.id, actionId: null });
+    });
+
+    it("records a completed tool reply even when the runtime then fails", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        await service.tools.execute(request.executionContext!.token, {
+          name: "openconnector_execute_tool",
+          callId: "delivered",
+          arguments: {
+            id: `${a.account.id}:sample.send`,
+            arguments: { to: "thread", texts: ["Already delivered"] },
+          },
+        });
+        throw new Error("Runtime stopped after the send");
+      });
+      await service.process(c.id);
+      expect(sends).toHaveLength(1);
+      expect(
+        await db.prisma.customerMessage.findFirst({ where: { conversationId: c.id, role: "bot" } }),
+      ).toMatchObject({ body: "Already delivered", status: "sent" });
+    });
+
+    it("does not send a final answer after an uncertain explicit send", async () => {
+      const a = await setup();
+      const c = await receive(a);
+      reply.mockImplementationOnce(async (request) => {
+        failSend = true;
+        await expect(
+          service.tools.execute(request.executionContext!.token, {
+            name: "openconnector_execute_tool",
+            callId: "uncertain",
+            arguments: {
+              id: `${a.account.id}:sample.send`,
+              arguments: { to: "thread", texts: ["Maybe sent"] },
+            },
+          }),
+        ).rejects.toThrow();
+        failSend = false;
+        return "Do not send this";
+      });
+      await service.process(c.id);
+      await reply.mock.results[0]!.value;
+      expect(sends).toHaveLength(0);
+      expect(
+        await db.prisma.customerConversation.findUniqueOrThrow({ where: { id: c.id } }),
+      ).toMatchObject({ needsHuman: true });
+    });
+
+    it("stores independent account choices, rejects foreign edits, and serializes concurrent overrides", async () => {
+      const a = await setup();
+      const b = await setup();
+      const settings = createConnectionActionSettings({
+        prisma: db.prisma,
+        provider: () => f.adapter,
+      });
+      const context: AdapterContext = {
+        ...a.owner,
+        operationId: "settings",
+        traceId: "settings",
+        signal: new AbortController().signal,
+      };
+      await settings.configure(context, a.account.id, "defaults");
+      expect((await settings.list(context, a.account.id)).every((action) => action.internal)).toBe(
+        true,
+      );
+      await expect(
+        settings.configure(context, b.account.id, { action: "sample.send", internal: false }),
+      ).rejects.toThrow();
+      await expect(
+        settings.configure(context, a.account.id, { action: "sample.missing", internal: false }),
+      ).rejects.toThrow("unavailable");
+      await Promise.all([
+        settings.configure(context, a.account.id, { action: "sample.send", internal: false }),
+        settings.configure(context, a.account.id, { action: "sample.list", internal: false }),
+      ]);
+      expect(
+        (await settings.list(context, a.account.id))
+          .filter((action) => !action.internal)
+          .map((action) => action.name)
+          .sort(),
+      ).toEqual(["sample.list", "sample.send"]);
+      await settings.configure(context, a.account.id, { action: "sample.send", internal: null });
+      expect(
+        (await settings.list(context, a.account.id)).find(
+          (action) => action.name === "sample.send",
+        ),
+      ).toMatchObject({ internal: true, overridden: false });
+    });
+
     it("executes a scoped refund workflow once and revokes the execution after the turn", async () => {
       const actions = f.providers[0]!.actions;
       for (const suffix of ["order", "promotion", "refund"])
@@ -1130,7 +1371,18 @@ describe.skipIf(!enabled)(
       reply.mockImplementationOnce(async (request) => {
         token = request.executionContext!.token;
         expect(await service.tools.list(token)).toMatchObject({
-          tools: [{ name: "refund_order" }, { name: "request_human" }],
+          tools: expect.arrayContaining([
+            {
+              name: "refund_order",
+              description: expect.any(String),
+              inputSchema: expect.any(Object),
+            },
+            {
+              name: "request_human",
+              description: expect.any(String),
+              inputSchema: expect.any(Object),
+            },
+          ]),
         });
         await expect(
           service.tools.execute(token, {

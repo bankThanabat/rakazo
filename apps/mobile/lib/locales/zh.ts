@@ -665,4 +665,17 @@ export const ZH_MESSAGES: Record<string, string> = {
   "Enable incoming messages": "启用消息接收",
   "Rakazo gateway": "Rakazo 网关",
   "Runtime key": "运行时密钥",
+  "All actions will be internal.": "所有操作都将设为内部。",
+  "Could not load actions.": "无法加载操作。",
+  "Could not save action settings. Try again.": "无法保存操作设置，请重试。",
+  "Customer agents will have access to these actions. All other actions will be internal.":
+    "客户助手将可以使用这些操作，其他操作都将设为内部。",
+  Internal: "内部",
+  "Internal is for staff only. Turn it off to also allow customer agents.":
+    "内部操作仅供员工使用。关闭后客户助手也可以使用。",
+  "Internal: {name}": "内部：{name}",
+  "No actions available.": "没有可用操作。",
+  "Reset to default": "恢复默认",
+  "Reset {name} to default": "将{name}恢复默认",
+  "Use defaults": "使用默认设置",
 };

@@ -41,6 +41,7 @@ import {
   clearInactiveUserComputerControl,
   computerSupportsUpdate,
   computerUpdateView,
+  createConnectionActionSettings,
   createVoiceProvider,
   customerIncomingTemplate,
   deletePushToken,
@@ -495,6 +496,10 @@ function deliberateMessage(error: unknown, fallback: string) {
 }
 
 export function createRouter(deps: RouterDeps) {
+  const actionSettings = createConnectionActionSettings({
+    prisma: deps.prisma,
+    provider: (id) => deps.connectors.managed(id),
+  });
   const os = implement(appContract).$context<{ actor: Actor | null; signal?: AbortSignal }>();
   const repos = createRepos(deps.prisma);
 
@@ -4244,6 +4249,26 @@ export function createRouter(deps: RouterDeps) {
         }
         return { ok: true as const };
       }),
+      actions: authed.connections.actions.handler(({ context, input }) =>
+        actionSettings.list(
+          connectionContext(context.actor, "connections.actions", context.signal),
+          input.connectionId,
+        ),
+      ),
+      configureAction: authed.connections.configureAction.handler(({ context, input }) =>
+        actionSettings.configure(
+          connectionContext(context.actor, "connections.configureAction", context.signal),
+          input.connectionId,
+          input,
+        ),
+      ),
+      applyActionDefaults: authed.connections.applyActionDefaults.handler(({ context, input }) =>
+        actionSettings.configure(
+          connectionContext(context.actor, "connections.applyActionDefaults", context.signal),
+          input.connectionId,
+          "defaults",
+        ),
+      ),
       tools: authed.connections.tools.handler(async ({ context, input }) => {
         const connector = deps.connectors.managed(input.connectorId);
         if (!connector) return [];

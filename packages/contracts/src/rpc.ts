@@ -2,6 +2,7 @@ import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import { AiConsentQuerySchema, AiConsentStatusSchema } from "./ai-consent.js";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
+import { ConfigureConnectionActionSchema, ConnectionActionSchema } from "./connector-actions.js";
 import { ConnectorAuthInputSchema, ConnectorSetupSchema } from "./connector-auth.js";
 import {
   CustomerCaseInput,
@@ -692,7 +693,14 @@ export const appContract = {
       .input(z.object({ connectionId: Id, displayName: z.string().trim().min(1).max(80) }))
       .output(ConnectionSchema),
     revoke: oc.input(z.object({ connectionId: Id })).output(z.object({ ok: z.literal(true) })),
-    /** Tools the connected provider exposes. Read-only; no per-tool allowlist yet. */
+    actions: oc.input(z.object({ connectionId: Id })).output(z.array(ConnectionActionSchema)),
+    configureAction: oc
+      .input(ConfigureConnectionActionSchema)
+      .output(z.object({ ok: z.literal(true) })),
+    applyActionDefaults: oc
+      .input(z.object({ connectionId: Id }))
+      .output(z.object({ ok: z.literal(true) })),
+    /** Tools the connected provider exposes. */
     tools: oc.input(z.object({ connectorId: z.string(), provider: z.string() })).output(
       z.array(
         z.object({
