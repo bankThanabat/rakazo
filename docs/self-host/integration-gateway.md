@@ -8,8 +8,9 @@ cloud API and to customer runtimes before enabling gateway connections.
 
 - OpenConnector stores provider credentials and executes actions. Its admin token
   stays on the cloud Rakazo API. Direct self-hosted OpenConnector remains supported.
-- Convoy verifies each provider's webhook signature, as declared by the channel's
-  binding, and retries delivery to the cloud API.
+- Convoy verifies supported provider signatures and retries delivery to the cloud API.
+  The gateway verifies providers requiring prefixed signatures or a verification
+  challenge directly, then stores them in the same durable delivery queue.
 - Rakazo authorizes each runtime, provisions Convoy resources, stores incoming
   deliveries in PostgreSQL, and routes them to that runtime.
 - The customer's Rakazo API polls outbound every five seconds. It acknowledges a
@@ -37,8 +38,11 @@ cloud API and to customer runtimes before enabling gateway connections.
 
 Convoy's incoming source verifier is derived from the provider's incoming template
 (header, HMAC algorithm and encoding, or a static token). Convoy compares the decoded
-header directly, so providers whose signatures carry a prefix or timestamp cannot use
-the relay and keep direct ingress. The Convoy-to-Rakazo hop uses a separate random bearer for each route over TLS.
+header directly. Providers whose signatures carry a prefix or timestamp, or require
+a verification challenge, instead use `/api/integration-gateway/webhook/:routeId`.
+The gateway verifies the original request bytes before accepting an event. GET
+answers a challenge only when its token matches the enabled route. These routes
+reject bearer-only deliveries. The Convoy-to-Rakazo hop uses a separate random bearer for each route over TLS.
 The bearer is configured as endpoint authentication, not taken from a provider
 payload. Operator changes to Convoy authentication, source verification or route
 names can break that guarantee; keep its console operator-only.
@@ -93,7 +97,8 @@ Rakazo web access as described above.
 
 Incoming templates live in `packages/adapters/src/customer-incoming-*.ts`, one file
 per app, registered in `customer-incoming.ts`. Shared setup, relay, ingress and UI
-code never branch on a provider. LINE is the first template.
+code use the template. LINE uses account-owned secrets. Instagram uses operator-managed
+application secrets and shows only staff assignment and reply controls after OAuth.
 
 A runtime key represents one customer installation. Do not share it between
 unrelated customers or clone it into independent databases. The cloud maps it to
@@ -101,6 +106,35 @@ its issuing user and workspace; the local server owns authorization among its
 local users. Runtime keys can be revoked on the cloud page. Revocation blocks
 cloud calls immediately; maintenance removes remote credentials and Convoy
 resources afterward. Disconnecting an account also stops its relay.
+
+## Instagram operator setup
+
+Configure the Instagram OAuth application in OpenConnector. Configure its webhook
+credentials once on the gateway, using the same application secret. The operator-only
+script reads JSON from stdin and encrypts it in the existing settings store:
+
+```sh
+pnpm exec tsx scripts/configure-operator-settings.mts incoming-webhook instagram < /secure/webhook-settings.json
+```
+
+The input has `appSecret` and `verifyToken` string fields. Supply them through a
+secret manager or a protected temporary file outside the checkout. Run with the
+gateway's existing database and encryption environment. Never put the values in
+shell arguments, source control, or a customer's account form. Direct deployments
+configure these settings on their own Rakazo server. Remote runtimes send no
+application credentials during incoming setup.
+
+Assign staff to the connected account. Configure the resulting gateway route as
+the Meta app callback, verify it with the operator's token, subscribe to `messages`,
+and enable the account's webhook subscription in Meta. Publish the app and complete
+Meta's required settings and access approval. OAuth alone does not enable delivery.
+The route and callback are operator configuration; customer screens hide them.
+
+This implementation supports a single-account pilot per Meta app callback. It does
+not automatically subscribe accounts or fan out a shared callback across customer
+routes. Do not replace an existing shared callback when adding another account.
+Shared-app onboarding needs authenticated account routing and subscription lifecycle
+support before serving multiple independent accounts.
 
 ## Receiving versus replying
 

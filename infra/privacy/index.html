@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How {{operator}} handles personal information and data deletion requests.">
+  <title>Privacy policy · {{operator}}</title>
+  <link rel="canonical" href="{{origin}}/privacy">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/policy.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><a href="/" aria-label="{{operator}} privacy home">{{operator}}</a><a href="#data-deletion">Data deletion</a></header>
+  <main id="main">
+    <h1>Privacy policy</h1>
+    <p class="updated">Last updated <time datetime="{{date}}">{{date}}</time></p>
+    <p>This policy explains how {{operator}} handles personal information when you use our service, its web, desktop, or mobile clients, and its connected applications. It also applies to people who communicate with a business through our connected messaging features. Separately operated services have their own privacy practices.</p>
+    <nav aria-label="Policy sections"><a href="#information">Information we process</a><a href="#data-deletion">Request deletion</a><a href="#contact">Contact</a></nav>
+
+    <section aria-labelledby="information"><h2 id="information">Information we process</h2>
+      <ul>
+        <li><strong>Connected account information.</strong> Your name, email address, account identifiers, profile details, and permissions granted when you connect an application. For example, an Instagram connection can provide a professional account identifier and username.</li>
+        <li><strong>Authorization credentials.</strong> Access and refresh tokens where provided, used to maintain the connection. For OAuth connections, you authorize access with the application provider. Other connections may use an API key or credentials you choose to supply.</li>
+        <li><strong>Conversations.</strong> Messages, conversation participants, timestamps, attachments and attachment metadata, and staff assignments. This can include conversations with assistants and customer messages delivered by connected apps.</li>
+        <li><strong>Content and tasks.</strong> Instructions, files, saved knowledge, memories, routines, and information retrieved from connected apps when you authorize their use. Depending on the connection, this may include email, calendar entries, social media, comments, or account insights.</li>
+        <li><strong>Voice and device features.</strong> Audio you record for transcription, text selected for speech generation, and device or notification information when you use those features.</li>
+        <li><strong>Operational information.</strong> Account and session records, IP addresses, request timestamps, and error information needed to operate, secure, and troubleshoot the service. Privacy requests also include the contact details and information you send us.</li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="use"><h2 id="use">How information is used</h2>
+      <p>We use this information to authenticate users, operate authorized connections, deliver customer messages, assign conversations to staff or assistants, run requested tasks and routines, send replies or notifications, and investigate service or security problems.</p>
+      <p>When you use an AI assistant, relevant messages, history, instructions, memories, files, and connected-app content may be sent to the configured model, agent, or knowledge service. Voice features may send audio for transcription or text for speech generation. Scheduled tasks can continue processing after they are enabled. The providers involved depend on the selected configuration. Customer auto replies require the business to enable them.</p>
+    </section>
+
+    <section aria-labelledby="sharing"><h2 id="sharing">Who processes the information</h2>
+      <p>Authorized users and staff can access information within their account or workspace permissions. Hosting, storage, integration, notification, model, voice, and knowledge services process information needed for enabled features. Connected applications receive information needed to carry out authorized actions. An AI gateway may forward requests to another model provider according to its routing settings.</p>
+      <p>{{operator}}'s integration gateway receives events from connected applications and forwards them to the connected {{operator}} server. That server stores the customer inbox. If another organization operates the connected server or configures an external service, that organization is responsible for its own processing and retention. We may also disclose information when required by law or to protect the security of the service.</p>
+      <p>Depending on the hosting and services selected, information may be processed outside your country. Third-party services apply their own policies and account settings. For Instagram connections, Meta's practices are described in its <a href="https://privacycenter.instagram.com/policy/">Instagram privacy policy</a>. Contact us to ask which providers process a particular feature.</p>
+    </section>
+
+    <section aria-labelledby="retention"><h2 id="retention">Retention and security</h2>
+      <p>Connection credentials are encrypted in storage. Access to account information and integrations is restricted to authorized accounts and services. No online service can guarantee complete security.</p>
+      <p>We retain account information, content, and connection information while needed to provide the service and handle authorized requests. Pending gateway deliveries are retained until the receiving server acknowledges them; acknowledgement clears their message payload from the gateway queue. Conversation records on the receiving server remain until deleted under that server's practices. Disconnecting an account stops future access but does not by itself delete previously stored conversations.</p>
+      <p>Deletion requests apply to information under our control. Limited records may need to remain for security, legal obligations, or resolving disputes. Copies already held by a connected business or a third-party service follow that recipient's retention practices.</p>
+    </section>
+
+    <section aria-labelledby="data-deletion"><h2 id="data-deletion">Request deletion or disconnect</h2>
+      <ol>
+        <li>To stop a connection, open {{operator}}'s Integrations screen, select the connected app, and choose Disconnect. You can also revoke access with the application provider, such as through Instagram's Apps and Websites settings. Stop active tasks and disable routines separately.</li>
+        <li>To request deletion of stored data, email <a href="mailto:{{email}}?subject=Data%20deletion%20request">{{email}}</a> with the subject “Data deletion request”. Include the email or username associated with your account, the connected business or app if relevant, and which information you want deleted.</li>
+        <li>We may ask for enough information to verify that you are authorized to make the request. Do not send passwords, access tokens, or unnecessary identity documents. We will explain the outcome and any information we must retain.</li>
+      </ol>
+      <p>If you messaged a business using {{operator}}, you can also ask that business to delete your conversation from its inbox. Removing an integration does not delete information retained by the connected application.</p>
+    </section>
+
+    <section aria-labelledby="rights"><h2 id="rights">Your choices and rights</h2>
+      <p>You can choose which applications and features to enable, disconnect applications, and stop tasks and routines. The mobile app also offers AI data-sharing controls for new mobile actions. Withdrawing permission does not recall information already sent. Depending on applicable law, you may have rights to access, correct, delete, or obtain a copy of your information, and to object to or restrict processing. Use the contact below to make a request or ask about the services processing your data.</p>
+    </section>
+
+    <section aria-labelledby="changes"><h2 id="changes">Changes to this policy</h2>
+      <p>We will update this page when our practices change and revise the date above. Material changes will be communicated through an appropriate service or contact channel.</p>
+    </section>
+
+    <section aria-labelledby="contact"><h2 id="contact">Contact</h2>
+      <p>For privacy questions and requests, contact {{operator}}.<br><a href="mailto:{{email}}">{{email}}</a></p>
+    </section>
+  </main>
+  <footer>{{operator}}</footer>
+</body>
+</html>

@@ -1,4 +1,4 @@
-import type { ConnectorEvent } from "@rakazo/adapter-kit";
+import type { ConnectorEvent, JobPublisher } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import { GatewayCommandSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
@@ -8,7 +8,15 @@ import { IntegrationGatewayClient } from "./integration-gateway-client.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { EncryptedSecretStore } from "./secrets.js";
 
+const prepareReplies = vi.hoisted(() => vi.fn());
+vi.mock("./customer-conversations.js", () => ({
+  createCustomerConversations: () => ({ manage: prepareReplies }),
+}));
+
 it("rechecks credentials after a failed verification and keeps accounts independent", async () => {
+  prepareReplies
+    .mockRejectedValueOnce(new Error("Reply service unavailable"))
+    .mockResolvedValue({ revision: 1 });
   const actor: Actor = {
     userId: "user-a",
     spaceId: "space-a",
@@ -80,6 +88,7 @@ it("rechecks credentials after a failed verification and keeps accounts independ
   );
   const deps = {
     prisma,
+    jobs: { enqueue: vi.fn() } as unknown as JobPublisher,
     secrets: new EncryptedSecretStore("fake-encryption-key"),
     integrations: { resolve: async () => gateway } as unknown as IntegrationProviderSettings,
   };
@@ -93,14 +102,20 @@ it("rechecks credentials after a failed verification and keeps accounts independ
   );
   // Nothing is stored for an account that failed verification.
   expect(prisma.secret.upsert).not.toHaveBeenCalled();
+  expect(prepareReplies).not.toHaveBeenCalled();
   valid = true;
   await expect(setupCustomerIncoming(deps, actor, input)).resolves.toMatchObject({
     id: "channel-account-a",
+    replySetupError: "Reply service unavailable",
   });
   await expect(
     setupCustomerIncoming(deps, actor, { ...input, connectionId: "account-b" }),
   ).resolves.toMatchObject({ id: "channel-account-b" });
   expect(lookups).toBe(3);
+  expect(prepareReplies.mock.calls).toEqual([
+    [actor, "bot", "initialize", {}],
+    [actor, "bot", "initialize", {}],
+  ]);
   expect(update.mock.calls.map(([request]) => request.data.binding.receive.account.equals)).toEqual(
     ["line-account-a", "line-account-b"],
   );

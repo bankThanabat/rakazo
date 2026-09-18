@@ -451,19 +451,21 @@ export function OpenConnectorCatalog({
                 </View>
               ) : null}
               {row.webhookUrl ? (
-                <View style={styles.group}>
-                  <Text style={styles.text}>{t("Webhook URL")}</Text>
-                  <Text selectable style={styles.secondary}>
-                    {row.webhookUrl}
-                  </Text>
-                  {button(t("Copy webhook URL"), () => {
-                    void run(async () => {
-                      await Clipboard.setStringAsync(row.webhookUrl!);
-                    });
-                  })}
-                </View>
+                !row.incomingManaged ? (
+                  <View style={styles.group}>
+                    <Text style={styles.text}>{t("Webhook URL")}</Text>
+                    <Text selectable style={styles.secondary}>
+                      {row.webhookUrl}
+                    </Text>
+                    {button(t("Copy webhook URL"), () => {
+                      void run(async () => {
+                        await Clipboard.setStringAsync(row.webhookUrl!);
+                      });
+                    })}
+                  </View>
+                ) : null
               ) : row.status === "connected" ? (
-                row.incomingSecrets?.length && row.canManage !== false ? (
+                row.incomingSecrets !== undefined && row.canManage !== false ? (
                   incoming?.connectionId === row.id ? (
                     <View style={styles.group}>
                       {row.incomingSecrets.map((secret) => (
@@ -488,9 +490,13 @@ export function OpenConnectorCatalog({
                         t("Enable incoming messages"),
                         () =>
                           void run(async () => {
-                            await rpc("connections/setupIncoming", incoming);
+                            const result = await rpc<{ replySetupError?: string }>(
+                              "connections/setupIncoming",
+                              incoming,
+                            );
                             setIncoming(null);
                             await onRefresh();
+                            if (result.replySetupError) setError(result.replySetupError);
                           }),
                         busy ||
                           row.incomingSecrets.some(

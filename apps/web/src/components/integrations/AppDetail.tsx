@@ -91,7 +91,7 @@ export function AppDetail({
   const awaitingIncoming = accounts.filter(
     (row) =>
       row.status === "connected" &&
-      row.incomingSecrets?.length &&
+      row.incomingSecrets !== undefined &&
       !row.webhookUrl &&
       row.canManage !== false,
   );
@@ -180,6 +180,9 @@ export function AppDetail({
       // A failure leaves the account row asking for what is still missing.
       await rpc.connections
         .setupIncoming({ connectionId, ...incoming })
+        .then((result) => {
+          if (result.replySetupError) setError(result.replySetupError);
+        })
         .catch((cause: unknown) =>
           setError(cause instanceof Error ? cause.message : t`Could not enable incoming messages.`),
         );

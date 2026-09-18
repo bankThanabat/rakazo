@@ -52,11 +52,19 @@ export function AccountIncoming({
       onError(t`Create an assistant first.`);
       return;
     }
-    const ok = await run(
-      () => rpc.connections.setupIncoming({ connectionId: row.id, botId: target, secrets }),
-      t`Could not enable incoming messages.`,
-    );
-    if (ok) setSecrets({});
+    let replySetupError: string | undefined;
+    const ok = await run(async () => {
+      const result = await rpc.connections.setupIncoming({
+        connectionId: row.id,
+        botId: target,
+        secrets,
+      });
+      replySetupError = result.replySetupError;
+    }, t`Could not enable incoming messages.`);
+    if (ok) {
+      setSecrets({});
+      if (replySetupError) onError(replySetupError);
+    }
   }
 
   function configure(enabled: boolean, assignedBotId?: string) {
@@ -106,41 +114,45 @@ export function AccountIncoming({
             </NativeSelect>
           </div>
         ) : null}
-        <label htmlFor={`${id}-webhook`} className="block text-sm font-medium">
-          <Trans>Webhook URL</Trans>
-        </label>
-        <div className="flex items-center gap-2">
-          <Input
-            id={`${id}-webhook`}
-            value={row.webhookUrl}
-            readOnly
-            className="h-8 min-w-0 flex-1"
-            onFocus={(event) => event.currentTarget.select()}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={async () => {
-              try {
-                await navigator.clipboard.writeText(row.webhookUrl!);
-                setCopied(true);
-              } catch {
-                onError(t`Could not copy. Select and copy the URL manually.`);
-              }
-            }}
-          >
-            {copied ? <Trans>Copied</Trans> : <Trans>Copy</Trans>}
-          </Button>
-        </div>
+        {!row.incomingManaged ? (
+          <>
+            <label htmlFor={`${id}-webhook`} className="block text-sm font-medium">
+              <Trans>Webhook URL</Trans>
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id={`${id}-webhook`}
+                value={row.webhookUrl}
+                readOnly
+                className="h-8 min-w-0 flex-1"
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(row.webhookUrl!);
+                    setCopied(true);
+                  } catch {
+                    onError(t`Could not copy. Select and copy the URL manually.`);
+                  }
+                }}
+              >
+                {copied ? <Trans>Copied</Trans> : <Trans>Copy</Trans>}
+              </Button>
+            </div>
+          </>
+        ) : null}
       </div>
     );
   }
 
-  if (row.status !== "connected" || !row.incomingSecrets?.length || !canManage) return null;
+  if (row.status !== "connected" || row.incomingSecrets === undefined || !canManage) return null;
 
   return (
     <div className="flex flex-wrap gap-2">
-      {bots && bots.length > 1 ? (
+      {bots && (bots.length > 1 || row.incomingManaged) ? (
         <NativeSelect
           aria-label={t`Assign staff`}
           value={botId ?? defaultBotId}
@@ -177,7 +189,7 @@ export function AccountIncoming({
       ))}
       {pendingSecrets.length === 0 ? (
         <Button variant="outline" size="sm" disabled={busy} onClick={() => void enable()}>
-          <Trans>Try again</Trans>
+          {row.incomingManaged ? <Trans>Assign staff</Trans> : <Trans>Try again</Trans>}
         </Button>
       ) : null}
     </div>

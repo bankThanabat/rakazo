@@ -1,19 +1,30 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { AdapterContext, ConnectorEvent } from "@rakazo/adapter-kit";
 import type { Actor, GatewayCommand, GatewayServerConfig } from "@rakazo/contracts";
-import { GatewayCommandSchema, GatewayServerConfigSchema } from "@rakazo/contracts";
+import {
+  GatewayCommandSchema,
+  GatewayServerConfigSchema,
+  WebhookVerificationSchema,
+} from "@rakazo/contracts";
 import type { GatewayAccount, Prisma, PrismaClient } from "@rakazo/db";
 import { IsolationError, requireMembership } from "@rakazo/db";
 import { z } from "zod";
 import { ConvoyRelay } from "./convoy-relay.js";
-import { equalWebhookSecret } from "./customer-ingress.js";
+import { loadManagedWebhook } from "./customer-incoming-settings.js";
+import { equalWebhookSecret, verifyCustomerWebhook } from "./customer-ingress.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { OpenConnector } from "./open-connector.js";
+import { loadOperatorSettings, saveOperatorSettings } from "./operator-settings.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const settingsId = "integration-gateway";
-const routeSecrets = z.object({ webhookSecret: z.string(), deliveryToken: z.string() });
+const routeSecrets = z.object({
+  webhookSecret: z.string(),
+  deliveryToken: z.string(),
+  verification: WebhookVerificationSchema.optional(),
+  verificationToken: z.string().optional(),
+});
 
 /** Cloud authorization is derived from a stored runtime and current membership.
  * No user/space IDs, upstream credentials or callback URLs come from a runtime. */
@@ -26,14 +37,8 @@ export class IntegrationGateway {
     },
   ) {}
   async configuration() {
-    const row = await this.deps.prisma.integrationProviderConfig.findUnique({
-      where: { id: settingsId },
-    });
-    return row
-      ? GatewayServerConfigSchema.parse(
-          JSON.parse(this.deps.secrets.load(row.ciphertext, settingsId)),
-        )
-      : null;
+    const stored = await loadOperatorSettings(this.deps, settingsId);
+    return stored ? GatewayServerConfigSchema.parse(stored) : null;
   }
   async configure(actor: Actor, input: GatewayServerConfig) {
     if (!actor.isDeploymentOwner) throw new IsolationError();
@@ -49,12 +54,7 @@ export class IntegrationGateway {
     )
       throw new Error("Disconnect existing routes before moving the gateway");
     await new ConvoyRelay(config).verify();
-    const ciphertext = this.deps.secrets.seal(JSON.stringify(config), settingsId);
-    await this.deps.prisma.integrationProviderConfig.upsert({
-      where: { id: settingsId },
-      create: { id: settingsId, ciphertext },
-      update: { ciphertext },
-    });
+    await saveOperatorSettings(this.deps, settingsId, config);
   }
   async createRuntime(actor: Actor, name: string) {
     if (!(await this.configuration())) throw new Error("Gateway is not configured");
@@ -241,6 +241,14 @@ export class IntegrationGateway {
     const { prisma, secrets } = this.deps;
     const config = await this.configuration();
     if (!config) throw new Error("Webhook relay is not configured");
+    // The cloud operator owns application verification; a runtime cannot replace it.
+    const managed = await loadManagedWebhook(this.deps, account.provider);
+    if (managed) command = { ...command, ...managed };
+    if (!command.webhookSecret) throw new Error("Webhook signing secret is required");
+    // Formats Convoy cannot verify use the same durable queue after gateway verification.
+    const direct = Boolean(
+      command.verification.prefix || command.verification.timestamp || command.verificationToken,
+    );
     const key = { accountId: account.id, channelId: command.channelId };
     let route = await prisma.gatewayRoute.findUnique({ where: { accountId_channelId: key } });
     if (!route) {
@@ -249,6 +257,8 @@ export class IntegrationGateway {
         JSON.stringify({
           webhookSecret: command.webhookSecret,
           deliveryToken: randomBytes(32).toString("base64url"),
+          verification: direct ? command.verification : undefined,
+          verificationToken: command.verificationToken,
         }),
         id,
       );
@@ -257,6 +267,23 @@ export class IntegrationGateway {
     const secret = routeSecrets.parse(JSON.parse(secrets.load(route.ciphertext, route.id)));
     if (!equalWebhookSecret(secret.webhookSecret, command.webhookSecret))
       throw new Error("Secret differs from the existing route");
+    if (
+      Boolean(secret.verification) !== direct ||
+      (direct && JSON.stringify(secret.verification) !== JSON.stringify(command.verification)) ||
+      !equalWebhookSecret(secret.verificationToken ?? "", command.verificationToken ?? "")
+    )
+      throw new Error("Verification differs from the existing route");
+    if (direct) {
+      const webhookUrl = new URL(
+        `/api/integration-gateway/webhook/${route.id}`,
+        config.callbackOrigin,
+      ).href;
+      await prisma.gatewayRoute.update({
+        where: { id: route.id },
+        data: { webhookUrl, enabled: true },
+      });
+      return { id: route.id, webhookUrl };
+    }
     const provisioned = await new ConvoyRelay(config).provision(
       route.id,
       command.verification,
@@ -364,11 +391,14 @@ export class IntegrationGateway {
     });
     const relay = new ConvoyRelay(config);
     for (const route of routes) {
-      await relay.remove(route.id);
+      const secret = routeSecrets.parse(
+        JSON.parse(this.deps.secrets.load(route.ciphertext, route.id)),
+      );
+      if (!secret.verification) await relay.remove(route.id);
       await this.deps.prisma.gatewayRoute.delete({ where: { id: route.id } });
     }
   }
-  async receive(routeId: string, bearer: string, raw: string) {
+  private async loadRoute(routeId: string) {
     const { prisma, secrets } = this.deps;
     const route = await prisma.gatewayRoute.findUnique({
       where: { id: routeId },
@@ -377,16 +407,46 @@ export class IntegrationGateway {
     if (!route?.enabled || route.account.revokedAt || route.account.runtime.revokedAt)
       throw new IsolationError();
     const secret = routeSecrets.parse(JSON.parse(secrets.load(route.ciphertext, route.id)));
-    if (!equalWebhookSecret(bearer, secret.deliveryToken)) throw new IsolationError();
     await requireMembership(prisma, route.account.runtime.userId, route.account.runtime.spaceId);
+    return { route, secret };
+  }
+  async challenge(routeId: string, token: string) {
+    const { secret } = await this.loadRoute(routeId);
+    if (
+      !secret.verification ||
+      !secret.verificationToken ||
+      !equalWebhookSecret(token, secret.verificationToken)
+    )
+      throw new IsolationError();
+  }
+  async receiveWebhook(routeId: string, headers: Headers, raw: string) {
+    const { route, secret } = await this.loadRoute(routeId);
+    if (!secret.verification) throw new IsolationError();
+    try {
+      verifyCustomerWebhook(raw, headers, secret.verification, secret.webhookSecret);
+    } catch {
+      throw new IsolationError();
+    }
+    await this.enqueue(route, raw);
+  }
+  async receive(routeId: string, bearer: string, raw: string) {
+    const { route, secret } = await this.loadRoute(routeId);
+    if (secret.verification || !equalWebhookSecret(bearer, secret.deliveryToken))
+      throw new IsolationError();
+    await this.enqueue(route, raw);
+  }
+  private async enqueue(
+    route: Awaited<ReturnType<IntegrationGateway["loadRoute"]>>["route"],
+    raw: string,
+  ) {
+    const { prisma } = this.deps;
     JSON.parse(raw);
-    // Convoy verifies the provider signature. A separate per-route bearer over
-    // TLS authenticates this hop. Never accept a tenant or route from the body.
+    // Authentication is complete. Tenant and route always come from stored ownership.
     const id = hash(`${route.id}\n${raw}`);
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT id FROM gateway_runtimes WHERE id = ${route.account.runtimeId} FOR UPDATE`;
       const current = await tx.gatewayRoute.findUniqueOrThrow({
-        where: { id: routeId },
+        where: { id: route.id },
         include: { account: { include: { runtime: true } } },
       });
       if (!current.enabled || current.account.revokedAt || current.account.runtime.revokedAt)
@@ -396,7 +456,7 @@ export class IntegrationGateway {
         where: { ackedAt: null, route: { account: { runtimeId: route.account.runtimeId } } },
       });
       if (queued >= 1000) throw new Error("Runtime inbox is full");
-      await tx.gatewayDelivery.create({ data: { id, routeId, payload: raw } });
+      await tx.gatewayDelivery.create({ data: { id, routeId: route.id, payload: raw } });
     });
   }
 }

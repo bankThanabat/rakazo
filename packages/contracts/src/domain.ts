@@ -564,6 +564,7 @@ export const ConnectionSchema = z.object({
   automaticReplies: z.boolean().optional(),
   replyBotId: Id.optional(),
   replyBotName: z.string().optional(),
+  incomingManaged: z.boolean().optional(),
   /** Present when this provider can receive customer messages; lists the secrets setup needs. */
   incomingSecrets: z
     .array(IncomingSecretSchema.extend({ saved: z.boolean().optional() }))

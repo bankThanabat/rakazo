@@ -2,13 +2,14 @@ import { readFileSync } from "node:fs";
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import { customerIncomingTemplate } from "./customer-incoming.js";
+import { instagramIncoming } from "./customer-incoming-instagram.js";
 import { lineIncoming } from "./customer-incoming-line.js";
 import { customerPage } from "./customer-mapping.js";
 
 const examples = JSON.parse(
   readFileSync(new URL("../../../docs/self-host/customer-bindings.json", import.meta.url), "utf8"),
 );
-const templates = { line: lineIncoming };
+const templates = { line: lineIncoming, instagram: instagramIncoming };
 
 /** Every registered incoming template must satisfy the same contract so shared
  * setup, relay and ingress code can stay provider-agnostic. */
@@ -33,15 +34,56 @@ describe.each(Object.entries(templates))("incoming template %s", (provider, temp
   it("filters payloads by the verified account when it declares an account lookup", () => {
     if (template.account) expect(binding.receive.account?.equals).toBe("connected-account");
   });
-  it("can be relayed: no signature prefix or timestamp, which Convoy cannot verify", () => {
-    expect(binding.receive.webhook?.prefix).toBe("");
-    expect(binding.receive.webhook?.timestamp).toBeUndefined();
-  });
   it("maps the same way as the documented manual example", () => {
     const documented = CustomerBindingSchema.parse(examples[provider]);
     expect(binding.receive.fields).toEqual(documented.receive.fields);
     expect(binding.send.action).toBe(documented.send.action);
   });
+});
+
+it("maps Instagram DMs and attachments, excluding other accounts, echoes and read receipts", () => {
+  const binding = CustomerBindingSchema.parse(
+    instagramIncoming.binding({
+      account: "business",
+      secretIds: { appSecret: "secret", verifyToken: "verify" },
+    }),
+  );
+  const dm = {
+    sender: { id: "customer" },
+    recipient: { id: "business" },
+    timestamp: 1767312000000,
+    message: { mid: "dm", text: "Hello" },
+  };
+  const payload = {
+    entry: [
+      { id: "other-business", messaging: [dm] },
+      {
+        id: "business",
+        messaging: [
+          dm,
+          { ...dm, message: { mid: "attachment", attachments: [{}] } },
+          {
+            ...dm,
+            sender: { id: "business" },
+            recipient: { id: "customer" },
+            message: { mid: "echo", is_echo: true, text: "Reply" },
+          },
+          {
+            sender: dm.sender,
+            recipient: dm.recipient,
+            timestamp: dm.timestamp,
+            read: { mid: "dm" },
+          },
+        ],
+      },
+    ],
+  };
+  expect(
+    customerPage(binding, payload, new Date(0)).messages.map((m) => [m.externalId, m.unsupported]),
+  ).toEqual([
+    ["attachment", true],
+    ["dm", false],
+  ]);
 });
 
 it("routes LINE group, room and direct chats to distinct threads and skips senders LINE withholds", () => {
