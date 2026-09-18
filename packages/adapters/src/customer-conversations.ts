@@ -36,6 +36,11 @@ import {
 import type { ConnectorAudience } from "./customer-connector.js";
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerDeliveryId, customerInput, customerPage } from "./customer-mapping.js";
+import {
+  customerReplyDefaults,
+  loadCustomerReplyRuntime,
+  managedCustomerRuntime,
+} from "./customer-reply-defaults.js";
 import type { CustomerRuntimeConfig } from "./customer-runtime.js";
 import { LangflowCustomerRuntime } from "./customer-runtime.js";
 import { customerWebhookUrl } from "./customer-webhooks.js";
@@ -114,6 +119,12 @@ export function createCustomerConversations(deps: {
     raw: unknown,
   ) {
     const config = CustomerServiceConnection.parse(raw);
+    if (config.credential === managedCustomerRuntime) {
+      const runtime = await loadCustomerReplyRuntime(deps);
+      if (config.baseUrl !== runtime.baseUrl) throw new IsolationError();
+      // This key is available only to the customer runtime adapter, never staff secret tools.
+      return runtime;
+    }
     const row = await prisma.botSecret.findFirst({
       where: {
         name: config.credential,
@@ -800,15 +811,18 @@ export function createCustomerConversations(deps: {
             select: { id: true, label: true, provider: true },
           }),
         };
-      if (operation === "instructions" || operation === "configure") {
+      if (operation === "instructions" || operation === "configure" || operation === "initialize") {
         const existing = await prisma.customerBehavior.findUnique({ where: { botId } });
+        if (operation === "initialize" && existing) return existing;
         const input =
-          operation === "configure"
-            ? CustomerBehaviorInput.parse(args)
-            : CustomerBehaviorInput.parse({
-                ...existing,
-                ...CustomerInstructionsInput.parse(args),
-              });
+          operation === "initialize"
+            ? CustomerBehaviorInput.parse(await customerReplyDefaults(deps, actor, bot))
+            : operation === "configure"
+              ? CustomerBehaviorInput.parse(args)
+              : CustomerBehaviorInput.parse({
+                  ...existing,
+                  ...CustomerInstructionsInput.parse(args),
+                });
         const actions = validateCustomerGrants(input.actions);
         for (const grant of actions) await connection(actor, grant.connectionId);
         if (input.knowledgeFilterId && !input.knowledge)
@@ -831,6 +845,12 @@ export function createCustomerConversations(deps: {
         return prisma.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM bots WHERE id = ${botId} FOR UPDATE`;
           if (
+            !(await tx.bot.findFirst({
+              where: { id: botId, userId: actor.userId, spaceId: actor.spaceId, archivedAt: null },
+            }))
+          )
+            throw new IsolationError();
+          if (
             input.knowledgeFilterId &&
             (await tx.bot.findUniqueOrThrow({ where: { id: botId } })).knowledgeLibraryId
           )
@@ -838,6 +858,8 @@ export function createCustomerConversations(deps: {
               "Manage attached knowledge through Documents; detach it before using a legacy filter",
             );
           const current = await tx.customerBehavior.findUnique({ where: { botId } });
+          // Concurrent first connections must never replace a published/customized behavior.
+          if (operation === "initialize" && current) return current;
           if (current?.revision !== existing?.revision)
             throw new Error("Customer behavior changed; inspect and retry");
           return tx.customerBehavior.upsert({

@@ -161,7 +161,11 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
   incoming(
     ref: string,
     channelId: string,
-    webhook: { webhookSecret: string; verification: WebhookVerification },
+    webhook: {
+      webhookSecret?: string;
+      verification: WebhookVerification;
+      verificationToken?: string;
+    },
     context: AdapterContext,
   ): Promise<z.infer<typeof IncomingSetupResultSchema>> {
     return this.request({ op: "incoming", ref, channelId, ...webhook }, context.signal);

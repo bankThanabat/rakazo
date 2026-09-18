@@ -3,11 +3,13 @@ import type { AdapterContext, JobPublisher } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import { CustomerBindingSchema, IncomingSetupInputSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
-import { IsolationError } from "@rakazo/db";
+import { configureCustomerReplies, IsolationError } from "@rakazo/db";
 import { z } from "zod";
 import { createCustomerConnector } from "./customer-connector.js";
+import { createCustomerConversations } from "./customer-conversations.js";
 import type { CustomerIncomingTemplate } from "./customer-incoming.js";
 import { customerIncomingTemplate } from "./customer-incoming.js";
+import { loadIncomingSettings } from "./customer-incoming-settings.js";
 import { createCustomerIngress } from "./customer-ingress.js";
 import { customerField } from "./customer-mapping.js";
 import { customerWebhookSecretId, customerWebhookUrl } from "./customer-webhooks.js";
@@ -19,6 +21,7 @@ type Dependencies = {
   prisma: PrismaClient;
   secrets: EncryptedSecretStore;
   integrations: IntegrationProviderSettings;
+  jobs: JobPublisher;
   apiUrl?: string;
 };
 
@@ -135,17 +138,34 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
     ? await verifyAccount(connector, actor, account.id, template.account)
     : "";
   // Saved once the account checks out, so a later provisioning failure retries without retyping.
-  const secrets = await storeSecrets(deps, actor, context, template, input.secrets, secretIds);
+  const remoteManaged = template.managed && adapter instanceof IntegrationGatewayClient;
+  const secrets = remoteManaged
+    ? {}
+    : await storeSecrets(
+        deps,
+        actor,
+        context,
+        template,
+        template.managed ? await loadIncomingSettings(deps, account.provider) : input.secrets,
+        secretIds,
+      );
   const binding = CustomerBindingSchema.parse(template.binding({ account: accountId, secretIds }));
   const webhook = binding.receive.webhook;
   const webhookKey = Object.keys(secretIds).find((key) => secretIds[key] === webhook?.secretId);
   if (!webhook || !webhookKey) throw new Error("Incoming setup requires a webhook binding");
+  const verificationKey = Object.keys(secretIds).find(
+    (key) => secretIds[key] === webhook.verificationSecretId,
+  );
   const relay =
     adapter instanceof IntegrationGatewayClient
       ? await adapter.incoming(
           account.providerRef!,
           channel.id,
-          { webhookSecret: secrets[webhookKey]!, verification: webhook },
+          {
+            webhookSecret: remoteManaged ? undefined : secrets[webhookKey],
+            verification: webhook,
+            verificationToken: verificationKey ? secrets[verificationKey] : undefined,
+          },
           context,
         )
       : null;
@@ -166,15 +186,58 @@ export async function setupCustomerIncoming(deps: Dependencies, actor: Actor, ra
       },
     });
   });
-  return { id: channel.id, webhookUrl };
+  try {
+    await createCustomerConversations(deps).manage(actor, bot.id, "initialize", {});
+    return { id: channel.id, webhookUrl };
+  } catch (error) {
+    // Receiving messages is useful even when the optional reply service is unavailable.
+    return {
+      id: channel.id,
+      webhookUrl,
+      replySetupError: deliberateMessage(
+        error,
+        "Could not prepare customer replies. Try enabling auto replies again.",
+      ),
+    };
+  }
+}
+
+/** Only messages our own code threw reach the client; library errors get the generic text. */
+export function deliberateMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.constructor === Error ? error.message : fallback;
+}
+
+/** Enabling replies first prepares the assigned staff, so the switch never turns on
+ * an empty behavior. Disabling needs no reply service. */
+export async function updateCustomerReplies(
+  deps: Dependencies,
+  actor: Actor,
+  input: { connectionId: string; enabled: boolean; botId?: string },
+) {
+  if (input.enabled) {
+    const channel = await deps.prisma.customerChannel.findFirst({
+      where: {
+        connectionId: input.connectionId,
+        userId: actor.userId,
+        spaceId: actor.spaceId,
+        enabled: true,
+        connection: { status: "connected" },
+      },
+    });
+    if (!channel) throw new IsolationError();
+    await createCustomerConversations(deps).manage(
+      actor,
+      input.botId ?? channel.botId,
+      "initialize",
+      {},
+    );
+  }
+  await configureCustomerReplies(deps.prisma, actor, input);
 }
 
 /** Outbound polling requires no public port on a customer machine. Cloud ACK
  * follows committed local inbox writes. Failed ACKs redeliver into local dedupe. */
-export async function receiveCustomerRelayBatch(
-  deps: Dependencies & { jobs: JobPublisher },
-  signal: AbortSignal,
-) {
+export async function receiveCustomerRelayBatch(deps: Dependencies, signal: AbortSignal) {
   const adapter = await deps.integrations.resolve("open-connector");
   if (!(adapter instanceof IntegrationGatewayClient)) return;
   const ingress = createCustomerIngress(deps);

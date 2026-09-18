@@ -4,6 +4,41 @@ import { Hono } from "hono";
 import { expect, it, vi } from "vitest";
 import { mountIntegrationGateway } from "./integration-gateway-http.js";
 
+it("verifies challenge tokens and forwards raw webhook bytes without treating probes as events", async () => {
+  const challenge = vi.fn(async (_id: string, token: string) => {
+    if (token !== "fixture-verify") throw new IsolationError();
+  });
+  const receiveWebhook = vi.fn(async () => undefined);
+  const app = new Hono();
+  mountIntegrationGateway(app, { challenge, receiveWebhook } as unknown as IntegrationGateway);
+  const path = "/api/integration-gateway/webhook/route";
+  expect((await app.request(path)).status).toBe(400);
+  expect(
+    (await app.request(`${path}?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=42`))
+      .status,
+  ).toBe(403);
+  const response = await app.request(
+    `${path}?hub.mode=subscribe&hub.verify_token=fixture-verify&hub.challenge=42`,
+  );
+  expect(await response.text()).toBe("42");
+  expect(receiveWebhook).not.toHaveBeenCalled();
+  const raw = '{ "entry": [] }';
+  expect(
+    (
+      await app.request(path, {
+        method: "POST",
+        body: raw,
+        headers: { "x-hub-signature-256": "fixture-signature" },
+      })
+    ).status,
+  ).toBe(200);
+  expect(receiveWebhook).toHaveBeenCalledWith("route", expect.any(Headers), raw);
+  expect(
+    (await app.request(path, { method: "POST", body: "x".repeat(1024 * 1024 + 1) })).status,
+  ).toBe(413);
+  expect(receiveWebhook).toHaveBeenCalledTimes(1);
+});
+
 it("answers Convoy's unauthenticated HEAD probe without accepting a delivery", async () => {
   const receive = vi.fn(async () => {
     throw new IsolationError();

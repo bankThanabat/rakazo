@@ -29,7 +29,11 @@ export const IncomingSetupInputSchema = z.object({
   botId: id,
   secrets: z.record(IncomingSecretSchema.shape.key, z.string().trim().min(1).max(16384)),
 });
-export const IncomingSetupResultSchema = z.object({ id, webhookUrl: z.string().url() });
+export const IncomingSetupResultSchema = z.object({
+  id,
+  webhookUrl: z.string().url(),
+  replySetupError: z.string().optional(),
+});
 export const GatewayConnectionSchema = z.object({
   id,
   providerRef: id,
@@ -87,7 +91,8 @@ export const GatewayCommandSchema = z.discriminatedUnion("op", [
     op: z.literal("incoming"),
     ref: id,
     channelId: id,
-    webhookSecret: z.string().min(1).max(16384),
+    webhookSecret: z.string().min(1).max(16384).optional(),
+    verificationToken: z.string().min(1).max(16384).optional(),
     verification: WebhookVerificationSchema,
   }),
   z.object({ op: z.literal("deliveries") }),

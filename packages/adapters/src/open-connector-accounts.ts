@@ -248,7 +248,12 @@ export class OpenConnectorAccounts {
         .parse(
           await this.http.request(path, context, {
             method: "POST",
-            body: JSON.stringify({ authorizationOptionIds: auth.authorizationOptionIds }),
+            body: JSON.stringify({
+              authorizationOptionIds: provider.auth.find((method) => method.type === "oauth2")
+                ?.authorizationOptions?.length
+                ? auth.authorizationOptionIds
+                : undefined,
+            }),
           }),
         );
       await this.deps.prisma.openConnectorAttempt.create({

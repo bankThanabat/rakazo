@@ -44,8 +44,10 @@ import {
   computerUpdateView,
   createConnectionActionSettings,
   createVoiceProvider,
+  customerIncomingSecrets,
   customerIncomingTemplate,
   deletePushToken,
+  deliberateMessage,
   deploymentAutoReviewDefault,
   destroyBot,
   displayBotWorkspacePath,
@@ -83,6 +85,7 @@ import {
   takeoverLeaseMs,
   toComputerRef,
   touchRunningComputer,
+  updateCustomerReplies,
   verifyMcpInstall,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
@@ -116,7 +119,6 @@ import {
   CannotDeleteLastSpaceError,
   CannotDeleteSpaceAsNonOwnerError,
   claimEmptySpaceDeletionForMember,
-  configureCustomerReplies,
   connectionAccessWhere,
   createCustomerInbox,
   createCustomerRepos,
@@ -490,11 +492,6 @@ function mapSpaceLifecycleError(error: unknown): unknown {
     return new ORPCError("CONFLICT", { message: error.message });
   }
   return error;
-}
-
-/** Only messages our own code threw reach the client; library errors get the generic text. */
-function deliberateMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.constructor === Error ? error.message : fallback;
 }
 
 export function createRouter(deps: RouterDeps) {
@@ -3353,8 +3350,18 @@ export function createRouter(deps: RouterDeps) {
     },
     connections: {
       configureReplies: authed.connections.configureReplies.handler(async ({ context, input }) => {
+        if (!deps.integrationSettings) throw new ORPCError("SERVICE_UNAVAILABLE");
         try {
-          await configureCustomerReplies(deps.prisma, context.actor, input);
+          await updateCustomerReplies(
+            {
+              prisma: deps.prisma,
+              secrets: deps.secrets,
+              integrations: deps.integrationSettings,
+              jobs: deps.jobs,
+            },
+            context.actor,
+            input,
+          );
           return { ok: true as const };
         } catch (error) {
           if (error instanceof IsolationError) throw new ORPCError("NOT_FOUND");
@@ -3371,6 +3378,7 @@ export function createRouter(deps: RouterDeps) {
               prisma: deps.prisma,
               secrets: deps.secrets,
               integrations: deps.integrationSettings,
+              jobs: deps.jobs,
               apiUrl: deps.env.apiUrl,
             },
             context.actor,
@@ -3395,7 +3403,7 @@ export function createRouter(deps: RouterDeps) {
             input.provider,
             connectionContext(context.actor, "connections.setup", context.signal),
           )),
-          incomingSecrets: customerIncomingTemplate(input.provider)?.secrets,
+          incomingSecrets: customerIncomingSecrets(input.provider),
         };
       }),
       configureOAuth: authed.connections.configureOAuth.handler(async ({ context, input }) => {
@@ -3560,9 +3568,10 @@ export function createRouter(deps: RouterDeps) {
               // Only the manager can reassign staff, so only they learn who is assigned.
               replyBotId: canManage ? channel?.botId : undefined,
               replyBotName: canManage ? channel?.botName : undefined,
+              incomingManaged: customerIncomingTemplate(row.provider)?.managed,
               incomingSecrets:
                 row.connectorId === "open-connector"
-                  ? customerIncomingTemplate(row.provider)?.secrets.map((secret) => ({
+                  ? customerIncomingSecrets(row.provider)?.map((secret) => ({
                       ...secret,
                       saved: channel?.savedSecrets.includes(secret.key) ?? false,
                     }))

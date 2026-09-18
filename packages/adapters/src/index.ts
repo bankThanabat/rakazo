@@ -38,7 +38,7 @@ export * from "./connection-action-settings.js";
 export * from "./cursor-cloud-agent.js";
 export { createCustomerBusinessTools } from "./customer-business-tools.js";
 export * from "./customer-conversations.js";
-export { customerIncomingTemplate } from "./customer-incoming.js";
+export { customerIncomingSecrets, customerIncomingTemplate } from "./customer-incoming.js";
 export { createCustomerIngress } from "./customer-ingress.js";
 export * from "./customer-relay.js";
 export { listConnectionIncoming } from "./customer-webhooks.js";

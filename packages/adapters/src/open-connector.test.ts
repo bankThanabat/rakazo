@@ -52,6 +52,41 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
 afterEach(() => vi.useRealTimers());
 
 describe("OpenConnector accounts", () => {
+  it.each([false, true])("sends OAuth options only when declared: %s", async (declared) => {
+    const f = fixture();
+    f.providers[0]!.auth = [
+      {
+        type: "oauth2",
+        ...(declared
+          ? {
+              authorizationOptions: [
+                {
+                  id: "optional",
+                  label: "Optional",
+                  description: "Optional scope",
+                  required: false,
+                  defaultSelected: false,
+                },
+              ],
+            }
+          : {}),
+      },
+    ];
+    const result = await f.adapter.begin(
+      {
+        provider: "sample",
+        redirectUrl: "https://app.example.test",
+        auth: { type: "oauth2", values: {}, authorizationOptionIds: [] },
+      },
+      owner,
+    );
+    expect(result.authorizationUrl).toBeTruthy();
+    const request = f.fetcher.mock.calls.find(([url]) => String(url).endsWith("/connect"));
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual(
+      declared ? { authorizationOptionIds: [] } : {},
+    );
+  });
+
   it("connects, discovers and sends through the exact owned account, then disconnects it", async () => {
     const f = fixture();
     const catalog = await f.adapter.catalog(owner);

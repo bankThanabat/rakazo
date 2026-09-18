@@ -657,3 +657,87 @@ test("cloud users issue and revoke their runtime keys inside Rakazo", async ({
   await page.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(page.getByText("Revoked", { exact: true })).toBeVisible();
 });
+
+test("Instagram OAuth accounts assign staff without application credential inputs", async ({
+  page,
+}, testInfo) => {
+  let enabled = false;
+  const assignments: unknown[] = [];
+  await page.route("**/rpc/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.replace("/rpc/", "");
+    const input = route.request().postDataJSON()?.json;
+    let result: unknown = [];
+    if (path === "connections/catalog")
+      result = input?.excludeConnectorIds
+        ? []
+        : [
+            {
+              connectorId: "open-connector",
+              slug: "instagram",
+              name: "Instagram",
+              logo: null,
+              connected: true,
+              noAuth: false,
+              scope: "team",
+            },
+          ];
+    else if (path === "integrationSetup/get")
+      result = {
+        canConfigure: false,
+        needsSetup: false,
+        providers: [],
+        webUrl: "https://example.test",
+      };
+    else if (path === "capabilities/catalogSearch") result = { enabled: false, results: [] };
+    else if (path === "bots/list") result = [{ id: "setup-assistant", name: "Support" }];
+    else if (path === "connections/setup")
+      result = {
+        methods: [{ type: "oauth2", fields: [] }],
+        oauthConfigured: true,
+        incomingSecrets: [],
+      };
+    else if (path === "connections/list")
+      result = [
+        {
+          id: "instagram-account",
+          connectorId: "open-connector",
+          provider: "instagram",
+          displayName: "Instagram",
+          status: "connected",
+          canManage: true,
+          capabilities: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          incomingManaged: true,
+          incomingSecrets: [],
+          ...(enabled
+            ? {
+                webhookUrl: "https://gateway.example.test/webhook",
+                replyBotId: "setup-assistant",
+                replyBotName: "Support",
+                automaticReplies: false,
+              }
+            : {}),
+        },
+      ];
+    else if (path === "connections/setupIncoming") {
+      assignments.push(input);
+      enabled = true;
+      result = { id: "channel", webhookUrl: "https://gateway.example.test/webhook" };
+    }
+    await route.fulfill({ json: { json: result } });
+  });
+  await page.goto("/e2e/fixtures/open-connector.html");
+  await page.getByRole("button", { name: "Instagram, Manage", exact: true }).click();
+  await expect(page.getByLabel("Instagram app secret", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Verify token", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Assign staff", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Assign staff", exact: true }).click();
+  await expect(
+    page.getByRole("switch", { name: "Auto reply messages", exact: true }),
+  ).toBeVisible();
+  expect(assignments).toEqual([
+    { connectionId: "instagram-account", botId: "setup-assistant", secrets: {} },
+  ]);
+  await expect(page.getByLabel("Webhook URL", { exact: true })).toHaveCount(0);
+  await captureScreenshot(page, testInfo, "instagram-oauth-staff-assignment");
+});

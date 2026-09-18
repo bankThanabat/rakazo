@@ -37,6 +37,17 @@ export function mountIntegrationGateway(
       c.json({ data: await gateway.command(token, JSON.parse(raw), c.req.raw.signal) }),
     ),
   );
+  app.get("/webhook/:id", async (c) => {
+    if (c.req.query("hub.mode") !== "subscribe") return c.body(null, 400);
+    await gateway.challenge(c.req.param("id"), c.req.query("hub.verify_token") ?? "");
+    return c.text((c.req.query("hub.challenge") ?? "").slice(0, 4000));
+  });
+  app.post("/webhook/:id", async (c) => {
+    const raw = await readBoundedBody(c.req.raw, 1024 * 1024);
+    if (raw === null) return c.body(null, 413);
+    await gateway.receiveWebhook(c.req.param("id"), c.req.raw.headers, raw);
+    return c.json({ ok: true });
+  });
   // Convoy probes reachability before the route is enabled, without credentials.
   // Hono serves HEAD through GET. Neither accepts events; POST authenticates delivery.
   app.get("/deliver/:id", (c) => c.body(null, 204));

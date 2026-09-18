@@ -12,6 +12,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createConnectionActionSettings } from "./connection-action-settings.js";
 import { createCustomerConversations } from "./customer-conversations.js";
 import { createCustomerIngress } from "./customer-ingress.js";
+import {
+  customerReplyDefaultsId,
+  defaultCustomerInstructions,
+  managedCustomerRuntime,
+} from "./customer-reply-defaults.js";
 import { IntegrationProviderSettings } from "./integration-provider-settings.js";
 import { createKnowledge } from "./knowledge.js";
 import { createKnowledgeFixture } from "./knowledge-test-fixture.js";
@@ -66,6 +71,7 @@ describe.skipIf(!enabled)(
     let search: ReturnType<typeof vi.fn<NonNullable<CustomerRuntime["search"]>>>;
     let failSend: boolean;
     let flowOrdinal = 0;
+    let failPublish = false;
     let businessHandler: ((action: string, input: Record<string, unknown>) => unknown) | undefined;
     let holdSend: Promise<unknown> | undefined;
     let sendStarted: (() => void) | undefined;
@@ -83,6 +89,7 @@ describe.skipIf(!enabled)(
       sends.length = 0;
       failSend = false;
       flowOrdinal = 0;
+      failPublish = false;
       businessHandler = undefined;
       holdSend = undefined;
       sendStarted = undefined;
@@ -144,7 +151,14 @@ describe.skipIf(!enabled)(
           "open-connector": f.adapter,
         }),
         jobs: { enqueue: vi.fn(async () => undefined) } as unknown as JobPublisher,
-        runtime: () => ({ reply, search, publish: async () => `flow-${++flowOrdinal}` }),
+        runtime: () => ({
+          reply,
+          search,
+          publish: async () => {
+            if (failPublish) throw new Error("Reply service offline");
+            return `flow-${++flowOrdinal}`;
+          },
+        }),
       });
     });
     afterEach(async () => {
@@ -257,6 +271,98 @@ describe.skipIf(!enabled)(
         where: { channelId: fixture.channel.id },
       });
     }
+    it("initializes customer replies once with owned model defaults and preserves custom behavior", async () => {
+      const a = await setup();
+      const behavior = await db.prisma.customerBehavior.findUniqueOrThrow({
+        where: { botId: a.owner.botId },
+      });
+      const bot = await db.prisma.bot.create({
+        data: {
+          userId: a.owner.userId,
+          spaceId: a.owner.spaceId,
+          name: "New staff",
+          color: "blue",
+          instructions: "Private staff instructions must not reach customers",
+        },
+      });
+      await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
+        "Choose a model",
+      );
+      await db.prisma.spaceModelPreference.create({
+        data: {
+          userId: a.owner.userId,
+          spaceId: a.owner.spaceId,
+          credentialId: behavior.modelCredentialId!,
+          modelId: behavior.modelId!,
+          isDefault: true,
+        },
+      });
+      await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
+        "server operator",
+      );
+      await db.prisma.integrationProviderConfig.create({
+        data: {
+          id: customerReplyDefaultsId,
+          ciphertext: f.secrets.seal(
+            JSON.stringify({
+              baseUrl: "https://runtime.example.test/api/v1",
+              apiKey: "fixture-operator-key",
+            }),
+            customerReplyDefaultsId,
+          ),
+        },
+      });
+      try {
+        const b = await setup();
+        await expect(service.manage(b.owner, bot.id, "initialize", {})).rejects.toThrow();
+        failPublish = true;
+        await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
+          "Reply service offline",
+        );
+        expect(
+          await db.prisma.customerBehavior.findUnique({ where: { botId: bot.id } }),
+        ).toBeNull();
+        failPublish = false;
+        const [initialized, concurrent] = await Promise.all([
+          service.manage(a.owner, bot.id, "initialize", {}),
+          service.manage(a.owner, bot.id, "initialize", {}),
+        ]);
+        expect(concurrent).toEqual(initialized);
+        expect(initialized).toMatchObject({
+          instructions: defaultCustomerInstructions,
+          modelCredentialId: behavior.modelCredentialId,
+          modelId: behavior.modelId,
+          actions: [],
+          knowledgeFilterId: null,
+          revision: 1,
+        });
+        expect(await db.prisma.botSecret.count({ where: { botId: bot.id } })).toBe(0);
+        await expect(
+          service.manage(a.owner, bot.id, "configure", {
+            ...behavior,
+            runtime: {
+              credential: managedCustomerRuntime,
+              baseUrl: "https://wrong.example.test/api/v1",
+            },
+          }),
+        ).rejects.toThrow();
+        await service.manage(a.owner, bot.id, "instructions", {
+          instructions: "Approved custom public instructions",
+        });
+        const customized = await db.prisma.customerBehavior.findUniqueOrThrow({
+          where: { botId: bot.id },
+        });
+        const publications = flowOrdinal;
+        expect(await service.manage(a.owner, bot.id, "initialize", {})).toEqual(customized);
+        expect(flowOrdinal).toBe(publications);
+        expect(await service.manage(a.owner, a.owner.botId, "initialize", {})).toEqual(behavior);
+      } finally {
+        await db.prisma.integrationProviderConfig.delete({
+          where: { id: customerReplyDefaultsId },
+        });
+      }
+    });
+
     it("auto replies toggle resumes existing chats, ignores the backlog and preserves manual replies", async () => {
       const a = await setup();
       const configure = (enabled: boolean) =>

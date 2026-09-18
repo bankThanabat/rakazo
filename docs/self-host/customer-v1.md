@@ -43,6 +43,31 @@ Langflow API private and restrict its API key to trusted operators.
 
 ## Connect and publish
 
+For first-time messaging setup, the operator can configure a default customer
+execution service once. Run this on the Rakazo server that owns the customer inbox,
+with its database and encryption environment:
+
+```sh
+pnpm exec tsx scripts/configure-operator-settings.mts customer-replies < /secure/customer-runtime.json
+```
+
+The JSON input contains `baseUrl` for the Langflow API ending in `/api/v1` and
+`apiKey`. Keep it outside the checkout and shell history. The settings are encrypted;
+the server key is used only by the customer runtime adapter and is never copied to
+staff-accessible named secrets or customer devices.
+
+When staff are first assigned to a supported messaging account, Rakazo publishes
+basic customer-reply instructions using the assistant's model selection or its
+owner's Space default. It does not copy private staff instructions or add business
+actions. Existing customer behavior is preserved, including during concurrent
+setup attempts. Auto replies remain off until the owner enables them.
+
+Missing model/service configuration or a publication failure leaves receiving
+enabled and returns a setup error. After correcting the dependency, enable auto
+replies to retry. Existing accounts without behavior use the same initialization
+path when auto replies are enabled. Manual publishing below remains available for
+custom instructions, service connections, and approved actions.
+
 Use Rakazo's existing named-secret workflow for service keys. Ask the staff
 assistant to call `request_secret` with a credential name, the service origin,
 and `{type: "header", name: "x-api-key"}` authentication. Enter the key in the

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type { AdapterContext, JobPublisher } from "@rakazo/adapter-kit";
 import {
   createCustomerInbox,
@@ -30,7 +30,11 @@ it.skipIf(!enabled)(
   "isolates customers, provisions once after a lost response, persists offline delivery and ACKs only after the local inbox commit",
   async () => {
     const { prisma } = db;
-    const f = createOpenConnectorFixture(() => ({ userId: "line-bot-fixture" }));
+    const f = createOpenConnectorFixture((action) =>
+      action === "instagram.get_current_user"
+        ? { user: { userId: "instagram-account" } }
+        : { userId: "line-bot-fixture" },
+    );
     f.providers[0] = {
       ...f.providers[0]!,
       service: "line",
@@ -44,6 +48,14 @@ it.skipIf(!enabled)(
         { ...sampleAction, id: "line.send_push_text", service: "line" },
       ],
     };
+    f.providers.push({
+      ...f.providers[0]!,
+      service: "instagram",
+      actions: [
+        { ...f.providers[0]!.actions[0]!, id: "instagram.get_current_user", service: "instagram" },
+        { ...sampleAction, id: "instagram.send_message", service: "instagram" },
+      ],
+    });
     const settings = new IntegrationProviderSettings(prisma, f.secrets, "fixture", {
       "open-connector": f.adapter,
     });
@@ -222,7 +234,8 @@ it.skipIf(!enabled)(
       const bot = await prisma.bot.findFirstOrThrow({
         where: { userId: local.userId, spaceId: local.spaceId },
       });
-      const deps = { prisma, secrets: f.secrets, integrations: localSettings };
+      const jobs = { enqueue: vi.fn(async () => undefined) } as unknown as JobPublisher;
+      const deps = { prisma, secrets: f.secrets, integrations: localSettings, jobs };
       const input = {
         connectionId: localAccount.id,
         botId: bot.id,
@@ -231,6 +244,7 @@ it.skipIf(!enabled)(
       await expect(setupCustomerIncoming(deps, bob, input)).rejects.toThrow();
       await expect(setupCustomerIncoming(deps, local, input)).rejects.toThrow("Lost response");
       const provisioned = await setupCustomerIncoming(deps, local, input);
+      expect(provisioned.replySetupError).toBe("Choose a model for the assigned staff first.");
       await setupCustomerIncoming(deps, local, input);
       expect([...created.values()].map((rows) => rows.length)).toEqual([1, 1, 1]);
       const route = await prisma.gatewayRoute.findFirstOrThrow({
@@ -279,7 +293,6 @@ it.skipIf(!enabled)(
       const acknowledge = vi
         .spyOn(client, "acknowledge")
         .mockRejectedValueOnce(new Error("Disconnected after local commit"));
-      const jobs = { enqueue: vi.fn(async () => undefined) } as unknown as JobPublisher;
       await receiveCustomerRelayBatch({ ...deps, jobs }, signal);
       expect(
         await prisma.customerMessage.count({
@@ -331,12 +344,128 @@ it.skipIf(!enabled)(
         texts: ["Manual reply"],
       });
       await expect(gateway.revokeRuntime(bob, aliceKey.id)).rejects.toThrow();
+      const managedId = "incoming-webhook:instagram";
+      await prisma.integrationProviderConfig.create({
+        data: {
+          id: managedId,
+          ciphertext: f.secrets.seal(
+            JSON.stringify({
+              appSecret: "fixture-instagram-signing",
+              verifyToken: "fixture-instagram-verify",
+            }),
+            managedId,
+          ),
+        },
+      });
+      const ig = z.object({ state: z.string() }).parse(
+        await command(aliceKey.token, {
+          op: "begin",
+          provider: "instagram",
+          credential: "fixture-instagram-token",
+        }),
+      );
+      const igAccount = await prisma.connection.create({
+        data: {
+          spaceId: local.spaceId,
+          userId: local.userId,
+          provider: "instagram",
+          connectorId: "open-connector",
+          displayName: "Instagram",
+          providerRef: ig.state,
+          status: "connected",
+        },
+      });
+      const igChannel = await setupCustomerIncoming(deps, local, {
+        connectionId: igAccount.id,
+        botId: bot.id,
+        secrets: {},
+      });
+      const igRoute = await prisma.gatewayRoute.findFirstOrThrow({
+        where: { channelId: igChannel.id },
+      });
+      await gateway.challenge(igRoute.id, "fixture-instagram-verify");
+      // A runtime cannot change the operator's signature verification, even by supplying secrets.
+      await command(aliceKey.token, {
+        op: "incoming",
+        ref: ig.state,
+        channelId: igChannel.id,
+        webhookSecret: "attacker",
+        verificationToken: "attacker",
+        verification: { header: "authorization", algorithm: "token" },
+      });
+      await expect(gateway.challenge(igRoute.id, "attacker")).rejects.toThrow();
+      const igRaw = JSON.stringify({
+        entry: [
+          {
+            id: "instagram-account",
+            messaging: [
+              {
+                sender: { id: "instagram-customer" },
+                recipient: { id: "instagram-account" },
+                timestamp: Date.now() + 1000,
+                message: { mid: "fixture-instagram-message", text: "Instagram DM" },
+              },
+            ],
+          },
+        ],
+      });
+      const igHeaders = new Headers({
+        "x-hub-signature-256": `sha256=${createHmac("sha256", "fixture-instagram-signing").update(igRaw).digest("hex")}`,
+      });
+      await gateway.receiveWebhook(igRoute.id, igHeaders, igRaw);
+      await receiveCustomerRelayBatch({ ...deps, jobs }, signal);
+      expect(
+        await prisma.customerMessage.count({
+          where: { conversation: { channelId: igChannel.id } },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.secret.count({
+          where: { id: { startsWith: `customer-webhook:${igChannel.id}:` } },
+        }),
+      ).toBe(0);
+      const directInput = {
+        op: "incoming",
+        ref: first.state,
+        channelId: "fixture-direct-channel",
+        webhookSecret: "fixture-signing",
+        verificationToken: "fixture-verify",
+        verification: {
+          header: "x-hub-signature-256",
+          algorithm: "sha256",
+          encoding: "hex",
+          prefix: "sha256=",
+        },
+      };
+      const direct = z
+        .object({ id: z.string(), webhookUrl: z.string() })
+        .parse(await command(aliceKey.token, directInput));
+      expect(direct.webhookUrl).toBe(
+        `https://gateway.example.test/api/integration-gateway/webhook/${direct.id}`,
+      );
+      expect(await command(aliceKey.token, directInput)).toEqual(direct);
+      await expect(
+        command(aliceKey.token, { ...directInput, verificationToken: "changed" }),
+      ).rejects.toThrow();
+      await gateway.challenge(direct.id, "fixture-verify");
+      await expect(gateway.challenge(direct.id, "wrong")).rejects.toThrow();
+      const directHeaders = new Headers({
+        "x-hub-signature-256": `sha256=${createHmac("sha256", "fixture-signing").update(raw).digest("hex")}`,
+      });
+      await gateway.receiveWebhook(direct.id, directHeaders, raw);
+      await gateway.receiveWebhook(direct.id, directHeaders, raw);
+      expect(await prisma.gatewayDelivery.count({ where: { routeId: direct.id } })).toBe(1);
+      expect(await command(bobKey.token, { op: "deliveries" })).toEqual([]);
+      expect([...created.values()].map((rows) => rows.length)).toEqual([1, 1, 1]);
       await gateway.revokeRuntime(alice, aliceKey.id);
+      await expect(gateway.receiveWebhook(direct.id, directHeaders, raw)).rejects.toThrow();
       await expect(command(aliceKey.token, { op: "catalog" })).rejects.toThrow();
       await expect(gateway.receive(route.id, deliveryToken, raw)).rejects.toThrow();
     } finally {
       vi.unstubAllGlobals();
-      await prisma.integrationProviderConfig.deleteMany({ where: { id: "integration-gateway" } });
+      await prisma.integrationProviderConfig.deleteMany({
+        where: { id: { in: ["integration-gateway", "incoming-webhook:instagram"] } },
+      });
       await prisma.gatewayRuntime.deleteMany({
         where: { userId: { in: [alice.userId, bob.userId] } },
       });
