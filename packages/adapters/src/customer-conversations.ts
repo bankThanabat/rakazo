@@ -622,7 +622,7 @@ export function createCustomerConversations(deps: {
         });
       }
     },
-    async manage(
+    manage: async function manage(
       actor: Pick<Actor, "userId" | "spaceId">,
       botId: string,
       operation: string,
@@ -760,11 +760,15 @@ export function createCustomerConversations(deps: {
       }
       if (operation === "channel") {
         const { id, autoReplies, ...settings } = CustomerChannelSettingsInput.parse(args);
+        const where = { id, botId, userId: actor.userId, spaceId: actor.spaceId };
+        if (autoReplies) {
+          if (!(await prisma.customerChannel.findFirst({ where }))) throw new IsolationError();
+          // Publish before taking the channel lock; recheck ownership in the transaction.
+          await manage(actor, botId, "initialize", {});
+        }
         await prisma.$transaction(async (tx) => {
           await tx.$queryRaw`SELECT id FROM customer_channels WHERE id = ${id} FOR UPDATE`;
-          const channel = await tx.customerChannel.findFirst({
-            where: { id, botId, userId: actor.userId, spaceId: actor.spaceId },
-          });
+          const channel = await tx.customerChannel.findFirst({ where });
           if (!channel) throw new IsolationError();
           if (autoReplies !== undefined) await setCustomerChannelReplies(tx, channel, autoReplies);
           await tx.customerChannel.update({ where: { id }, data: settings });

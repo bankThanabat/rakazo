@@ -293,7 +293,7 @@ it.skipIf(!enabled)(
       const acknowledge = vi
         .spyOn(client, "acknowledge")
         .mockRejectedValueOnce(new Error("Disconnected after local commit"));
-      await receiveCustomerRelayBatch({ ...deps, jobs }, signal);
+      await receiveCustomerRelayBatch(deps, signal);
       expect(
         await prisma.customerMessage.count({
           where: { conversation: { channelId: provisioned.id } },
@@ -307,7 +307,7 @@ it.skipIf(!enabled)(
         where: { routeId: route.id },
         data: { nextAttemptAt: new Date(0) },
       });
-      await receiveCustomerRelayBatch({ ...deps, jobs }, signal);
+      await receiveCustomerRelayBatch(deps, signal);
       expect(
         await prisma.customerMessage.count({
           where: { conversation: { channelId: provisioned.id } },
@@ -413,7 +413,7 @@ it.skipIf(!enabled)(
         "x-hub-signature-256": `sha256=${createHmac("sha256", "fixture-instagram-signing").update(igRaw).digest("hex")}`,
       });
       await gateway.receiveWebhook(igRoute.id, igHeaders, igRaw);
-      await receiveCustomerRelayBatch({ ...deps, jobs }, signal);
+      await receiveCustomerRelayBatch(deps, signal);
       expect(
         await prisma.customerMessage.count({
           where: { conversation: { channelId: igChannel.id } },

@@ -136,9 +136,6 @@ routes. Do not replace an existing shared callback when adding another account.
 Shared-app onboarding needs authenticated account routing and subscription lifecycle
 support before serving multiple independent accounts.
 
-Run `pnpm exec tsx scripts/verify-instagram-gateway.mts` for isolated gateway tests.
-It creates and drops a disposable local database; it refuses remote database hosts.
-
 ## Receiving versus replying
 
 New incoming channels receive messages with conversation ownership set to staff.

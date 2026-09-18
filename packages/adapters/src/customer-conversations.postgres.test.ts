@@ -285,9 +285,16 @@ describe.skipIf(!enabled)(
           instructions: "Private staff instructions must not reach customers",
         },
       });
-      await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
-        "Choose a model",
-      );
+      await db.prisma.customerChannel.update({
+        where: { id: a.channel.id },
+        data: { botId: bot.id, autoReplies: false },
+      });
+      const enableReplies = () =>
+        service.manage(a.owner, bot.id, "channel", { id: a.channel.id, autoReplies: true });
+      await expect(
+        service.manage(a.owner, bot.id, "channel", { id: a.channel.id, autoReplies: false }),
+      ).resolves.toEqual({ ok: true });
+      await expect(enableReplies()).rejects.toThrow("Choose a model");
       await db.prisma.spaceModelPreference.create({
         data: {
           userId: a.owner.userId,
@@ -297,9 +304,7 @@ describe.skipIf(!enabled)(
           isDefault: true,
         },
       });
-      await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
-        "server operator",
-      );
+      await expect(enableReplies()).rejects.toThrow("server operator");
       await db.prisma.integrationProviderConfig.create({
         data: {
           id: customerReplyDefaultsId,
@@ -315,19 +320,31 @@ describe.skipIf(!enabled)(
       try {
         const b = await setup();
         await expect(service.manage(b.owner, bot.id, "initialize", {})).rejects.toThrow();
+        const beforeDenied = flowOrdinal;
+        await expect(
+          service.manage(a.owner, bot.id, "channel", { id: b.channel.id, autoReplies: true }),
+        ).rejects.toThrow();
+        expect(flowOrdinal).toBe(beforeDenied);
         failPublish = true;
-        await expect(service.manage(a.owner, bot.id, "initialize", {})).rejects.toThrow(
-          "Reply service offline",
-        );
+        await expect(enableReplies()).rejects.toThrow("Reply service offline");
         expect(
           await db.prisma.customerBehavior.findUnique({ where: { botId: bot.id } }),
         ).toBeNull();
+        expect(
+          await db.prisma.customerChannel.findUniqueOrThrow({ where: { id: a.channel.id } }),
+        ).toMatchObject({ enabled: true, autoReplies: false });
         failPublish = false;
-        const [initialized, concurrent] = await Promise.all([
-          service.manage(a.owner, bot.id, "initialize", {}),
+        const [enabled, initialized] = await Promise.all([
+          enableReplies(),
           service.manage(a.owner, bot.id, "initialize", {}),
         ]);
-        expect(concurrent).toEqual(initialized);
+        expect(enabled).toEqual({ ok: true });
+        expect(
+          await db.prisma.customerBehavior.findUniqueOrThrow({ where: { botId: bot.id } }),
+        ).toEqual(initialized);
+        expect(
+          await db.prisma.customerChannel.findUniqueOrThrow({ where: { id: a.channel.id } }),
+        ).toMatchObject({ autoReplies: true });
         expect(initialized).toMatchObject({
           instructions: defaultCustomerInstructions,
           modelCredentialId: behavior.modelCredentialId,
@@ -353,6 +370,12 @@ describe.skipIf(!enabled)(
           where: { botId: bot.id },
         });
         const publications = flowOrdinal;
+        failPublish = true;
+        await service.manage(a.owner, bot.id, "channel", {
+          id: a.channel.id,
+          autoReplies: false,
+        });
+        await enableReplies();
         expect(await service.manage(a.owner, bot.id, "initialize", {})).toEqual(customized);
         expect(flowOrdinal).toBe(publications);
         expect(await service.manage(a.owner, a.owner.botId, "initialize", {})).toEqual(behavior);

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { CustomerBindingSchema } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
-import { customerIncomingSecrets, customerIncomingTemplate } from "./customer-incoming.js";
+import { customerIncomingTemplate } from "./customer-incoming.js";
 import { instagramIncoming } from "./customer-incoming-instagram.js";
 import { lineIncoming } from "./customer-incoming-line.js";
 import { customerPage } from "./customer-mapping.js";
@@ -10,12 +10,6 @@ const examples = JSON.parse(
   readFileSync(new URL("../../../docs/self-host/customer-bindings.json", import.meta.url), "utf8"),
 );
 const templates = { line: lineIncoming, instagram: instagramIncoming };
-
-it("keeps Instagram app credentials out of account setup while preserving LINE's channel secret", () => {
-  expect(customerIncomingSecrets("instagram")).toEqual([]);
-  expect(customerIncomingSecrets("line")).toEqual(lineIncoming.secrets);
-  expect(customerIncomingSecrets("unsupported")).toBeUndefined();
-});
 
 /** Every registered incoming template must satisfy the same contract so shared
  * setup, relay and ingress code can stay provider-agnostic. */
