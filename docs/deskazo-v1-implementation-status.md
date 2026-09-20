@@ -315,10 +315,10 @@ journeys or the detailed requirements elsewhere in the specification.
 | 1. New business setup | Guided entry choices, managed preparation, private practice and website activation are implemented. The combined app/Pi/Langflow journey passes with scripted model decisions and seeded knowledge. | Run model-led setup with the selected merchant accounts, authorized history or fallback examples, actual product sources and owner review, without developer intervention. Validate a real LINE OA CSV layout. |
 | 2. Grounded chat and comments | Private subscription replies follow actual WooCommerce price changes through an approved read-only workflow. Website delivery passes through real Langflow; public/private separation and Instagram send receipts also have offline coverage. | Demonstrate current SKU/promotion answers and public-safe comment delivery on the selected store and social accounts. |
 | 3. Steering, learning and undo | A controlled live Luna journey exercised correction, voice learning, later application and undo/rejection. Database and client checks cover private memory, skills, review and reversal. | Repeat on real provider conversations with the merchant's conditions, audit evidence and restored subsequent behavior. Broader semantic quality remains model-dependent. |
-| 4. Human attention and takeover | Inbox controls pass on web, iOS and Android. Backend tests cover assignment, reminders, quiet hours, acknowledgement and delivery failures. Two live Jev cases and earlier playground samples exist. | Verify real channel takeover without double replies, linked LINE alert delivery and broader Thai/English Jev cases, including owner-configured criteria. |
+| 4. Human attention and takeover | Inbox controls pass on web, iOS and Android. Actual local website requests now pass staff handoff, acknowledgement, one staff reply under retry, and explicit subscription-model resume. Backend tests cover assignment, reminders, quiet hours and delivery failures. Two live Jev cases and earlier playground samples exist. | Verify selected social-channel takeover without double replies, linked LINE alert delivery and broader Thai/English Jev cases, including owner-configured criteria. |
 | 5. Purchase and configured records | Owned Docker WooCommerce now passes Deskazo backend checkout with authenticated website confirmation, cross-visitor rejection, lost-response reconciliation and retry blocking. Offline tests cover staff approvals and downstream deduplication. | Select the real pilot store and optional record/invoice destinations; verify actual payment/order facts, mappings, authorization, readback and interrupted-request recovery. No store or Sheets connection is configured on the inspected hosted connector. |
 | 6. New social content and voice exceptions | Instagram caption, reply and opted-in DM learning have offline coverage, including privacy, authorship review, exceptions and shared pacing. The required connector history actions are now deployed. | Demonstrate an authorized content update with real provider permissions. Confirm bot exceptions and commercial rules remain unchanged. |
-| 7. Failure and recovery | A real local WooCommerce checkout response was deliberately dropped; Deskazo held the purchase uncertain and recovered the exact order without resubmission. Revoking a disposable local connection token now denies reads; explicit app reconnection restores access, and app revocation removes the remote account without affecting the primary grant. Offline tests cover interrupted work; disposable deployment checks cover failed migrations and update recovery. | Demonstrate selected merchant connection, knowledge and worker failures without fabricated answers or duplicated provider actions. Local token revocation is not OAuth expiry or worker-death acceptance. |
+| 7. Failure and recovery | A real local WooCommerce checkout response was deliberately dropped; Deskazo held the purchase uncertain and recovered the exact order without resubmission. Revoking a disposable local connection token denies reads; explicit app reconnection restores access, and app revocation removes the remote account without affecting the primary grant. Killing the owned customer worker during processing now produces an uncertain event and staff handoff after actual lease expiry; explicit resume delivers one grounded reply. | Demonstrate selected merchant connection, knowledge and worker failures without fabricated answers or duplicated provider actions. Local token revocation is not OAuth expiry; the worker check interrupted processing before a provider call, not a merchant write. |
 
 | Supporting area | Verified scope and remaining acceptance |
 | --- | --- |
@@ -4490,3 +4490,43 @@ This clears the hosted currency rollout hold. Actual merchant store setup,
 authorized LINE test recipients, customer delivery, payment and the other real
 V1 acceptance journeys remain open. Browser work continues to use Chrome for
 LINE and Firefox for other services.
+
+### Live website handoff and worker interruption (2026-09-20)
+
+The staff subscription agent created an explicitly approved website channel
+restricted to the owned loopback test origin. Existing customer behavior, product
+read permission and voice documents remained unchanged. Normal visitor and staff
+HTTP routes then exercised the running worker, Langflow and ChatGPT subscription
+against the owned WooCommerce store. No model or customer runtime was substituted.
+
+The visitor received a current SKU, THB price and availability reply. Explicit
+handoff created an actionable staff inbox case and stopped automatic replies to
+a subsequent customer message. Staff acknowledgement and a reply reached the
+visitor. Explicit handback enabled a second grounded reply. Duplicate customer
+and staff submissions reused their request identities and remained single events.
+Two completed product reads support the two bot replies.
+
+A first interruption observer used an unprefixed request nonce instead of the
+stored `in:` message identity. Its completed-reply guard stopped it without
+killing the worker; that normal reply and failed test receipt are retained.
+The corrected observer killed only the verified detached test worker while the
+exact customer event was processing. The API, web and computer-supervisor process
+IDs were unchanged. After the real two-minute lease expired, the application
+marked the event `execution_uncertain`, raised staff attention and sent no bot
+reply for that event. No provider action had been called for the interrupted
+event. Staff acknowledgement and explicit handback then delivered one new
+grounded reply, while replaying the interrupted request remained a single event.
+
+The staff agent subsequently disconnected the test channel. Visitor access now
+returns 403, the transcript remains inspectable, and no customer lease, staff run
+or enabled channel remains for the tested bot. The voice and behavior match their
+starting state, and the exercise created no learning task or purchase action.
+
+`scripts/verify-customer-website.mts` reproduces the prepared website journey.
+`scripts/verify-customer-worker-recovery.mts` packages the preserved fault runner
+with explicit interruption opt-in and fixture guards. Its CLI and disabled-channel
+refusal were checked; the live fault run used the preserved precursor. Private
+receipts and that exact runner are under `test-report/deskazo-v1/checks/website-handoff/`.
+The Mac remained locked, so this checkpoint proves HTTP/worker delivery rather
+than rendered Firefox behavior. It does not establish LINE/Instagram delivery,
+Jev semantic quality, interrupted merchant writes or complete merchant acceptance.
