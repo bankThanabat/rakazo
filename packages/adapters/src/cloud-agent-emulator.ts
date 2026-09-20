@@ -51,6 +51,10 @@ export class EmulatorCloudAgentProvider implements CloudAgentProvider {
     return this.startRun(agent);
   }
 
+  async recoverLaunch(idempotencyKey: string, context: AdapterContext) {
+    return this.get(`emu-agent-${idempotencyKey}`, context);
+  }
+
   async get(id: string, context: AdapterContext, runId?: string) {
     context.signal.throwIfAborted();
     const agent = this.require(id);

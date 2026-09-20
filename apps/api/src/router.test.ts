@@ -602,6 +602,7 @@ describe("computer screen url", () => {
 
   const callScreenUrl = async (connectScreen: () => Promise<unknown>, updateMany = vi.fn()) => {
     const prisma = {
+      spaceMember: { findFirst: vi.fn().mockResolvedValue({ id: "membership-1" }) },
       bot: {
         findFirst: vi.fn().mockResolvedValue({
           id: "bot-1",
@@ -633,7 +634,7 @@ describe("computer screen url", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ json: { botId: "bot-1" } }),
       }),
-      { prefix: "/rpc", context: { actor } },
+      { prefix: "/rpc", context: { actor, sessionId: "session-1" } },
     );
     return { response, updateMany };
   };
@@ -648,6 +649,10 @@ describe("computer screen url", () => {
     expect(url.origin).toBe("http://127.0.0.1:5173");
     expect(openScreenCapability(url.pathname, "fake-test-secret")).toMatchObject({
       scope: {
+        spaceId: "workspace-1",
+        userId: "user-1",
+        sessionId: "session-1",
+        membershipId: "membership-1",
         botId: "bot-1",
         computerId: "computer-1",
         botGeneration: 2,

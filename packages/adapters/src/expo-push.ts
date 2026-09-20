@@ -5,7 +5,9 @@ import type {
   AdapterContext,
   NotificationMessage,
   NotificationProvider,
+  NotificationResult,
 } from "@rakazo/adapter-kit";
+import { NotificationDeliveryError } from "@rakazo/adapter-kit";
 import { getLogger } from "@rakazo/logging";
 import { combineSignals } from "./connector-safety.js";
 import { readBodyCapped, withAbort } from "./web-ssrf.js";
@@ -55,6 +57,7 @@ export async function deletePushToken(dataDir: string, userId: string): Promise<
 }
 
 export type ExpoPushTicket = {
+  id?: string;
   status?: string;
   message?: string;
   details?: { error?: string };
@@ -99,9 +102,9 @@ export class ExpoPushProvider implements NotificationProvider {
     };
   }
 
-  async send(message: NotificationMessage, context: AdapterContext): Promise<void> {
+  async send(message: NotificationMessage, context: AdapterContext): Promise<NotificationResult> {
     const token = await loadPushToken(this.dataDir, context.userId);
-    if (!token) return;
+    if (!token) return { status: "skipped" };
     const signal = combineSignals(context.signal, AbortSignal.timeout(EXPO_PUSH_TIMEOUT_MS));
     let response: Response;
     try {
@@ -133,9 +136,28 @@ export class ExpoPushProvider implements NotificationProvider {
       throw new Error("Expo push returned an invalid response.");
     }
     const failure = expoPushErrorMessage(body, response.status);
-    if (!failure) return;
-    getLogger().error(failure);
-    throw new Error(failure);
+    if (failure) {
+      getLogger().error(failure);
+      const rejected = response.status >= 400 && response.status < 500 && response.status !== 408;
+      const tickets = expoPushTickets(body);
+      const rejectedTicket = response.ok && tickets.length === 1 && tickets[0]?.status === "error";
+      throw new NotificationDeliveryError(
+        failure,
+        rejected || rejectedTicket ? "rejected" : "uncertain",
+        response.status === 429 ||
+          (rejectedTicket && tickets[0]?.details?.error === "MessageRateExceeded"),
+      );
+    }
+    const tickets = expoPushTickets(body);
+    const ticket = tickets[0];
+    if (
+      tickets.length !== 1 ||
+      ticket?.status !== "ok" ||
+      typeof ticket.id !== "string" ||
+      !ticket.id
+    )
+      throw new NotificationDeliveryError("Expo push returned an invalid ticket.", "uncertain");
+    return { status: "accepted", reference: ticket.id };
   }
 }
 

@@ -1,10 +1,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { AgentRuntimeEvent } from "@rakazo/adapter-kit";
 import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import { createThreadEvents, createThreadMessage, loadRunHistoryMessages } from "@rakazo/db";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { createApp } from "../../../apps/api/src/app.ts";
+import { ComputerBrowserProvider } from "../../adapters/src/computer-browser.js";
+import { startModelEmulator } from "./model-emulator.js";
 
 process.env.WAKEUP_DRIVER = "memory";
 process.env.SANDBOX_PROVIDER = "fake";
@@ -90,10 +93,305 @@ describeIntegration("run executor lifecycle", () => {
     ).resolves.toMatchObject({ status });
   });
 
+  it.each(["queued", "running"])(
+    "does not execute a %s run after Space membership is removed",
+    async (status) => {
+      const seeded = await seedRun(`removed-member-${status}`, "write a destination record", {
+        status,
+        ...(status === "running"
+          ? { leaseOwner: "expired-worker", leaseFence: 4, leaseExpiresAt: new Date(0) }
+          : {}),
+      });
+      await handles.prisma.spaceMember.delete({
+        where: {
+          spaceId_userId: {
+            spaceId: seeded.me.spaceId,
+            userId: seeded.me.userId,
+          },
+        },
+      });
+      const recordsBefore = handles.connector.records.length;
+      await handles.executor.continueRun(seeded.run.id, "late-worker");
+      const stopped = await handles.prisma.run.findUniqueOrThrow({ where: { id: seeded.run.id } });
+      expect({ status: stopped.status, error: stopped.error }).toEqual({
+        status: "cancelled",
+        error: null,
+      });
+      expect(await handles.prisma.attempt.count({ where: { runId: seeded.run.id } })).toBe(0);
+      expect(handles.connector.records).toHaveLength(recordsBefore);
+    },
+  );
+
+  it.each(["model work", "tool preparation", "effect claim"])(
+    "does not dispatch a tool after membership is revoked during %s",
+    async (stage) => {
+      const seeded = await seedRun(
+        `removed-during-${stage.replaceAll(" ", "-")}`,
+        "write a destination record",
+      );
+      await handles.prisma.actionApprovalRule.create({
+        data: {
+          spaceId: seeded.me.spaceId,
+          createdByUserId: seeded.me.userId,
+          effect: "allow",
+          matchKind: "tool",
+          matchValue: "destination.write",
+        },
+      });
+      const model = await startModelEmulator({ apiKey: "synthetic-model-key", steps: [] });
+      const descriptor = handles.runtime.describe();
+      const describeRuntime = vi.spyOn(handles.runtime, "describe").mockReturnValue({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, scripted: false },
+      });
+      let restoreEffect = () => {};
+      const revoke = () =>
+        handles.prisma.spaceMember.delete({
+          where: { spaceId_userId: { spaceId: seeded.me.spaceId, userId: seeded.me.userId } },
+        });
+      const runtime = vi
+        .spyOn(handles.runtime, "run")
+        .mockImplementationOnce(async function* (request): AsyncIterable<AgentRuntimeEvent> {
+          expect(request.executeTool).toBeTypeOf("function");
+          if (stage === "model work") await revoke();
+          else if (stage === "effect claim") {
+            const update = handles.prisma.externalEffect.updateMany.bind(
+              handles.prisma.externalEffect,
+            );
+            const spy = vi
+              .spyOn(handles.prisma.externalEffect, "updateMany")
+              .mockImplementation((async (args) => {
+                const result = await update(args);
+                if (args.data.status === "executing" && result.count === 1) await revoke();
+                return result;
+              }) as typeof update);
+            restoreEffect = () => spy.mockRestore();
+          } else {
+            const create = handles.prisma.externalEffect.create.bind(handles.prisma.externalEffect);
+            const spy = vi
+              .spyOn(handles.prisma.externalEffect, "create")
+              .mockImplementationOnce((async (args) => {
+                const result = await create(args);
+                await revoke();
+                return result;
+              }) as typeof create);
+            restoreEffect = () => spy.mockRestore();
+          }
+          await request.executeTool!(
+            "destination.write",
+            { collection: "notes", title: "Revoked write", body: "Must not dispatch" },
+            "revoked-tool",
+          );
+          yield { type: "done", text: "Done" };
+        });
+      const recordsBefore = handles.connector.records.length;
+      try {
+        await rpc(seeded.cookie, "models/connect", {
+          provider: model.model.provider,
+          modelId: model.model.id,
+          baseUrl: model.baseUrl,
+          apiKey: "synthetic-model-key",
+        });
+        await handles.executor.continueRun(seeded.run.id, "active-worker");
+        expect(runtime).toHaveBeenCalledOnce();
+        expect(handles.connector.records).toHaveLength(recordsBefore);
+        const stopped = await handles.prisma.run.findUniqueOrThrow({
+          where: { id: seeded.run.id },
+        });
+        expect({ status: stopped.status, error: stopped.error }).toEqual({
+          status: "cancelled",
+          error: null,
+        });
+      } finally {
+        restoreEffect();
+        runtime.mockRestore();
+        describeRuntime.mockRestore();
+        await model.close();
+      }
+    },
+  );
+
+  describe.each([
+    ["computer_observe", {}],
+    ["computer_act", { actions: [{ kind: "type", text: "synthetic input" }], observe: false }],
+    ["browser_navigate", { url: "https://example.test" }],
+    ["browser_snapshot", {}],
+    ["browser_act", { actions: [{ kind: "click", ref: "e1" }] }],
+  ] as const)("%s after teaching lookup", (toolName, toolArgs) => {
+    it.each(["active", "member removed", "stopped", "lease replaced"])(
+      "dispatches only while authorized: %s",
+      async (state) => {
+        const revoked = state !== "active";
+        const runStatus =
+          state === "member removed" || state === "stopped" ? "cancelled" : "running";
+        const seeded = await seedRun(
+          `${toolName}-${state.replaceAll(" ", "-")}`,
+          "use the computer",
+        );
+        await handles.prisma.actionApprovalRule.create({
+          data: {
+            spaceId: seeded.me.spaceId,
+            createdByUserId: seeded.me.userId,
+            effect: "allow",
+            matchKind: "tool",
+            matchValue: toolName,
+          },
+        });
+        const model = await startModelEmulator({ apiKey: "synthetic-model-key", steps: [] });
+        const descriptor = handles.runtime.describe();
+        const describeRuntime = vi.spyOn(handles.runtime, "describe").mockReturnValue({
+          ...descriptor,
+          capabilities: { ...descriptor.capabilities, scripted: false },
+        });
+        // Count provider dispatch, using synthetic browser results to avoid network access.
+        const dispatch = {
+          computer_observe: vi.spyOn(handles.sandbox, "observe"),
+          computer_act: vi.spyOn(handles.sandbox, "act"),
+          browser_navigate: vi
+            .spyOn(ComputerBrowserProvider.prototype, "navigate")
+            .mockResolvedValue({ url: "https://example.test", title: "Synthetic" }),
+          browser_snapshot: vi
+            .spyOn(ComputerBrowserProvider.prototype, "snapshot")
+            .mockResolvedValue({
+              url: "https://example.test",
+              title: "Synthetic",
+              tree: "",
+              elements: [],
+            }),
+          browser_act: vi.spyOn(ComputerBrowserProvider.prototype, "act").mockResolvedValue({
+            ok: true,
+            completed: 1,
+            url: "https://example.test",
+            title: "Synthetic",
+          }),
+        };
+        let restoreLookup = () => {};
+        let lookupReturned = false;
+        const runtime = vi
+          .spyOn(handles.runtime, "run")
+          .mockImplementationOnce(async function* (request): AsyncIterable<AgentRuntimeEvent> {
+            dispatch[toolName].mockClear();
+            const find = handles.prisma.taughtSkill.findFirst.bind(handles.prisma.taughtSkill);
+            const lookup = vi
+              .spyOn(handles.prisma.taughtSkill, "findFirst")
+              .mockImplementationOnce((async (args) => {
+                const result = await find(args);
+                expect(result).toBeNull();
+                if (state === "member removed") {
+                  await handles.prisma.spaceMember.delete({
+                    where: {
+                      spaceId_userId: { spaceId: seeded.me.spaceId, userId: seeded.me.userId },
+                    },
+                  });
+                }
+                if (state === "stopped") {
+                  await rpc(seeded.cookie, "threads/stop", { botId: seeded.bot.id });
+                }
+                if (state === "lease replaced") {
+                  await handles.prisma.run.update({
+                    where: { id: seeded.run.id },
+                    data: { leaseOwner: "replacement-worker", leaseFence: { increment: 1 } },
+                  });
+                }
+                const current = await handles.prisma.run.findUniqueOrThrow({
+                  where: { id: seeded.run.id },
+                });
+                expect(current.status).toBe(runStatus);
+                lookupReturned = true;
+                return result;
+              }) as typeof find);
+            restoreLookup = () => lookup.mockRestore();
+            await request.executeTool!(toolName, toolArgs, "computer-revocation-tool");
+            yield { type: "done", text: "Done" };
+          });
+        try {
+          await rpc(seeded.cookie, "models/connect", {
+            provider: model.model.provider,
+            modelId: model.model.id,
+            baseUrl: model.baseUrl,
+            apiKey: "synthetic-model-key",
+            supportsImages: true,
+          });
+          await handles.executor.continueRun(seeded.run.id, "computer-worker");
+          expect(runtime).toHaveBeenCalledOnce();
+          expect(lookupReturned).toBe(true);
+          expect(dispatch[toolName]).toHaveBeenCalledTimes(revoked ? 0 : 1);
+          const stopped = await handles.prisma.run.findUniqueOrThrow({
+            where: { id: seeded.run.id },
+          });
+          expect({ status: stopped.status, error: stopped.error }).toEqual({
+            status: revoked ? runStatus : "completed",
+            error: null,
+          });
+        } finally {
+          restoreLookup();
+          for (const spy of Object.values(dispatch)) spy.mockRestore();
+          runtime.mockRestore();
+          describeRuntime.mockRestore();
+          await model.close();
+        }
+      },
+    );
+  });
+
+  it("revokes work through the authenticated organization leave route without revoking another Space", async () => {
+    const leaving = await seedRun("leaving-organization", "write a destination record");
+    const remaining = await seedRun("remaining-organization", "write a destination record");
+    const a = await handles.prisma.space.findUniqueOrThrow({ where: { id: leaving.me.spaceId } });
+    const b = await handles.prisma.space.findUniqueOrThrow({ where: { id: remaining.me.spaceId } });
+    await handles.prisma.member.create({
+      data: {
+        id: `peer-${a.id}`,
+        organizationId: a.organizationId,
+        userId: remaining.me.userId,
+        role: "owner",
+        createdAt: new Date(),
+      },
+    });
+    await handles.prisma.member.create({
+      data: {
+        id: `peer-${b.id}`,
+        organizationId: b.organizationId,
+        userId: leaving.me.userId,
+        role: "member",
+        createdAt: new Date(),
+      },
+    });
+    const headers = {
+      "content-type": "application/json",
+      origin: "http://127.0.0.1:5173",
+      cookie: leaving.cookie,
+    };
+    const response = await handles.app.request("/api/auth/organization/leave", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ organizationId: a.organizationId }),
+    });
+    expect(response.status).toBe(200);
+    expect(
+      await handles.prisma.run.findUniqueOrThrow({ where: { id: leaving.run.id } }),
+    ).toMatchObject({ status: "cancelled" });
+    expect(
+      await handles.prisma.run.findUniqueOrThrow({ where: { id: remaining.run.id } }),
+    ).toMatchObject({ status: "queued" });
+    const revoked = await handles.app.request("/rpc/me", {
+      method: "POST",
+      headers: { ...headers, "x-rakazo-space-id": a.id },
+      body: JSON.stringify({ json: {} }),
+    });
+    expect([401, 403]).toContain(revoked.status);
+    const allowed = await handles.app.request("/rpc/me", {
+      method: "POST",
+      headers: { ...headers, "x-rakazo-space-id": b.id },
+      body: JSON.stringify({ json: {} }),
+    });
+    expect(allowed.status).toBe(200);
+  });
+
   it("records an uncertain result without replaying an interrupted external effect", async () => {
     const prompt = "write this to the destination crm as a note";
     const seeded = await seedRun("uncertain-effect", prompt);
-    const args = { collection: "notes", title: "Rakazo result", body: prompt };
+    const args = { collection: "notes", title: "Deskazo result", body: prompt };
     const executionId = approvalEffectKey(seeded.run.id, "destination.write", args);
     await handles.prisma.externalEffect.create({
       data: {
@@ -131,7 +429,7 @@ describeIntegration("run executor lifecycle", () => {
   it("recreates the approval pause when an intended effect was interrupted before the card", async () => {
     const prompt = "write this to the destination crm as a note";
     const seeded = await seedRun("interrupted-before-approval", prompt);
-    const args = { collection: "notes", title: "Rakazo result", body: prompt };
+    const args = { collection: "notes", title: "Deskazo result", body: prompt };
     const executionId = approvalEffectKey(seeded.run.id, "destination.write", args);
     const effect = await handles.prisma.externalEffect.create({
       data: {

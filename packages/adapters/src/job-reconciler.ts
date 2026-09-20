@@ -104,6 +104,7 @@ export function createJobReconciler(
     jobs: JobPublisher;
     events?: ThreadEvents;
     leadership?: ReconciliationLeadership;
+    reconcileAccountDeletions?: () => Promise<void>;
     reconcileCustomers?: () => Promise<void>;
     reconcileComputerUpdates?: () => Promise<void>;
     reconcileCloudAgents?: () => Promise<void>;
@@ -130,6 +131,7 @@ export function createJobReconciler(
           deps.reconcileCloudAgents,
           deps.reconcileComputerUpdates,
           deps.reconcileCustomers,
+          deps.reconcileAccountDeletions,
           deps.reconcileKnowledge,
         ].map(async (reconcile) => reconcile?.()),
       );

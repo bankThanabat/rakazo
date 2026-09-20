@@ -153,6 +153,7 @@ it("lists team connections and discovers tools for teammates while keeping manag
   ];
   const channel = {
     id: "customer-channel",
+    provider: "sample",
     connectionId: "team-account",
     userId: "teammate",
     spaceId: actor.spaceId,
@@ -174,7 +175,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
     return Object.entries(where).every(([key, value]) =>
       key === "OR"
         ? (value as Record<string, unknown>[]).some((branch) => matches(row, branch))
-        : row[key] === value,
+        : value && typeof value === "object" && "not" in value
+          ? row[key] !== value.not
+          : row[key] === value,
     );
   }
   const db = {
@@ -232,6 +235,9 @@ it("lists team connections and discovers tools for teammates while keeping manag
   expect((await rpc("list", {}, actor)).body.json[0].webhookUrl).toBe(
     "https://public.example.test/api/customer-events/customer-channel",
   );
+  channel.provider = "deskazo-preview";
+  expect((await rpc("list", {}, actor)).body.json[0]).not.toHaveProperty("webhookUrl");
+  channel.provider = "sample";
   expect(
     (await rpc("tools", { connectorId: "open-connector", provider: "sample" })).body.json,
   ).toEqual([expect.objectContaining({ name: "sample.send" })]);

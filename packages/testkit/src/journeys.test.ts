@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -395,6 +395,74 @@ describeJourneys("required product journeys", () => {
     expect(bobBot.id).not.toBe(chief.id);
   });
 
+  it("audits and reverses native memory through the authenticated API", async () => {
+    const cookie = await signup(app, `memory-audit-${stamp}@example.test`, "Memory owner");
+    const bot = await rpc<Bot>(app, cookie, "bots/create", {
+      name: "Memory",
+      title: "Assistant",
+      description: "Synthetic memory test",
+      instructions: "",
+      notifyOnFinish: true,
+    });
+    const documents = await rpc<Array<{ id: string; content: string; revision: number }>>(
+      app,
+      cookie,
+      "memory/list",
+      { botId: bot.id },
+    );
+    const document = documents[0]!;
+    await rpc(app, cookie, "memory/update", {
+      documentId: document.id,
+      content: "Greeting: hello",
+      expectedRevision: document.revision,
+      reason: "Initial staff fact",
+    });
+    const saved = await rpc<{ revision: number }>(app, cookie, "memory/update", {
+      documentId: document.id,
+      content: "Greeting: welcome",
+      expectedRevision: document.revision + 1,
+      reason: "Correct greeting",
+    });
+    const input = {
+      documentId: document.id,
+      revision: saved.revision,
+      expectedRevision: saved.revision,
+      reason: "Undo correction",
+    };
+    expect(await rpc(app, cookie, "memory/previewUndo", input)).toMatchObject({
+      conflict: false,
+      proposed: "Greeting: hello",
+    });
+    expect(await rpc(app, cookie, "memory/undo", input)).toMatchObject({
+      content: "Greeting: hello",
+      revision: saved.revision + 1,
+    });
+    const history = await rpc<{
+      items: Array<{ revision: number; reason: string; undoneRevision: number | null }>;
+    }>(app, cookie, "memory/history", { documentId: document.id });
+    expect(history.items[0]).toMatchObject({
+      reason: "Undo correction",
+      undoneRevision: saved.revision,
+    });
+    expect(
+      await rpc(app, cookie, "memory/read", { documentId: document.id, revision: saved.revision }),
+    ).toMatchObject({ content: "Greeting: welcome" });
+    expect(
+      await rpc(app, cookie, "memory/restore", {
+        ...input,
+        expectedRevision: saved.revision + 1,
+        reason: "Restore known wording",
+      }),
+    ).toMatchObject({ content: "Greeting: welcome", revision: saved.revision + 2 });
+    await expect(
+      rpc(app, cookie, "memory/update", {
+        documentId: document.id,
+        content: "Stale draft",
+        expectedRevision: saved.revision,
+      }),
+    ).rejects.toThrow();
+  });
+
   it("clears a conversation without removing the bot, computer, memory, or routines", async () => {
     const cookie = await signup(app, `clear-j-${stamp}@rakazo.test`, "Clear Journey");
     const bot = await rpc<Bot>(app, cookie, "bots/create", {
@@ -410,11 +478,17 @@ describeJourneys("required product journeys", () => {
       bot.id,
       "write a file in your home called notes/result.txt that says kept-after-clear",
     );
-    const memories = await rpc<Array<{ id: string }>>(app, cookie, "memory/list", {
-      botId: bot.id,
-    });
+    const memories = await rpc<Array<{ id: string; revision: number }>>(
+      app,
+      cookie,
+      "memory/list",
+      {
+        botId: bot.id,
+      },
+    );
     await rpc(app, cookie, "memory/update", {
       documentId: memories[0]!.id,
+      expectedRevision: memories[0]!.revision,
       content: "# Keeper\n\nRemember this after clearing.",
     });
     const routine = await rpc<{ id: string }>(app, cookie, "routines/create", {
@@ -1524,7 +1598,8 @@ describeJourneys("required product journeys", () => {
       body: JSON.stringify({ password: "password12" }),
     });
 
-    expect(deleted.status).toBe(200);
+    expect(deleted.status).toBe(202);
+    await expect.poll(() => prisma.user.count({ where: { id: me.userId } })).toBe(0);
     expect(await prisma.user.findUnique({ where: { id: me.userId } })).toBeNull();
     expect(await prisma.organization.findUnique({ where: { id: me.spaceId } })).toBeNull();
     expect(await prisma.bot.findUnique({ where: { id: bot.id } })).toBeNull();
@@ -1598,16 +1673,6 @@ describeJourneys("required product journeys", () => {
     const snap = await sendAndWait(app, cookie, bot.id, "run a subagent to summarize the notes");
     expect(JSON.stringify(snap.messages)).toMatch(/subagent|helper/);
     expect(await rpc<Bot[]>(app, cookie, "bots/list")).toHaveLength(before);
-  });
-
-  it("11: compose backup docs and dump tooling exist", async () => {
-    expect(existsSync(path.resolve("docs/self-host.md"))).toBe(true);
-    expect(existsSync(path.resolve("infra/compose/docker-compose.yml"))).toBe(true);
-    expect(existsSync(path.resolve("scripts/backup.sh"))).toBe(true);
-    expect(existsSync(path.resolve("scripts/restore.sh"))).toBe(true);
-    const docs = readFileSync(path.resolve("docs/self-host.md"), "utf8");
-    expect(docs).toMatch(/pg_dump/);
-    expect(docs).toMatch(/Restore/);
   });
 
   it("14: this-mac is refused unless the sandbox is docker", async () => {

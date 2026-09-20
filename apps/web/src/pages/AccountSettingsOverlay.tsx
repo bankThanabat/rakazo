@@ -52,6 +52,38 @@ export function GeneralSettingsPanels({
   );
   const [avatarPending, setAvatarPending] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [exportPending, setExportPending] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  async function exportData() {
+    if (exportPending) return;
+    setExportPending(true);
+    setExportError(null);
+    try {
+      const response = await fetch("/api/account/export", { credentials: "include" });
+      if (response.status === 413) {
+        setExportError(t`This export is too large. Ask your server administrator for help.`);
+        return;
+      }
+      if (response.status === 429) {
+        setExportError(t`An export is already running. Try again shortly.`);
+        return;
+      }
+      if (!response.ok) throw new Error("Export failed");
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "deskazo-account.jsonl";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setExportError(t`Couldn't export your data. Try again.`);
+    } finally {
+      setExportPending(false);
+    }
+  }
 
   function chooseLocale(next: UiLocale) {
     if (next === locale) return;
@@ -84,6 +116,20 @@ export function GeneralSettingsPanels({
         </h3>
         <p className="mt-3 text-[14px] text-foreground/75">{name}</p>
         {email ? <p className="mt-1 text-[13px] text-muted-foreground/70">{email}</p> : null}
+        <Button
+          variant="secondary"
+          className="mt-3"
+          disabled={exportPending}
+          aria-busy={exportPending}
+          onClick={() => void exportData()}
+        >
+          {exportPending ? <Trans>Preparing export…</Trans> : <Trans>Export data</Trans>}
+        </Button>
+        {exportError ? (
+          <p role="alert" className="mt-3 text-[13px] text-destructive">
+            {exportError}
+          </p>
+        ) : null}
       </section>
 
       <ChangePasswordSection email={email} />

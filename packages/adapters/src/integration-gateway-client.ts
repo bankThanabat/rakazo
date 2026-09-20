@@ -7,13 +7,20 @@ import type {
 } from "@rakazo/adapter-kit";
 import type {
   ConnectorAuthInput,
+  ConnectorReceipt,
+  ConnectorReceiptQuery,
   ConnectorSetup,
   GatewayCommand,
   GatewayDelivery,
   IncomingSetupResultSchema,
   WebhookVerification,
 } from "@rakazo/contracts";
-import { GatewayCommandSchema, GatewayDeliverySchema } from "@rakazo/contracts";
+import {
+  ConnectorAccountIdentitySchema,
+  ConnectorReceiptSchema,
+  GatewayCommandSchema,
+  GatewayDeliverySchema,
+} from "@rakazo/contracts";
 import { z } from "zod";
 import { readBoundedText } from "./connector-http.js";
 
@@ -72,7 +79,7 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
   listActions(
     provider: string,
     context: AdapterContext,
-  ): Promise<Array<{ name: string; description: string }>> {
+  ): ReturnType<NonNullable<ManagedConnectorProvider["listActions"]>> {
     return this.request({ op: "listActions", provider }, context.signal);
   }
   begin(
@@ -157,6 +164,32 @@ export class IntegrationGatewayClient implements ManagedConnectorProvider {
       context.signal,
     );
     yield* events;
+  }
+  async receipt(query: ConnectorReceiptQuery, context: AdapterContext): Promise<ConnectorReceipt> {
+    return ConnectorReceiptSchema.parse(
+      await this.request(
+        {
+          op: "receipt",
+          query,
+          actionAccess: context.actionAccess,
+          connections: this.connections(context),
+        },
+        context.signal,
+      ),
+    );
+  }
+  async accountIdentity(connectionId: string, context: AdapterContext) {
+    return ConnectorAccountIdentitySchema.parse(
+      await this.request(
+        {
+          op: "accountIdentity",
+          connectionId,
+          connections: this.connections(context),
+          actionAccess: context.actionAccess,
+        },
+        context.signal,
+      ),
+    );
   }
   incoming(
     ref: string,

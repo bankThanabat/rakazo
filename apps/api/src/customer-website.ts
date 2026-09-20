@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { JobPublisher } from "@rakazo/adapter-kit";
+import type { createCustomerConversations } from "@rakazo/adapters";
 import {
   CustomerHistoryInput,
   CustomerVisitorMessageInput,
@@ -17,7 +18,15 @@ class VisitorSessionError extends Error {}
 /** Public visitors receive a random, expiring capability for exactly one conversation. */
 export function mountCustomerWebsite(
   parent: Hono,
-  deps: { prisma: PrismaClient; jobs: JobPublisher; webOrigin: string },
+  deps: {
+    prisma: PrismaClient;
+    jobs: JobPublisher;
+    webOrigin: string;
+    purchases?: Pick<
+      ReturnType<typeof createCustomerConversations>,
+      "visitorPurchaseReviews" | "decideVisitorPurchaseReview"
+    >;
+  },
 ) {
   const app = new Hono();
   const { prisma } = deps;
@@ -164,6 +173,24 @@ export function mountCustomerWebsite(
     });
     await queue(id);
     return c.json({ ok: true });
+  });
+  app.get("/:channel/purchases", async (c) => {
+    const visitor = await auth(c);
+    return c.json({
+      reviews: (await deps.purchases?.visitorPurchaseReviews(visitor.tokenHash)) ?? [],
+    });
+  });
+  app.post("/:channel/purchases/decision", async (c) => {
+    const visitor = await auth(c);
+    const raw = await readBoundedBody(c.req.raw, 2000);
+    if (raw === null) return c.body(null, 413);
+    if (!deps.purchases) return c.body(null, 503);
+    const review = await deps.purchases.decideVisitorPurchaseReview(
+      visitor.tokenHash,
+      JSON.parse(raw),
+    );
+    await queue(visitor.conversationId);
+    return c.json({ review });
   });
   app.post("/:channel/handoff", async (c) => {
     const { conversation } = await auth(c);

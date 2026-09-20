@@ -10,7 +10,8 @@ import type {
   MemoryStore,
   PortableFile,
 } from "@rakazo/adapter-kit";
-import { Prisma, type PrismaClient, withTransactionRetry } from "@rakazo/db";
+import type { PrismaClient } from "@rakazo/db";
+import { commitMemory, readMemoryDocuments } from "@rakazo/db";
 
 export class MarkdownMemoryStore implements MemoryStore {
   constructor(private readonly prisma: PrismaClient) {}
@@ -25,16 +26,7 @@ export class MarkdownMemoryStore implements MemoryStore {
   }
 
   async read(request: MemoryReadRequest, context: AdapterContext): Promise<MemorySnapshot> {
-    const documents = await this.prisma.memoryDocument.findMany({
-      where: {
-        spaceId: context.spaceId,
-        userId: context.userId,
-        scope: request.scope,
-        ...(request.botId ? { botId: request.botId } : {}),
-        ...(request.path ? { path: request.path } : {}),
-      },
-      orderBy: [{ updatedAt: "desc" }, { path: "asc" }],
-    });
+    const documents = await readMemoryDocuments(this.prisma, context, request);
     return {
       documents: documents.map((doc) => ({
         id: doc.id,
@@ -50,13 +42,9 @@ export class MarkdownMemoryStore implements MemoryStore {
     request: MemorySearchRequest,
     context: AdapterContext,
   ): Promise<MemorySearchResult[]> {
-    const documents = await this.prisma.memoryDocument.findMany({
-      where: {
-        spaceId: context.spaceId,
-        userId: context.userId,
-        ...(request.scope === "all" ? {} : { scope: request.scope }),
-        ...(request.botId ? { botId: request.botId } : {}),
-      },
+    const documents = await readMemoryDocuments(this.prisma, context, {
+      scope: request.scope === "all" ? undefined : request.scope,
+      botId: request.botId,
     });
     const q = request.query.toLowerCase();
     return documents
@@ -69,60 +57,18 @@ export class MarkdownMemoryStore implements MemoryStore {
   }
 
   async commit(request: MemoryCommitRequest, context: AdapterContext): Promise<MemoryRevision> {
-    // A save replaces the current content and appends its history atomically.
-    // Conflicts retry the whole transaction so revision numbers use fresh state.
-    return withTransactionRetry(() =>
-      this.prisma.$transaction(
-        async (tx) => {
-          const existing = await tx.memoryDocument.findFirst({
-            where: {
-              spaceId: context.spaceId,
-              userId: context.userId,
-              scope: request.scope,
-              botId: request.botId ?? null,
-              path: request.path,
-            },
-          });
-          const doc = existing
-            ? await tx.memoryDocument.update({
-                where: { id: existing.id },
-                data: { content: request.content, revision: existing.revision + 1 },
-              })
-            : await tx.memoryDocument.create({
-                data: {
-                  spaceId: context.spaceId,
-                  userId: context.userId,
-                  botId: request.botId,
-                  scope: request.scope,
-                  path: request.path,
-                  content: request.content,
-                },
-              });
-          await tx.memoryRevision.create({
-            data: {
-              documentId: doc.id,
-              revision: doc.revision,
-              content: request.content,
-              sourceRunId: request.sourceRunId,
-              sourceThreadId: request.sourceThreadId,
-            },
-          });
-          return { id: doc.id, path: doc.path, revision: doc.revision, content: doc.content };
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      ),
-    );
+    return commitMemory(this.prisma, request, context);
   }
 
   async *exportMarkdown(
     request: MemoryExportRequest,
     context: AdapterContext,
   ): AsyncIterable<PortableFile> {
-    const snapshot = await this.read(
-      { scope: request.scope === "all" ? "user" : request.scope, botId: request.botId },
-      context,
-    );
-    for (const doc of snapshot.documents) {
+    const documents = await readMemoryDocuments(this.prisma, context, {
+      scope: request.scope === "all" ? undefined : request.scope,
+      botId: request.botId,
+    });
+    for (const doc of documents) {
       yield { path: doc.path, content: new TextEncoder().encode(doc.content) };
     }
   }
@@ -138,6 +84,7 @@ export class MarkdownMemoryStore implements MemoryStore {
           scope: "user",
           path: file.path,
           content: new TextDecoder().decode(file.content),
+          reason: "Imported memory file",
         },
         context,
       );

@@ -1,98 +1,64 @@
-import { expect, type Page, test } from "@playwright/test";
-import { captureScreenshot, completeOnboarding, rpc, signup } from "./helpers";
+import { expect, test } from "@playwright/test";
+import { captureScreenshot, completeOnboarding, signup } from "./helpers";
 
-function slackCard(page: Page) {
-  return page.getByRole("group", { name: "Slack connection" });
-}
-
-test("focus choice suggests apps and preserves a completed connection", async ({
-  page,
-}, testInfo) => {
-  const stamp = Date.now();
-  await signup(page, `onboarding-${stamp}@rakazo.test`, "password12", "Robin");
-  await completeOnboarding(page);
-
-  await expect(
-    page.getByText("Hey Robin. Fresh start on my side, so I’ll keep this short."),
-  ).toHaveCount(0);
-  await expect(page.getByText("What do you want me on first?", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Day-to-day work/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Research & writing/ })).toBeVisible();
-  await expect(page.getByRole("button", { name: /A bit of everything/ })).toBeVisible();
-  await page.mouse.move(1, 1);
-  await captureScreenshot(page, testInfo, "01-focus-choice");
-  await captureScreenshot(page, testInfo, "choice-card-onboarding");
-
-  await page.getByRole("button", { name: /Day-to-day work/ }).click();
-  // The focus step suggests apps but must not rename the bot: the name the
-  // user chose during creation ("Chief") is preserved.
-  await expect(page.locator("main").getByText("Chief", { exact: true })).toBeVisible();
-  await expect(page.getByPlaceholder("Message Chief")).toBeVisible();
-  await expect(page.getByText("Slack", { exact: true })).toBeVisible();
-  await expect(page.getByText("Gmail", { exact: true })).toBeVisible();
-  const connectionCards = page.getByRole("group", { name: / connection$/ });
-  await expect(connectionCards).toHaveCount(3);
-  const cardBoxes = await connectionCards.evaluateAll((cards) =>
-    cards.map((card) => {
-      const { bottom, top } = card.getBoundingClientRect();
-      return { bottom, top };
-    }),
-  );
-  expect(cardBoxes[1].top - cardBoxes[0].bottom).toBeGreaterThanOrEqual(8);
-  expect(cardBoxes[2].top - cardBoxes[1].bottom).toBeGreaterThanOrEqual(8);
-  await page
-    .getByTestId("transcript")
-    .getByText("Hit those three and I’ll start pulling the picture.")
-    .scrollIntoViewIfNeeded();
-  await page.mouse.move(1, 1);
-  await captureScreenshot(page, testInfo, "02-app-suggestions");
-  const authorizeButton = slackCard(page).getByRole("button", { name: "Authorize" });
-  const restingBackground = await authorizeButton.evaluate(
-    (button) => getComputedStyle(button).backgroundColor,
-  );
-  const accentBackground = await authorizeButton.evaluate((button) => {
-    const probe = document.createElement("span");
-    probe.style.backgroundColor = "var(--accent)";
-    button.append(probe);
-    const backgroundColor = getComputedStyle(probe).backgroundColor;
-    probe.remove();
-    return backgroundColor;
+for (const viewport of [
+  { width: 1280, height: 900 },
+  { width: 390, height: 844 },
+]) {
+  test.describe(`merchant setup at ${viewport.width}px`, () => {
+    test.use({ viewport });
+    for (const [label, question] of [
+      ["Customer replies", "Where do customers contact you, and which store do you use?"],
+      [
+        "Products & policies",
+        "Share your product catalog or policies. Which source has current prices and stock?",
+      ],
+      [
+        "My brand voice",
+        "Share a few replies your business has written, or tell me which account has them.",
+      ],
+    ]) {
+      test(`${label} collects business context and survives reload`, async ({ page }, testInfo) => {
+        await signup(
+          page,
+          `merchant-${testInfo.workerIndex}-${Date.now()}@rakazo.test`,
+          "password12",
+          "Robin",
+        );
+        await completeOnboarding(page);
+        await expect(
+          page.getByText("What would you like to set up first?", { exact: true }),
+        ).toBeVisible();
+        for (const option of ["Customer replies", "Products & policies", "My brand voice"]) {
+          await expect(page.getByRole("button", { name: new RegExp(option) })).toBeVisible();
+        }
+        await expect(page.getByRole("button", { name: /Day-to-day work/ })).toHaveCount(0);
+        await captureScreenshot(page, testInfo, "merchant-setup-choice");
+        await page.getByRole("button", { name: new RegExp(label!) }).click();
+        await expect(
+          page.getByTestId("transcript").getByText(question!, { exact: true }),
+        ).toBeVisible();
+        await expect(page.getByRole("group", { name: / connection$/ })).toHaveCount(0);
+        await expect(page.getByPlaceholder("Message Chief")).toBeVisible();
+        await captureScreenshot(page, testInfo, "merchant-setup-question");
+        await page.reload();
+        await expect(
+          page.getByTestId("transcript").getByText(question!, { exact: true }),
+        ).toHaveCount(1);
+        await expect(page.getByRole("button", { name: new RegExp(label!) })).toBeDisabled();
+        await expect(page.locator("main").getByText("Chief", { exact: true })).toBeVisible();
+        await expect
+          .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+          .toBe(true);
+      });
+    }
   });
-  expect(accentBackground).not.toBe(restingBackground);
-  await authorizeButton.hover();
-  await expect
-    .poll(() => authorizeButton.evaluate((button) => getComputedStyle(button).backgroundColor))
-    .toBe(accentBackground);
-  await captureScreenshot(page, testInfo, "02-app-suggestions-authorize-hover");
-
-  await authorizeButton.click();
-  await expect(slackCard(page).getByText("Connected", { exact: true })).toBeVisible();
-  await expect(slackCard(page).getByText("Connected", { exact: true })).toHaveCSS("opacity", "1");
-  await expect
-    .poll(async () => {
-      const connections = await rpc<Array<{ provider: string; status: string }>>(
-        page,
-        "connections/list",
-        {},
-      );
-      return connections.some(
-        (connection) => connection.provider === "SLACK" && connection.status === "connected",
-      );
-    })
-    .toBe(true);
-  await page.mouse.move(1, 1);
-  await captureScreenshot(page, testInfo, "03-slack-connected");
-
-  await page.reload();
-  await expect(slackCard(page).getByText("Connected", { exact: true })).toBeVisible();
-  await page.mouse.move(1, 1);
-  await captureScreenshot(page, testInfo, "04-connected-after-reload");
-});
+}
 
 test("choice refresh failures leave options available for retry", async ({ page }) => {
   await signup(page, `choice-refresh-${Date.now()}@rakazo.test`, "password12", "Choice Retry");
   await completeOnboarding(page);
-  const choice = page.getByRole("button", { name: /Day-to-day work/ });
+  const choice = page.getByRole("button", { name: /Customer replies/ });
   await expect(choice).toBeEnabled();
   // Keep the existing choice rendered while its save succeeds and navigation refresh fails.
   await page.route("**/rpc/onboarding/choose", (route) =>

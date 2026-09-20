@@ -14,11 +14,16 @@ on:
       - "apps/**"
       - "infra/compose/**"
       - "infra/sandboxes/computer/**"
+      - "infra/systemd/**"
       - "infra/updater/**"
       - "packages/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
+      - "scripts/deployment-backup.py"
+      - "scripts/verify-deployment-backup.py"
+      - "scripts/verify-product-recovery.py"
+      - "scripts/verify-upgrade-ordering.py"
   workflow_dispatch:
 
 permissions:
@@ -33,6 +38,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  scheduled-backup:
+    name: Linux scheduled backup and restore
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify installed service, timer and restored snapshot
+        env:
+          POSTGRES_IMAGE: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        run: |
+          docker pull "$POSTGRES_IMAGE"
+          docker build -f infra/systemd/verification.Dockerfile -t rakazo-systemd-check:ci infra/systemd
+          python3 scripts/verify-deployment-backup.py --postgres-image "$POSTGRES_IMAGE" --systemd-image rakazo-systemd-check:ci
+
   installer-smoke:
     name: Compose installer smokes
     if: github.event_name == 'pull_request'
@@ -76,11 +100,13 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.name }}
           tags: type=sha,prefix=sha-
-      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      - id: validate-image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: false
+          load: ${{ matrix.name == 'app' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.name == 'app' && format('GIT_SHA={0}', github.sha) || '' }}
@@ -88,6 +114,19 @@ jobs:
           cache-to: type=gha,mode=max,scope=pr-${{ github.event.pull_request.number }}-${{ matrix.name }}
           provenance: false
           sbom: false
+      - name: Verify application recovery and upgrade ordering
+        if: matrix.name == 'app'
+        env:
+          RECOVERY_IMAGE: ${{ steps.validate-image.outputs.imageid }}
+          POSTGRES_IMAGE: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        run: |
+          docker pull "$POSTGRES_IMAGE"
+          python3 scripts/verify-product-recovery.py --image "$RECOVERY_IMAGE" --postgres-image "$POSTGRES_IMAGE"
+          docker buildx build --load -f infra/updater/Dockerfile -t rakazo-recovery-updater:ci .
+          python3 scripts/verify-product-recovery.py --image "$RECOVERY_IMAGE" --postgres-image "$POSTGRES_IMAGE" --updater-image rakazo-recovery-updater:ci
+          python3 scripts/verify-product-recovery.py --image "$RECOVERY_IMAGE" --postgres-image "$POSTGRES_IMAGE" --updater-image rakazo-recovery-updater:ci --failure completed-migration
+          python3 scripts/verify-product-recovery.py --image "$RECOVERY_IMAGE" --postgres-image "$POSTGRES_IMAGE" --updater-image rakazo-recovery-updater:ci --failure startup-only
+          python3 scripts/verify-upgrade-ordering.py --image "$RECOVERY_IMAGE"
 
   build:
     name: Build ${{ matrix.name }} ${{ matrix.arch }}

@@ -20,11 +20,8 @@ async function revealHoverRail(row: Locator): Promise<Locator> {
 /** Park the pointer outside the message and blur focus so the rail returns to opacity-0. */
 async function expectRailAtRest(page: Page, row: Locator) {
   const rail = row.getByTestId("message-hover-rail");
-  const box = await row.boundingBox();
-  if (box) {
-    // (0,0) can still sit on the first transcript row; leave below the row instead.
-    await page.mouse.move(Math.max(0, box.x) + 8, box.y + box.height + 32);
-  }
+  // Anchor outside the transcript, whose rows can move while replies arrive.
+  await page.getByPlaceholder("Message Chief").hover();
   // More keeps focus after Escape; blur so focus-within does not leave the rail visible.
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
@@ -46,13 +43,22 @@ test("message hover shows beside-bubble actions; reply links to parent", async (
 
   // Empty start: no Fresh-start greeting. Answer the focus card so a plain
   // bot text bubble exists for hover layout checks.
-  await expect(page.getByText("What do you want me on first?", { exact: true })).toBeVisible({
-    timeout: 20_000,
-  });
-  await page.getByRole("button", { name: /Day-to-day work/ }).click();
-  const botText = page.getByText(/Got it\./);
+  await expect(page.getByText("What would you like to set up first?", { exact: true })).toBeVisible(
+    {
+      timeout: 20_000,
+    },
+  );
+  await page.getByRole("button", { name: /Customer replies/ }).click();
+  const botText = page
+    .getByTestId("transcript")
+    .getByText("Where do customers contact you, and which store do you use?", {
+      exact: true,
+    });
   await expect(botText).toBeVisible({ timeout: 20_000 });
-  const botRow = transcript.locator(`[data-message-id]`).filter({ has: botText }).first();
+  const botRow = transcript
+    .locator(`[data-message-id]`)
+    .filter({ hasText: "Where do customers contact you, and which store do you use?" })
+    .first();
   await expect(botRow).toBeVisible();
   await expectRailAtRest(page, botRow);
   await captureScreenshot(page, testInfo, "message-actions-rest-desktop");
@@ -174,9 +180,11 @@ test("message hover shows beside-bubble actions; reply links to parent", async (
   expect(rowBox).not.toBeNull();
   expect(Math.abs(timeBox!.x - rowBox!.x)).toBeLessThan(2);
   await toolbar.getByRole("button", { name: "More" }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
   await expect(page.getByRole("menu").locator("time")).toHaveCount(0);
   // Escape closes More and restores focus to the trigger so the rail stays up.
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
   await expect(toolbar.getByRole("button", { name: "More" })).toBeFocused();
   await captureScreenshot(page, testInfo, "message-user-actions-hover-desktop");
   // Default transcript shot: rail at rest (no hover pin, mouse clear).
@@ -359,16 +367,22 @@ test.describe("touch message actions", () => {
     expect(
       await page.evaluate(() => matchMedia("(hover: hover) and (pointer: fine)").matches),
     ).toBe(false);
-    await expect(page.getByText("What do you want me on first?", { exact: true })).toBeVisible({
+    await expect(
+      page.getByText("What would you like to set up first?", { exact: true }),
+    ).toBeVisible({
       timeout: 20_000,
     });
-    await page.getByRole("button", { name: /Day-to-day work/ }).click();
-    const botText = page.getByText(/Got it\./);
+    await page.getByRole("button", { name: /Customer replies/ }).click();
+    const botText = page
+      .getByTestId("transcript")
+      .getByText("Where do customers contact you, and which store do you use?", {
+        exact: true,
+      });
     await expect(botText).toBeVisible({ timeout: 20_000 });
     const row = page
       .getByTestId("transcript")
       .locator("[data-message-id]")
-      .filter({ has: botText })
+      .filter({ hasText: "Where do customers contact you, and which store do you use?" })
       .first();
     const rail = row.getByTestId("message-hover-rail");
     await expect(rail).toHaveCSS("opacity", "1");

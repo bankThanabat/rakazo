@@ -1,0 +1,39 @@
+appId: com.rakazo.app
+name: Android system bar comparison
+---
+- launchApp:
+    appId: com.android.settings
+- extendedWaitUntil:
+    visible: "Search Settings"
+    timeout: 30000
+- takeScreenshot: "android-settings-before-deskazo"
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "Sign up for Deskazo"
+    timeout: 30000
+- takeScreenshot: "deskazo-sign-up"
+- pressKey: Home
+- launchApp:
+    appId: com.android.settings
+- waitForAnimationToEnd
+- takeScreenshot: "android-settings-before"
+- launchApp
+- extendedWaitUntil:
+    visible: "Sign up for Deskazo"
+    timeout: 30000
+- tapOn: "Sign in"
+- tapOn: "Email"
+- inputText: "system-bars@example.test"
+- hideKeyboard
+- takeScreenshot: "deskazo-after-keyboard"
+- pressKey: Home
+- launchApp:
+    appId: com.android.settings
+- waitForAnimationToEnd
+- takeScreenshot: "android-settings-after"
+- launchApp
+- extendedWaitUntil:
+    visible: "Sign up for Deskazo"
+    timeout: 30000
+- takeScreenshot: "deskazo-restored"

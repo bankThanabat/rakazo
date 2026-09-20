@@ -8,6 +8,8 @@ function resolverFor(
   const prisma = {
     spaceMemoryConfig: {
       findUnique: vi.fn(async () => ({
+        id: "config-1",
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
         userId: "config-author",
         provider: "supermemory",
         settings: {
@@ -33,6 +35,19 @@ function resolverFor(
 afterEach(() => vi.unstubAllGlobals());
 
 describe("SpaceMemoryProviderResolver", () => {
+  it("changes approval binding when configuration changes without exposing credentials", async () => {
+    const { resolver, prisma } = resolverFor("sm_fake_key");
+    const initial = await resolver.resolve("workspace-1");
+    const config = await prisma.spaceMemoryConfig.findUnique();
+    prisma.spaceMemoryConfig.findUnique.mockResolvedValue({
+      ...config,
+      updatedAt: new Date("2026-01-02T00:00:00Z"),
+    });
+    const changed = await resolver.resolve("workspace-1");
+    expect(initial!.configurationRevision).not.toBe(changed!.configurationRevision);
+    expect(initial!.configurationRevision).not.toContain("sm_fake_key");
+  });
+
   it.each([null, "another-user"])(
     "disables saved local configurations without current deployment-owner authorization: %s",
     async (ownerUserId) => {

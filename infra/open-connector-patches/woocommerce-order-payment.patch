@@ -1,0 +1,116 @@
+diff --git a/src/providers/woocommerce/actions.ts b/src/providers/woocommerce/actions.ts
+index aa207623..23d8955d 100644
+--- a/src/providers/woocommerce/actions.ts
++++ b/src/providers/woocommerce/actions.ts
+@@ -109,6 +109,19 @@ const orderSchema = s.object("A normalized WooCommerce order.", {
+   customerId: nullableInteger("The WooCommerce customer ID associated with the order."),
+   dateCreated: nullableString("The order creation timestamp in the store timezone."),
+   dateModified: nullableString("The order update timestamp in the store timezone."),
++  paymentUrl: nullableString("The provider's payment URL for this order. Share only with its customer."),
++  needsPayment: s.nullableBoolean(
++    "Whether WooCommerce currently requests payment. False alone does not prove payment.",
++  ),
++  paymentMethod: nullableString("The payment method identifier recorded on the order."),
++  paymentMethodTitle: nullableString("The payment method display title recorded on the order."),
++  transactionId: nullableString("The provider-recorded transaction ID, when available."),
++  datePaid: nullableString(
++    "The recorded payment timestamp in the store timezone, or null when absent. May be set administratively.",
++  ),
++  datePaidGmt: nullableString(
++    "The recorded payment timestamp in GMT, or null when absent. May be set administratively.",
++  ),
+   billing: addressSchema,
+   shipping: addressSchema,
+   lineItems: s.array("The order line items returned by WooCommerce.", orderLineItemSchema),
+diff --git a/src/providers/woocommerce/runtime.ts b/src/providers/woocommerce/runtime.ts
+index e8704780..180b248a 100644
+--- a/src/providers/woocommerce/runtime.ts
++++ b/src/providers/woocommerce/runtime.ts
+@@ -857,6 +857,13 @@ function normalizeOrder(input: Record<string, unknown>): Record<string, unknown>
+     customerId: optionalInteger(input.customer_id) ?? null,
+     dateCreated: nullableText(input.date_created),
+     dateModified: nullableText(input.date_modified),
++    paymentUrl: nullableText(input.payment_url),
++    needsPayment: optionalBoolean(input.needs_payment) ?? null,
++    paymentMethod: nullableText(input.payment_method),
++    paymentMethodTitle: nullableText(input.payment_method_title),
++    transactionId: nullableText(input.transaction_id),
++    datePaid: nullableText(input.date_paid),
++    datePaidGmt: nullableText(input.date_paid_gmt),
+     billing: normalizeAddress(input.billing),
+     shipping: normalizeAddress(input.shipping),
+     lineItems: objectArray(input.line_items).map(normalizeLineItem),
+diff --git a/src/providers/woocommerce/order-payment.test.ts b/src/providers/woocommerce/order-payment.test.ts
+new file mode 100644
+index 00000000..d79813c5
+--- /dev/null
++++ b/src/providers/woocommerce/order-payment.test.ts
+@@ -0,0 +1,68 @@
++import type { Schema } from "@cfworker/json-schema";
++
++import { Validator } from "@cfworker/json-schema";
++import { describe, expect, it } from "vitest";
++import { getProviderActionHandler } from "../provider-runtime.ts";
++import { provider } from "./definition.ts";
++import { resolveWooCommerceCredentialContext, woocommerceActionHandlers } from "./runtime.ts";
++
++describe("WooCommerce order payment facts", () => {
++  it.each(["list_orders", "get_order", "create_order", "update_order", "update_order_status"])(
++    "%s preserves the provider's payment facts and satisfies its output contract",
++    async (name) => {
++      const payload = {
++        id: 17,
++        status: "processing",
++        payment_url: "https://store.example.test/checkout/order-pay/17/?key=fixture-only",
++        needs_payment: false,
++        payment_method: "bacs",
++        payment_method_title: "Bank transfer",
++        transaction_id: "fixture-transaction",
++        date_paid: "2026-09-18T15:00:00",
++        date_paid_gmt: "2026-09-18T08:00:00",
++      };
++      const context = resolveWooCommerceCredentialContext(
++        { storeUrl: "https://store.example.test", consumerKey: "fixture-key", consumerSecret: "fixture-secret" },
++        async () => Response.json(name === "list_orders" ? [payload] : payload),
++      );
++      const output = await getProviderActionHandler(woocommerceActionHandlers, name)!(
++        { orderId: 17, status: "processing", lineItems: [{ productId: 7, quantity: 1 }] },
++        context,
++      );
++      const action = provider.actions.find((item) => item.name === name)!;
++      expect(new Validator(action.outputSchema as Schema).validate(output)).toMatchObject({ valid: true });
++      const expected = {
++        paymentUrl: payload.payment_url,
++        needsPayment: false,
++        paymentMethod: "bacs",
++        paymentMethodTitle: "Bank transfer",
++        transactionId: "fixture-transaction",
++        datePaid: "2026-09-18T15:00:00",
++        datePaidGmt: "2026-09-18T08:00:00",
++      };
++      expect(output).toMatchObject(name === "list_orders" ? { orders: [expected] } : expected);
++    },
++  );
++
++  it.each([
++    { status: "pending", needs_payment: true },
++    { status: "on-hold", needs_payment: false },
++    { status: "cancelled", needs_payment: false },
++    { status: "completed" },
++  ])("does not infer payment from status $status or a missing field", async (payload) => {
++    const context = resolveWooCommerceCredentialContext(
++      { storeUrl: "https://store.example.test", consumerKey: "fixture-key", consumerSecret: "fixture-secret" },
++      async () => Response.json(payload),
++    );
++    expect(await woocommerceActionHandlers.get_order({ orderId: 17 }, context)).toMatchObject({
++      status: payload.status,
++      needsPayment: payload.needs_payment ?? null,
++      paymentUrl: null,
++      paymentMethod: null,
++      paymentMethodTitle: null,
++      transactionId: null,
++      datePaid: null,
++      datePaidGmt: null,
++    });
++  });
++});

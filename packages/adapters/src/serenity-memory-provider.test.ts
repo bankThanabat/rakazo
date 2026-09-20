@@ -1,4 +1,4 @@
-import type { AdapterContext } from "@rakazo/adapter-kit";
+import type { AdapterContext, SemanticMemoryForgetRequest } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifySerenityConnectionSettings,
@@ -48,7 +48,7 @@ const rememberSerenityMock = vi.mocked(rememberSerenity);
 const forgetSerenityMock = vi.mocked(forgetSerenity);
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 function provider(allowWrites = true, brainLabel = "") {
@@ -58,6 +58,23 @@ function provider(allowWrites = true, brainLabel = "") {
     brainLabel,
     allowWrites,
   });
+}
+
+function removal(input: Partial<SemanticMemoryForgetRequest> = {}): SemanticMemoryForgetRequest {
+  return {
+    id: "fact-1",
+    botId: "bot-1",
+    scope: "isolated",
+    expectedContent: "Use metric units.",
+    ...input,
+  };
+}
+
+function recallFact(id: string, fact: string, entitySlug?: string | null) {
+  return {
+    ok: true as const,
+    value: [{ factId: id, fact, provenance: "owner correction", entitySlug }],
+  };
 }
 
 describe("SerenityMemoryProvider", () => {
@@ -200,7 +217,25 @@ describe("SerenityMemoryProvider", () => {
       context,
     );
 
-    expect(result).toEqual({ ok: true, value: undefined });
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        {
+          id: "fact-2",
+          entity: "rakazo-space/workspace-1",
+          content: null,
+          created: null,
+          providerStatus: "inserted",
+        },
+        {
+          id: "fact-2",
+          entity: "rakazo-bot/bot-1",
+          content: null,
+          created: null,
+          providerStatus: "inserted",
+        },
+      ],
+    });
     expect(rememberSerenityMock.mock.calls.map((call) => call[3]?.entity)).toEqual([
       "rakazo-space/workspace-1",
       "rakazo-bot/bot-1",
@@ -235,7 +270,61 @@ describe("SerenityMemoryProvider", () => {
     ]);
   });
 
-  it("forgets by fact id only (Serenity forget has no entity argument)", async () => {
+  it("retains the first acknowledgement when a mirrored save loses its response", async () => {
+    rememberSerenityMock
+      .mockResolvedValueOnce({ ok: true, value: { id: "shared-fact", status: "inserted" } })
+      .mockResolvedValueOnce({ ok: false, error: "lost response" });
+    expect(
+      await provider().save(
+        { content: "fact", scope: "shared", botId: "bot-1", source: { kind: "durable" } },
+        context,
+      ),
+    ).toEqual({
+      ok: false,
+      error: "lost response",
+      receipts: [
+        {
+          id: "shared-fact",
+          entity: "rakazo-space/workspace-1",
+          content: null,
+          created: null,
+          providerStatus: "inserted",
+        },
+      ],
+      uncertainEntities: ["rakazo-bot/bot-1"],
+    });
+    expect(rememberSerenityMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([" ", "x".repeat(10001)])(
+    "rejects invalid save content before transport",
+    async (content) => {
+      expect(
+        await provider().save(
+          { content, scope: "shared", botId: "bot-1", source: { kind: "durable" } },
+          context,
+        ),
+      ).toMatchObject({ ok: false, receipts: [], uncertainEntities: [] });
+      expect(rememberSerenityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an arbitrary fact id before any provider deletion", async () => {
+    forgetSerenityMock.mockResolvedValue({
+      ok: true,
+      value: { id: "another-business-fact", expired: true, reason: null },
+    });
+    recallSerenityMock.mockResolvedValue({ ok: true, value: [] });
+    const result = await provider().forget(
+      removal({ id: "another-business-fact", entity: "rakazo-bot/bot-1" }),
+      context,
+    );
+    expect(result.ok).toBe(false);
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+  });
+
+  it("checks scope before deleting by id when the provider has no scoped delete", async () => {
+    recallSerenityMock.mockResolvedValue(recallFact("fact-9", "Use metric units."));
     forgetSerenityMock.mockResolvedValue({
       ok: true,
       value: { id: "fact-9", expired: true, reason: null },
@@ -248,7 +337,7 @@ describe("SerenityMemoryProvider", () => {
       allowWrites: true,
     });
     await labeled.forget(
-      { id: "fact-9", entity: `rakazo-bot/${PERSONAL_BRAIN}/bot-1`, reason: "cleanup" },
+      removal({ id: "fact-9", entity: `rakazo-bot/${PERSONAL_BRAIN}/bot-1`, reason: "cleanup" }),
       context,
     );
     expect(forgetSerenityMock).toHaveBeenCalledWith(
@@ -284,7 +373,7 @@ describe("SerenityMemoryProvider", () => {
         },
         context,
       ),
-    ).resolves.toEqual({ ok: true, value: undefined });
+    ).resolves.toEqual({ ok: true, value: [] });
     await expect(
       provider().purgeHistory({ botId: "bot-1", generations: [1, 2] }, context),
     ).resolves.toEqual({ ok: true, value: undefined });
@@ -336,7 +425,19 @@ describe("SerenityMemoryProvider", () => {
     });
 
     const fact = recalled.ok ? recalled.value[0] : undefined;
-    await labeled.forget({ id: fact!.id!, entity: fact!.entity, reason: "cleanup" }, context);
+    recallSerenityMock.mockResolvedValue(recallFact(fact!.id!, fact!.memory, fact!.entity));
+    // Approval can resume in a new process with no in-memory recall state.
+    const resumed = provider(true, "Personal Brain");
+    await resumed.forget(
+      removal({
+        id: fact!.id!,
+        expectedContent: fact!.memory,
+        scope: "shared",
+        entity: fact!.entity,
+        reason: "cleanup",
+      }),
+      context,
+    );
     expect(forgetSerenityMock).toHaveBeenCalledWith(
       "fact-space-1",
       expect.objectContaining({ brainLabel: "Personal Brain" }),
@@ -345,16 +446,113 @@ describe("SerenityMemoryProvider", () => {
     expect(forgetSerenityMock.mock.calls[0]?.[2]).not.toHaveProperty("entity");
   });
 
-  it("forgets by Serenity fact id when writes are enabled", async () => {
+  it("forgets the exact recalled fact when writes are enabled", async () => {
+    recallSerenityMock.mockResolvedValue(recallFact("fact-1", "Use metric units."));
     forgetSerenityMock.mockResolvedValue({
       ok: true,
       value: { id: "fact-1", expired: true, reason: "user requested" },
     });
-    const result = await provider().forget({ id: "fact-1", reason: "user requested" }, context);
+    const result = await provider().forget(removal({ reason: "user requested" }), context);
     expect(result).toEqual({
       ok: true,
-      value: { id: "fact-1", expired: true, reason: "user requested" },
+      value: { id: "fact-1", expired: true, reason: "user requested", entity: "rakazo-bot/bot-1" },
     });
+  });
+
+  it.each([
+    ["another bot", { entity: "rakazo-bot/bot-2" }],
+    ["another space", { scope: "shared", entity: "rakazo-space/workspace-2" }],
+    ["shared fact in isolated scope", { entity: "rakazo-space/workspace-1" }],
+    ["missing reviewed text", { expectedContent: "" }],
+    ["blank reviewed text", { expectedContent: "  " }],
+    ["missing identity", { id: "" }],
+    ["different executing bot", { botId: "bot-2" }],
+  ] as const)("rejects %s without provider requests", async (_name, input) => {
+    const result = await provider().forget(removal(input), context);
+    expect(result.ok).toBe(false);
+    expect(recallSerenityMock).not.toHaveBeenCalled();
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a citation from another brain label", async () => {
+    const result = await provider(true, "Personal Brain").forget(
+      removal({ entity: "rakazo-bot/bot-1" }),
+      context,
+    );
+    expect(result.ok).toBe(false);
+    expect(recallSerenityMock).not.toHaveBeenCalled();
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["changed content", "fact-1", "Use imperial units.", undefined],
+    ["another fact", "fact-2", "Use metric units.", undefined],
+    ["foreign entity", "fact-1", "Use metric units.", "rakazo-bot/bot-2"],
+    ["unscoped fact", "fact-1", "Use metric units.", null],
+  ] as const)("rejects %s returned by recall", async (_name, id, content, entity) => {
+    recallSerenityMock.mockResolvedValue(recallFact(id, content, entity));
+    const result = await provider().forget(removal(), context);
+    expect(result.ok).toBe(false);
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+    expect(recallSerenityMock).toHaveBeenCalledWith(
+      "Use metric units.",
+      expect.anything(),
+      expect.objectContaining({ entity: "rakazo-bot/bot-1", limit: 50 }),
+    );
+  });
+
+  it("fails closed if the scoped read fails", async () => {
+    recallSerenityMock.mockResolvedValue({ ok: false, error: "Unavailable" });
+    expect((await provider().forget(removal(), context)).ok).toBe(false);
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+  });
+
+  it("does not delete after cancellation while verifying the fact", async () => {
+    const controller = new AbortController();
+    recallSerenityMock.mockImplementation(async () => {
+      controller.abort();
+      return recallFact("fact-1", "Use metric units.");
+    });
+    await expect(
+      provider().forget(removal(), { ...context, signal: controller.signal }),
+    ).rejects.toThrow();
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
+  });
+
+  it("searches only authorized shared namespaces when the citation has no entity", async () => {
+    recallSerenityMock
+      .mockResolvedValueOnce({ ok: true, value: [] })
+      .mockResolvedValueOnce(recallFact("fact-1", "Use metric units.", "rakazo-bot/bot-1"));
+    forgetSerenityMock.mockResolvedValue({
+      ok: true,
+      value: { id: "fact-1", expired: true, reason: null },
+    });
+    expect((await provider().forget(removal({ scope: "shared" }), context)).ok).toBe(true);
+    expect(recallSerenityMock.mock.calls.map((call) => call[2].entity)).toEqual([
+      "rakazo-space/workspace-1",
+      "rakazo-bot/bot-1",
+    ]);
+    expect(forgetSerenityMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { id: "other-fact", expired: true, reason: null },
+    { id: "fact-1", expired: false, reason: null },
+  ])("does not report an unconfirmed deletion as success: %j", async (receipt) => {
+    recallSerenityMock.mockResolvedValue(recallFact("fact-1", "Use metric units."));
+    forgetSerenityMock.mockResolvedValue({ ok: true, value: receipt });
+    expect(await provider().forget(removal(), context)).toEqual({
+      ok: false,
+      error: "The provider did not confirm this fact's removal. Inspect it before trying again.",
+      uncertain: true,
+    });
+    expect(forgetSerenityMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not read or delete while provider writes are disabled", async () => {
+    expect((await provider(false).forget(removal(), context)).ok).toBe(false);
+    expect(recallSerenityMock).not.toHaveBeenCalled();
+    expect(forgetSerenityMock).not.toHaveBeenCalled();
   });
 
   it("createSerenityProvider builds a working adapter", () => {

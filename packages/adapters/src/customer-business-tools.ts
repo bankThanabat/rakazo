@@ -5,12 +5,15 @@ import {
   CustomerBindingSchema,
   KnowledgeSearchInput,
 } from "@rakazo/contracts";
+import { CUSTOMER_PREVIEW_PROVIDER, customerChannelUsesConnector } from "@rakazo/core";
 import { stableJsonValue } from "@rakazo/core/node/approval-effect-key";
 import type { PrismaClient } from "@rakazo/db";
 import { handoffCustomer, Prisma } from "@rakazo/db";
 import { z } from "zod";
 import type { createCustomerConnector } from "./customer-connector.js";
+import { currentCustomerIdentity } from "./customer-identity.js";
 import { customerDeliveryId, customerField, customerInput } from "./customer-mapping.js";
+import { executeCustomerOperation } from "./customer-operation.js";
 import { customerToolReply } from "./customer-tool-reply.js";
 import type { KnowledgeService } from "./knowledge.js";
 import {
@@ -60,20 +63,23 @@ const BUILT_IN_TOOLS = ["search_knowledge", "request_human"];
 const isCatalogRead = (action?: string | null) =>
   action === CATALOG_SEARCH || action === CATALOG_LOAD;
 
+function workflowReferences(value: unknown): string[] {
+  if (typeof value === "string" && value.startsWith("$")) return [value];
+  if (Array.isArray(value)) return value.flatMap(workflowReferences);
+  if (value && typeof value === "object") return Object.values(value).flatMap(workflowReferences);
+  return [];
+}
+
 /** Expand only approved templates. Model input never selects an account or a tool. */
 export function customerWorkflowInput(
   template: Record<string, unknown>,
   values: Record<string, unknown>,
 ) {
   const replacements: Record<string, unknown> = {};
-  function visit(value: unknown): void {
-    if (typeof value === "string" && value.startsWith("$")) {
-      const path = value.slice(1);
-      replacements[path] = customerField(values, path.split("."));
-    } else if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === "object") Object.values(value).forEach(visit);
+  for (const reference of workflowReferences(template)) {
+    const path = reference.slice(1);
+    replacements[path] = customerField(values, path.split("."));
   }
-  visit(template);
   return customerInput(template, replacements);
 }
 
@@ -90,15 +96,53 @@ export function validateCustomerGrants(value: unknown) {
     z.fromJSONSchema(action.inputSchema as never);
     const seen = new Set<string>();
     let scoped = false;
+    const ownedReads = new Set<string>();
     for (const step of action.steps) {
       if (seen.has(step.name)) throw new Error("Workflow step names must be unique");
       seen.add(step.name);
       if (step.effect === "write" && !scoped)
         throw new Error("A customer ownership check must precede writes");
-      if (step.check?.equals === "$customerId" && step.effect === "read") scoped = true;
+      if (
+        step.effect === "write" &&
+        (!step.operationKey || !ownedReads.has(step.operationKey.split(".")[1]!))
+      )
+        throw new Error("Writes need an operationKey from a preceding customer ownership read");
+      if (step.effect === "write" && !step.receipt)
+        throw new Error("Writes need an explicit receipt field mapping");
+      if (step.effect === "write") {
+        const references = workflowReferences(step.input);
+        if (!references.includes(step.operationKey!))
+          throw new Error("Write input must include its ownership-checked operation key");
+        if (
+          references.some(
+            (reference) =>
+              reference !== "$customerId" &&
+              reference !== "$providerCustomerId" &&
+              reference !== "$threadId" &&
+              (!reference.startsWith("$steps.") || !ownedReads.has(reference.split(".")[1]!)),
+          )
+        )
+          throw new Error(
+            "Write values must come from ownership-checked provider records or the authenticated customer, not model input or unchecked results",
+          );
+      }
+      if (
+        (step.check?.equals === "$customerId" || step.check?.equals === "$providerCustomerId") &&
+        step.effect === "read"
+      ) {
+        scoped = true;
+        ownedReads.add(step.name);
+      }
     }
     if (action.audience === "customer" && !scoped)
       throw new Error("Customer data requires an ownership check before returning results");
+    const finalStep = action.steps.at(-1)!;
+    if (
+      action.audience === "customer" &&
+      finalStep.effect === "read" &&
+      !ownedReads.has(finalStep.name)
+    )
+      throw new Error("The returned customer record needs its own ownership check");
   }
   return actions;
 }
@@ -141,23 +185,52 @@ export function createCustomerBusinessTools(deps: {
       !channel?.enabled ||
       !channel.autoReplies ||
       channel.bot.archivedAt ||
-      (channel.provider !== "web" && !channel.connectionId) ||
+      (customerChannelUsesConnector(channel.provider) && !channel.connectionId) ||
       !channel.bot.customerBehavior ||
       row.executionPolicyHash !== customerPolicyHash(channel.bot.customerBehavior) ||
       !timingSafeEqual(hash(token), Buffer.from(row.executionKeyHash, "hex"))
     )
       throw denied();
-    if (channel.provider !== "web") await deps.connector.connection(channel, channel.connectionId!);
+    if (customerChannelUsesConnector(channel.provider))
+      await deps.connector.connection(channel, channel.connectionId!);
     return { message: row, conversation, channel, behavior: channel.bot.customerBehavior };
   }
   type Scope = Awaited<ReturnType<typeof authenticate>>;
-  /** A workflow runs only while the account policy shares every action it uses. */
-  function workflowShared(scope: Scope, grant: ReturnType<typeof grants>[number]) {
-    return deps.connector.actionsAllowed(
-      scope.channel,
-      grant.connectionId,
-      grant.steps.map((step) => step.action),
-    );
+  /** Availability follows current sharing and connector effect declarations. */
+  const usesIdentity = (grant: ReturnType<typeof grants>[number]) =>
+    workflowReferences(grant.steps).includes("$providerCustomerId");
+  const identityScope = (scope: Scope, grant: ReturnType<typeof grants>[number]) => ({
+    conversationId: scope.conversation.id,
+    customerId: scope.message.senderId!,
+    connectionId: grant.connectionId,
+  });
+  async function workflowAvailable(scope: Scope, grant: ReturnType<typeof grants>[number]) {
+    try {
+      if (
+        scope.channel.provider === CUSTOMER_PREVIEW_PROVIDER &&
+        (grant.audience !== "public" || grant.steps.some((step) => step.effect !== "read"))
+      )
+        return false;
+      // Stored workflows must obey the same rules as newly published revisions.
+      validateCustomerGrants([grant]);
+      if (
+        usesIdentity(grant) &&
+        !(await currentCustomerIdentity(prisma, identityScope(scope, grant)))
+      )
+        return false;
+      if (
+        !(await deps.connector.actionsAllowed(
+          scope.channel,
+          grant.connectionId,
+          grant.steps.map((step) => step.action),
+        ))
+      )
+        return false;
+      await deps.connector.validateWorkflow(scope.channel, grant.connectionId, grant.steps);
+      return true;
+    } catch {
+      return false;
+    }
   }
   const recipient = (scope: Scope) => ({
     customerId: scope.message.senderId!,
@@ -178,7 +251,7 @@ export function createCustomerBusinessTools(deps: {
       const availableGrants = (
         await Promise.all(
           grants(behavior.actions).map(async (grant) =>
-            (await workflowShared(scope, grant)) ? grant : null,
+            (await workflowAvailable(scope, grant)) ? grant : null,
           ),
         )
       ).filter((grant) => grant !== null);
@@ -189,9 +262,10 @@ export function createCustomerBusinessTools(deps: {
           inputSchema,
         }));
       tools.push(
-        ...(await deps.connector.discover(scope.channel, connectionIds(scope))).map(
-          ({ name, description, inputSchema }) => ({ name, description, inputSchema }),
-        ),
+        ...(scope.channel.provider === CUSTOMER_PREVIEW_PROVIDER
+          ? []
+          : await deps.connector.discover(scope.channel, connectionIds(scope))
+        ).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       );
       if (scope.channel.bot.knowledgeLibraryId || behavior.knowledgeFilterId)
         tools.push({
@@ -221,7 +295,13 @@ export function createCustomerBusinessTools(deps: {
       const call = Call.parse(raw);
       const scope = await authenticate(token);
       const grant = grants(scope.behavior.actions).find((g) => g.name === call.name);
-      if (grant && !(await workflowShared(scope, grant))) throw denied();
+      if (
+        scope.channel.provider === CUSTOMER_PREVIEW_PROVIDER &&
+        !grant &&
+        !BUILT_IN_TOOLS.includes(call.name)
+      )
+        throw denied();
+      if (grant && !(await workflowAvailable(scope, grant))) throw denied();
       const shared =
         !grant && !BUILT_IN_TOOLS.includes(call.name)
           ? await deps.connector.resolveTool(
@@ -242,6 +322,9 @@ export function createCustomerBusinessTools(deps: {
             recipient(scope),
           )
         : null;
+      // Business actions must pass through a configured ownership-checked workflow.
+      // Sharing a raw connector action must not bypass write deduplication or record scope.
+      if (shared && !isCatalogRead(action) && replyBody === null) throw denied();
       const requestHash = hash(
         stableJsonValue({ name: call.name, arguments: call.arguments }),
       ).toString("hex");
@@ -362,24 +445,66 @@ export function createCustomerBusinessTools(deps: {
         } else {
           if (!grant) throw denied();
           const input = parseConnectorToolArgs(grant.inputSchema, call.arguments);
+          const identity = usesIdentity(grant)
+            ? await currentCustomerIdentity(prisma, identityScope(scope, grant))
+            : null;
+          if (usesIdentity(grant) && !identity) throw denied();
+          const recheckIdentity = async () => {
+            if (!identity) return;
+            const current = await currentCustomerIdentity(prisma, identityScope(scope, grant));
+            if (current?.id !== identity.id || current.revision !== identity.revision)
+              throw denied();
+          };
           const values = {
             input,
             customerId: scope.message.senderId,
+            providerCustomerId: identity?.value,
             threadId: scope.conversation.externalThreadId,
             steps: {} as Record<string, unknown>,
           };
           for (const step of grant.steps) {
             const current = await authenticate(token);
+            await recheckIdentity();
             const currentGrant = grants(current.behavior.actions).find((g) => g.name === call.name);
             if (stableJsonValue(currentGrant ?? null) !== stableJsonValue(grant)) throw denied();
-            result = await deps.connector.execute(
-              scope.channel,
-              grant.connectionId,
-              step.action,
-              customerWorkflowInput(step.input, values),
-              `customer.tool:${messageId}:${call.callId}:${step.name}`,
-              "customer",
-            );
+            const stepInput = customerWorkflowInput(step.input, values);
+            const execute = (executionId: string) =>
+              deps.connector.execute(
+                scope.channel,
+                grant.connectionId,
+                step.action,
+                stepInput,
+                executionId,
+                "customer",
+                step.effect,
+                identity?.providerRef,
+              );
+            if (step.effect === "write") {
+              const operationKey = customerWorkflowInput({ key: step.operationKey! }, values).key;
+              result = await executeCustomerOperation(
+                prisma,
+                {
+                  spaceId: scope.channel.spaceId,
+                  conversationId: scope.conversation.id,
+                  receipt: step.receipt!,
+                  connectionId: grant.connectionId,
+                  action: step.action,
+                  operationKey,
+                  customerId: scope.message.senderId!,
+                  input: stepInput,
+                  identity: identity
+                    ? {
+                        id: identity.id,
+                        revision: identity.revision,
+                        providerRef: identity.providerRef,
+                      }
+                    : undefined,
+                },
+                execute,
+              );
+            } else {
+              result = await execute(`customer.tool:${messageId}:${call.callId}:${step.name}`);
+            }
             if (step.check) {
               const expected = customerWorkflowInput({ value: step.check.equals }, values).value;
               if (
@@ -387,14 +512,29 @@ export function createCustomerBusinessTools(deps: {
               )
                 throw denied();
             }
+            await authenticate(token);
+            await recheckIdentity();
             values.steps[step.name] = result;
           }
         }
         // Store what the caller receives: JSON drops a provider's undefined fields.
         const safeResult = z.json().parse(JSON.parse(JSON.stringify(result ?? null)));
-        await prisma.customerToolCall.update({
-          where: { messageId_callId: key },
-          data: { status: "completed", result: safeResult === null ? Prisma.JsonNull : safeResult },
+        await prisma.$transaction(async (tx) => {
+          // Serialize result retention with source withdrawal; retain the action identity.
+          const source = await tx.$queryRaw<Array<{ status: string }>>`
+            SELECT status FROM customer_messages WHERE id = ${messageId} FOR SHARE`;
+          await tx.customerToolCall.update({
+            where: { messageId_callId: key },
+            data: {
+              status: "completed",
+              result:
+                source[0]?.status === "withdrawn"
+                  ? Prisma.DbNull
+                  : safeResult === null
+                    ? Prisma.JsonNull
+                    : safeResult,
+            },
+          });
         });
         return safeResult;
       } catch {

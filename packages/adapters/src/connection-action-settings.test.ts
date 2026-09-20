@@ -46,6 +46,7 @@ it("lets a teammate inspect settings but only the owner change them", async () =
       internal: true,
       defaultInternal: false,
       overridden: false,
+      readOnly: false,
     },
     {
       name: "sample.publish",
@@ -53,6 +54,7 @@ it("lets a teammate inspect settings but only the owner change them", async () =
       internal: false,
       defaultInternal: true,
       overridden: true,
+      readOnly: false,
     },
   ]);
   await expect(settings.configure(context("teammate"), "account", "defaults")).rejects.toThrow(

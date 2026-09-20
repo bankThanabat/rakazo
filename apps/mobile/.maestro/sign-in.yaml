@@ -1,0 +1,32 @@
+appId: com.rakazo.app
+name: Sign in to the test server
+---
+- assertVisible: "Sign up for Deskazo"
+- assertVisible: "Name"
+- tapOn: "Sign in"
+- assertVisible: "Sign in to Deskazo"
+- runFlow:
+    when:
+      true: ${typeof RAKAZO_E2E_SERVER !== "undefined" && RAKAZO_E2E_SERVER !== ""}
+    commands:
+      - tapOn: "Use a custom server"
+      - assertVisible: "Server"
+      - tapOn: "http.*"
+      - eraseText
+      - inputText: ${RAKAZO_E2E_SERVER}
+      - tapOn: "Save"
+      - extendedWaitUntil:
+          visible: "Sign in to Deskazo"
+          timeout: 10000
+- tapOn: "Email"
+- inputText: ${RAKAZO_E2E_EMAIL}
+- tapOn: "Password"
+- inputText: ${RAKAZO_E2E_PASSWORD}
+- hideKeyboard
+- tapOn: "Sign in"
+- tapOn:
+    text: "Not Now"
+    optional: true
+- tapOn:
+    text: "Don.t allow"
+    optional: true

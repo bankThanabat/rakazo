@@ -1,5 +1,5 @@
 import type { AdapterContext } from "@rakazo/adapter-kit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EmulatorCloudAgentProvider } from "./cloud-agent-emulator.js";
 import { cloudAgentsEnabled, createCloudAgentConnection } from "./cloud-agent-factory.js";
 import { resolveCloudAgentProvider } from "./cloud-agent-provider-env.js";
@@ -52,6 +52,15 @@ for (const [name, create] of Object.entries(factories)) {
       expect((await provider.get(first.id, ctx, followup.latestRunId)).status).toBe("running");
       expect((await provider.cancel(first.id, ctx)).status).toBe("cancelled");
       expect((await provider.cancel(first.id, ctx)).status).toBe("cancelled");
+    });
+    it("recovers a launch by key without creating missing work", async () => {
+      const { provider } = create();
+      await expect(provider.recoverLaunch("missing", ctx)).rejects.toThrow();
+      const launch = vi.spyOn(provider, "launch");
+      const first = await provider.launch({ idempotencyKey: "recover", prompt: "Task" }, ctx);
+      launch.mockClear();
+      expect(await provider.recoverLaunch("recover", ctx)).toMatchObject({ id: first.id });
+      expect(launch).not.toHaveBeenCalled();
     });
     it("rejects concurrent follow-ups and observes failures", async () => {
       const { provider, complete } = create();

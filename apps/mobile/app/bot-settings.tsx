@@ -13,6 +13,10 @@ import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { BotAvatar } from "../components/bot-avatar";
 import { ComputerModePicker } from "../components/computer-mode-picker";
 import { KnowledgeDocuments } from "../components/knowledge-documents";
+import { LearningDocuments } from "../components/learning-documents";
+import { LearningUpdates } from "../components/learning-updates";
+import { PrivateKnowledgeHistory } from "../components/private-history";
+import { SemanticMemoryHistory } from "../components/semantic-memory-history";
 import {
   type MobileBot,
   type MobileMe,
@@ -393,6 +397,10 @@ export default function BotSettingsScreen() {
         {advancedOpen ? (
           <View>
             {botId ? <KnowledgeDocuments key={botId} botId={botId} /> : null}
+            {botId ? <PrivateKnowledgeHistory key={`memory:${botId}`} botId={botId} /> : null}
+            {botId ? <SemanticMemoryHistory key={`semantic:${botId}`} botId={botId} /> : null}
+            {botId ? <LearningUpdates key={`updates:${botId}`} botId={botId} /> : null}
+            {botId ? <LearningDocuments key={`learning:${botId}`} botId={botId} /> : null}
             <Text
               style={{
                 color: tokens.mutedForeground,

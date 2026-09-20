@@ -2,7 +2,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { JobPublisher } from "@rakazo/adapter-kit";
 import type { GatewayDelivery } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
-import { CustomerMessageLimitError, createCustomerInbox } from "@rakazo/db";
+import {
+  CustomerMessageLimitError,
+  CustomerMessageWithdrawnError,
+  createCustomerInbox,
+} from "@rakazo/db";
 import { createCustomerConnector } from "./customer-connector.js";
 import { customerField, customerPage } from "./customer-mapping.js";
 import { customerWebhookBinding, liveCustomerWebhookChannel } from "./customer-webhooks.js";
@@ -51,9 +55,13 @@ export function createCustomerIngress(deps: {
 }) {
   const inbox = createCustomerInbox(deps.prisma);
   const connector = createCustomerConnector(deps);
-  async function load(channelId: string) {
+  async function load(channelId: string, allowWithdrawal = false) {
     const channel = await deps.prisma.customerChannel.findFirst({
-      where: { id: channelId, ...liveCustomerWebhookChannel },
+      where: {
+        id: channelId,
+        ...liveCustomerWebhookChannel,
+        enabled: allowWithdrawal ? undefined : true,
+      },
     });
     if (!channel?.connectionId || !channel.startedAt)
       throw new Error("Customer channel is unavailable");
@@ -83,7 +91,7 @@ export function createCustomerIngress(deps: {
         throw new Error("Invalid verification token");
     },
     async receive(channelId: string, headers: Headers, raw: string) {
-      const { channel, binding, verification, secret } = await load(channelId);
+      const { channel, binding, verification, secret } = await load(channelId, true);
       verifyCustomerWebhook(raw, headers, verification, await secret(verification.secretId));
       const data: unknown = JSON.parse(raw);
       if (verification.challengePath) {
@@ -98,7 +106,7 @@ export function createCustomerIngress(deps: {
       return accept(channel, binding, data);
     },
     async receiveRelayed(delivery: GatewayDelivery) {
-      const { channel, binding } = await load(delivery.channelId);
+      const { channel, binding } = await load(delivery.channelId, true);
       const connection = await connector.connection(channel, channel.connectionId!);
       if (channel.relayId !== delivery.routeId || connection.providerRef !== delivery.providerRef)
         throw new Error("Relay delivery does not match its local channel");
@@ -112,13 +120,23 @@ export function createCustomerIngress(deps: {
   ) {
     const channelId = channel.id;
     const page = customerPage(binding, payload, channel.startedAt!);
+    if (!channel.enabled && !page.withdrawals.length)
+      throw new Error("Customer channel is unavailable");
+    // Withdraw before accepting originals, even when the provider reverses batch order.
+    for (const withdrawal of page.withdrawals)
+      await inbox.withdraw(channelId, withdrawal, channel.updatedAt);
+    if (!channel.enabled) return { ok: true };
     for (const message of page.messages) {
       // Fence a mapping/account change racing signature verification.
       let id: string;
       try {
         id = await inbox.receive(channelId, message, undefined, channel.updatedAt);
       } catch (error) {
-        if (error instanceof CustomerMessageLimitError) continue;
+        if (
+          error instanceof CustomerMessageLimitError ||
+          error instanceof CustomerMessageWithdrawnError
+        )
+          continue;
         throw error;
       }
       await deps.jobs

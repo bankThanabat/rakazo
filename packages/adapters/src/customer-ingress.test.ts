@@ -20,7 +20,7 @@ describe("real messaging payload contracts", () => {
           webhookEventId: "event",
           type: "message",
           source: { userId: "customer" },
-          message: { type: "text", text: "Offer?" },
+          message: { id: "message", type: "text", text: "Offer?" },
           timestamp: at,
         },
       ],

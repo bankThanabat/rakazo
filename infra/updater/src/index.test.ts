@@ -11,14 +11,47 @@ import {
 } from "./index.js";
 import { resolveUpdaterConfig } from "./updater-logic.js";
 
+// Existing lifecycle tests use a stable schema; dedicated migration tests vary the probe.
+function createTestUpdater(
+  config: Parameters<typeof createUpdaterApp>[0],
+  options: Parameters<typeof createUpdaterApp>[1] = {},
+) {
+  const runner = options.run;
+  return createUpdaterApp(
+    config,
+    runner
+      ? {
+          ...options,
+          run: async (command, args, settings) => {
+            if (command === "docker" && args.includes("run"))
+              return ok(
+                "RAKAZO_MIGRATION_STATE=" +
+                  JSON.stringify({
+                    database: "a".repeat(64),
+                    history: "b".repeat(64),
+                    complete: true,
+                    matchesHistory: true,
+                    matchesImage: true,
+                  }),
+              );
+            return runner(command, args, settings);
+          },
+        }
+      : options,
+  );
+}
+
 const token = "fake-review-updater-token-000000000000";
-const app = createUpdaterApp(
+const app = createTestUpdater(
   resolveUpdaterConfig({
     RAKAZO_DEPLOY_DIR: "/rakazo-updater-tests-no-such-directory",
     RAKAZO_UPDATER_TOKEN: token,
   }),
 );
-const authorized = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+const authorized = {
+  authorization: `Bearer ${token}`,
+  "content-type": "application/json",
+};
 const currentCommit = "1".repeat(40);
 const targetCommit = "2".repeat(40);
 const temporaryDirectories: string[] = [];
@@ -35,7 +68,10 @@ async function deployment(env = "RAKAZO_IMAGE_TAG=v1.0.0\nRAKAZO_IMAGE_TAG_PREVI
   await writeFile(path.join(deployDir, ".env"), env);
   return {
     deployDir,
-    config: resolveUpdaterConfig({ RAKAZO_DEPLOY_DIR: deployDir, RAKAZO_UPDATER_TOKEN: token }),
+    config: resolveUpdaterConfig({
+      RAKAZO_DEPLOY_DIR: deployDir,
+      RAKAZO_UPDATER_TOKEN: token,
+    }),
   };
 }
 
@@ -59,7 +95,10 @@ describe("updater HTTP surface", () => {
   it("answers health without credentials, for the compose healthcheck", async () => {
     const response = await app.request("/health");
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ ok: true, service: "updater" });
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      service: "updater",
+    });
   });
 
   it("rejects every privileged route without the shared token", async () => {
@@ -78,7 +117,9 @@ describe("updater HTTP surface", () => {
 
   it("rejects a wrong or malformed token", async () => {
     for (const authorization of [`Bearer ${"x".repeat(token.length)}`, token, "Basic abc"]) {
-      const response = await app.request("/state", { headers: { authorization } });
+      const response = await app.request("/state", {
+        headers: { authorization },
+      });
       expect(response.status).toBe(401);
     }
   });
@@ -107,17 +148,23 @@ describe("updater HTTP surface", () => {
     const response = await app.request("/apply", {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({ repoUrl: "https://github.com/elie222/rakazo", branch: "--exec=id" }),
+      body: JSON.stringify({
+        repoUrl: "https://github.com/elie222/rakazo",
+        branch: "--exec=id",
+      }),
     });
     expect(response.status).toBe(400);
   });
 
   it("refuses a fork build when the deployment has no checkout to build from", async () => {
     const fixture = await deployment();
-    const response = await createUpdaterApp(fixture.config).request("/apply", {
+    const response = await createTestUpdater(fixture.config).request("/apply", {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({ repoUrl: "https://github.com/someone/rakazo", branch: "main" }),
+      body: JSON.stringify({
+        repoUrl: "https://github.com/someone/rakazo",
+        branch: "main",
+      }),
     });
     expect(response.status).toBe(400);
     const payload = (await response.json()) as { error: string };
@@ -126,7 +173,7 @@ describe("updater HTTP surface", () => {
 
   it("refuses a rollback when no previous tag was recorded", async () => {
     const fixture = await deployment("RAKAZO_IMAGE_TAG=v1.0.0\n");
-    const response = await createUpdaterApp(fixture.config).request("/rollback", {
+    const response = await createTestUpdater(fixture.config).request("/rollback", {
       method: "POST",
       headers: authorized,
     });
@@ -137,7 +184,7 @@ describe("updater HTTP surface", () => {
 
   it("reports the deployment it manages without touching Docker", async () => {
     const fixture = await deployment();
-    const response = await createUpdaterApp(fixture.config).request("/state", {
+    const response = await createTestUpdater(fixture.config).request("/state", {
       headers: authorized,
     });
     expect(response.status).toBe(200);
@@ -152,11 +199,54 @@ describe("updater HTTP surface", () => {
   it("fails closed when the deployment environment cannot be read", async () => {
     const response = await app.request("/state", { headers: authorized });
     expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({ error: expect.stringMatching(/\.env/) });
+    await expect(response.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/\.env/),
+    });
   });
 });
 
 describe("updater orchestration", () => {
+  it.each([
+    { failure: "pull", restart: "not-required", starts: 0 },
+    { failure: "stop", restart: "manual", starts: 0 },
+    { failure: "stop-failed-update", restart: "manual", starts: 1 },
+  ])(
+    "does not start another revision after $failure fails",
+    async ({ failure, restart, starts }) => {
+      const fixture = await deployment();
+      const calls: string[][] = [];
+      let stopCalls = 0;
+      const run: UpdaterCommandRunner = async (command, args) => {
+        if (command === "git") return ok(`${targetCommit}\trefs/tags/v1.1.0\n`);
+        calls.push(args);
+        if (args.includes("pull") && failure === "pull") return failed("download failed");
+        if (args.includes("stop")) {
+          stopCalls += 1;
+          if (failure === "stop" || (failure === "stop-failed-update" && stopCalls === 2)) {
+            return failed("shutdown failed");
+          }
+        }
+        if (args.includes("up")) return failed("API unhealthy");
+        return ok();
+      };
+      const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
+        repoUrl: "https://github.com/elie222/rakazo",
+        branch: "main",
+      });
+      const record = (await response.json()) as ServerUpdateRun;
+      expect(record).toMatchObject({ ok: false, restart });
+      expect(calls.filter((args) => args.includes("up"))).toHaveLength(starts);
+      expect(record.steps.some((step) => step.id === "recover")).toBe(false);
+      if (failure === "pull") expect(calls.some((args) => args.includes("stop"))).toBe(false);
+      if (failure === "stop")
+        expect(record.restartAdvice).toContain("Some services may be stopped");
+      if (failure === "stop-failed-update") {
+        expect(record.restartAdvice).toContain("failed update could not be stopped");
+      }
+      expect(await readFile(fixture.config.envFile, "utf8")).toContain("RAKAZO_IMAGE_TAG=v1.0.0");
+    },
+  );
+
   it("serializes updates before their asynchronous preflight can race", async () => {
     const fixture = await deployment();
     let releaseGate: ((result: ReturnType<typeof ok>) => void) | undefined;
@@ -174,13 +264,18 @@ describe("updater orchestration", () => {
       }
       return ok();
     };
-    const subject = createUpdaterApp(fixture.config, { run });
-    const input = { repoUrl: "https://github.com/elie222/rakazo", branch: "main" };
+    const subject = createTestUpdater(fixture.config, { run });
+    const input = {
+      repoUrl: "https://github.com/elie222/rakazo",
+      branch: "main",
+    };
     const first = request(subject, "/apply", input);
     await atRemote;
     const second = await request(subject, "/apply", input);
     expect(second.status).toBe(400);
-    await expect(second.json()).resolves.toEqual({ error: "An update is already running." });
+    await expect(second.json()).resolves.toEqual({
+      error: "An update is already running.",
+    });
     releaseGate?.(ok(`${targetCommit}\trefs/tags/v1.1.0\n`));
     expect((await first).status).toBe(200);
   });
@@ -202,8 +297,11 @@ describe("updater orchestration", () => {
       if (args[0] === "fetch") return failed("registry unavailable");
       return ok();
     };
-    const subject = createUpdaterApp(fixture.config, { run });
-    const response = await request(subject, "/apply", { repoUrl: nextRemote, branch: "main" });
+    const subject = createTestUpdater(fixture.config, { run });
+    const response = await request(subject, "/apply", {
+      repoUrl: nextRemote,
+      branch: "main",
+    });
     const record = (await response.json()) as ServerUpdateRun;
     expect(record.ok).toBe(false);
     expect(record.steps.map((step) => step.id)).toEqual(["remote", "fetch", "restore-remote"]);
@@ -217,23 +315,35 @@ describe("updater orchestration", () => {
 
   it("restores the prior image after a recreate fails health checks", async () => {
     const fixture = await deployment();
-    const calls: Array<{ command: string; args: string[]; env?: Record<string, string> }> = [];
+    const calls: Array<{
+      command: string;
+      args: string[];
+      env?: Record<string, string>;
+    }> = [];
     let upCalls = 0;
     const run: UpdaterCommandRunner = async (command, args, options) => {
       calls.push({ command, args, env: options.env });
       if (command === "git") return ok(`${targetCommit}\trefs/tags/v1.1.0\n`);
-      if (args.includes("pull")) return ok("pulled");
+      if (!args.includes("up")) return ok();
       upCalls += 1;
       return upCalls === 1 ? failed("api did not become healthy") : ok("restored");
     };
-    const subject = createUpdaterApp(fixture.config, { run });
+    const subject = createTestUpdater(fixture.config, { run });
     const response = await request(subject, "/apply", {
       repoUrl: "https://github.com/elie222/rakazo",
       branch: "main",
     });
     const record = (await response.json()) as ServerUpdateRun;
     expect(record).toMatchObject({ ok: false, restart: "not-required" });
-    expect(record.steps.map((step) => step.id)).toEqual(["pull", "recreate", "recover"]);
+    expect(record.steps.map((step) => step.id)).toEqual([
+      "pull",
+      "stop",
+      "migrations-before",
+      "recreate",
+      "stop-failed-update",
+      "migrations-after",
+      "recover",
+    ]);
     expect(record.restartAdvice).toMatch(/restored the previously running v1\.0\.0 image/);
     const composeUp = calls.filter(({ args }) => args.includes("up"));
     expect(composeUp).toHaveLength(2);
@@ -246,7 +356,10 @@ describe("updater orchestration", () => {
       "RAKAZO_IMAGE_TAG=v1.0.0",
     );
 
-    const state = await subject.request("/state", { method: "GET", headers: authorized });
+    const state = await subject.request("/state", {
+      method: "GET",
+      headers: authorized,
+    });
     expect(state.status).toBe(200);
     await expect(state.json()).resolves.toMatchObject({
       running: false,
@@ -277,7 +390,7 @@ describe("updater orchestration", () => {
       }
       return ok();
     };
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/apply", {
+    const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
       repoUrl: "https://github.com/example/fork",
       branch: "main",
     });
@@ -287,8 +400,13 @@ describe("updater orchestration", () => {
       "fetch",
       "checkout",
       "merge",
+      "build",
+      "stop",
+      "migrations-before",
       "recreate",
+      "stop-failed-update",
       "restore-checkout",
+      "migrations-after",
       "recover",
     ]);
     expect(calls).toContainEqual(["checkout", "-B", "main", currentCommit]);
@@ -312,7 +430,7 @@ describe("updater orchestration", () => {
       if (args[0] === "merge") return failed("not a fast-forward");
       return ok();
     };
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/apply", {
+    const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
       repoUrl: "https://github.com/example/fork",
       branch: "main",
     });
@@ -334,7 +452,7 @@ describe("updater orchestration", () => {
       calls.push(args);
       return ok();
     };
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/rollback");
+    const response = await request(createTestUpdater(fixture.config, { run }), "/rollback");
     const record = (await response.json()) as ServerUpdateRun;
     expect(record.ok).toBe(true);
     expect(calls.some((args) => args.includes("pull"))).toBe(false);
@@ -350,14 +468,18 @@ describe("updater orchestration", () => {
     const before = await lstat(envFile);
     const run: UpdaterCommandRunner = async (command) =>
       command === "git" ? ok(`${targetCommit}\trefs/tags/v1.1.0\n`) : ok();
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/apply", {
+    const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
       repoUrl: "https://github.com/elie222/rakazo",
       branch: "main",
     });
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ ok: true });
     const after = await lstat(envFile);
-    expect({ uid: after.uid, gid: after.gid, mode: after.mode & 0o777 }).toEqual({
+    expect({
+      uid: after.uid,
+      gid: after.gid,
+      mode: after.mode & 0o777,
+    }).toEqual({
       uid: before.uid,
       gid: before.gid,
       mode: 0o600,
@@ -374,7 +496,7 @@ describe("updater orchestration", () => {
     await symlink(target, envFile);
     const run: UpdaterCommandRunner = async (command) =>
       command === "git" ? ok(`${targetCommit}\trefs/tags/v1.1.0\n`) : ok();
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/apply", {
+    const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
       repoUrl: "https://github.com/elie222/rakazo",
       branch: "main",
     });
@@ -397,7 +519,7 @@ describe("updater orchestration", () => {
       if (args.includes("status")) return failed("cannot read index");
       return ok();
     };
-    const response = await request(createUpdaterApp(fixture.config, { run }), "/apply", {
+    const response = await request(createTestUpdater(fixture.config, { run }), "/apply", {
       repoUrl: "https://github.com/example/fork",
       branch: "main",
     });

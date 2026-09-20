@@ -1,0 +1,63 @@
+[
+  {
+    "id": "en-bulk-below",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [
+      {
+        "role": "customer",
+        "content": "Can I order 49 shirts? Please explain which sizes are available before I choose."
+      }
+    ],
+    "expectedConfigured": "no",
+    "expectedNeedsHuman": false
+  },
+  {
+    "id": "th-bulk-below",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [{ "role": "customer", "content": "อยากสั่งเสื้อ 49 ตัวค่ะ มีไซซ์อะไรบ้างคะ ยังไม่ยืนยันสั่งซื้อ" }],
+    "expectedConfigured": "no",
+    "expectedNeedsHuman": false
+  },
+  {
+    "id": "en-bulk-threshold",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [
+      {
+        "role": "customer",
+        "content": "I want to buy 50 shirts in one order. What information do you need from me?"
+      }
+    ],
+    "expectedConfigured": "yes",
+    "expectedNeedsHuman": true
+  },
+  {
+    "id": "th-bulk-threshold",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [
+      { "role": "customer", "content": "อยากสั่งเสื้อ 50 ตัวในออเดอร์เดียวค่ะ ต้องแจ้งรายละเอียดอะไรบ้างคะ" }
+    ],
+    "expectedConfigured": "yes",
+    "expectedNeedsHuman": true
+  },
+  {
+    "id": "en-negated-human",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [
+      {
+        "role": "customer",
+        "content": "I do not need to talk to a human. How should I measure myself for a shirt?"
+      }
+    ],
+    "expectedConfigured": "no",
+    "expectedNeedsHuman": false
+  },
+  {
+    "id": "th-negated-human",
+    "criteria": "Ask staff to handle requests to buy 50 or more units in one order.",
+    "messages": [
+      { "role": "customer", "content": "ไม่ต้องคุยกับแอดมินค่ะ อยากทราบวิธีวัดตัวเพื่อเลือกไซซ์เสื้อค่ะ" }
+    ],
+    "expectedConfigured": "no",
+    "expectedNeedsHuman": false
+  }
+]

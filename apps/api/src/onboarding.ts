@@ -30,7 +30,29 @@ type FocusOption = {
   apps: string[];
 };
 
-const FOCUS_OPTIONS: FocusOption[] = [
+const FOCUS_OPTIONS = [
+  {
+    id: "customers",
+    letter: "A",
+    label: "Customer replies",
+    question: "Where do customers contact you, and which store do you use?",
+  },
+  {
+    id: "knowledge",
+    letter: "B",
+    label: "Products & policies",
+    question: "Share your product catalog or policies. Which source has current prices and stock?",
+  },
+  {
+    id: "voice",
+    letter: "C",
+    label: "My brand voice",
+    question: "Share a few replies your business has written, or tell me which account has them.",
+  },
+];
+
+// Previously saved choice cards remain usable without rewriting conversation history.
+const LEGACY_FOCUS_OPTIONS: FocusOption[] = [
   {
     id: "day",
     letter: "A",
@@ -156,7 +178,7 @@ export async function promptFocus(
   const blocks: MessageBlock[] = [
     {
       kind: "choice",
-      question: "What do you want me on first?",
+      question: "What would you like to set up first?",
       options: FOCUS_OPTIONS.map(({ id, letter, label }) => ({ id, letter, label })),
     },
   ];
@@ -232,7 +254,7 @@ export async function chooseFocus(
   botId: string,
   optionId: string,
 ): Promise<void> {
-  const option = FOCUS_OPTIONS.find((entry) => entry.id === optionId);
+  const option = [...FOCUS_OPTIONS, ...LEGACY_FOCUS_OPTIONS].find((entry) => entry.id === optionId);
   if (!option) throw new IsolationError();
   const { bot, thread } = await requireBotThread(deps, actor, botId);
   const target = { spaceId: actor.spaceId, botId: bot.id, threadId: thread.id };
@@ -247,21 +269,43 @@ export async function chooseFocus(
       messageHasPendingChoice(message.blocks as MessageBlock[]),
     );
     if (!pending) return null;
+    const choice = (pending.blocks as MessageBlock[]).find(
+      (block) => block.kind === "choice" && !block.answerId,
+    );
+    if (choice?.kind !== "choice" || !choice.options.some((entry) => entry.id === option.id))
+      throw new IsolationError();
     const blocks = (pending.blocks as MessageBlock[]).map((block) =>
-      block.kind === "choice" ? { ...block, answerId: option.id } : block,
+      block === choice ? { ...block, answerId: option.id } : block,
     );
     await tx.message.update({ where: { id: pending.id }, data: { blocks } });
-    const event = await appendEventInTransaction(tx, {
+    let event = await appendEventInTransaction(tx, {
       spaceId: target.spaceId,
       threadId: target.threadId,
       botId: target.botId,
       type: "thread.message.updated",
       payload: { messageId: pending.id, role: "bot", blocks },
     });
+    if ("question" in option) {
+      const replyBlocks: MessageBlock[] = [{ kind: "text", text: option.question }];
+      const reply = await createThreadMessageInTransaction(tx, {
+        threadId: target.threadId,
+        role: "bot",
+        blocks: replyBlocks,
+      });
+      event = await appendEventInTransaction(tx, {
+        spaceId: target.spaceId,
+        threadId: target.threadId,
+        botId: target.botId,
+        type: "thread.message.created",
+        payload: { messageId: reply.id, role: "bot", blocks: replyBlocks },
+      });
+    }
     return { messageId: pending.id, blocks, event };
   });
   if (!claimed) return;
   await deps.events.notify(target.threadId, claimed.event.seq);
+
+  if ("question" in option) return;
 
   // Keep the name and title the user chose when creating the bot; the focus
   // step only suggests apps, it must not rename the bot.

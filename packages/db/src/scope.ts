@@ -24,6 +24,7 @@ export async function requireMembership(
   const membership = await prisma.spaceMember.findFirst({
     where: {
       userId,
+      member: { user: { deletion: null } },
       ...(requestedSpaceId ? { spaceId: requestedSpaceId } : {}),
     },
     orderBy: [{ space: { isDefault: "desc" } }, { createdAt: "asc" }, { id: "asc" }],

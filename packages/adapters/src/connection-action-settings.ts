@@ -24,6 +24,7 @@ export function createConnectionActionSettings(deps: {
       return actions.map((action) => ({
         name: action.name,
         description: action.description,
+        readOnly: action.readOnly === true,
         internal: actionInternal(policy, action.name),
         defaultInternal: !action.sharedByDefault,
         overridden: Object.hasOwn(policy.overrides, action.name),

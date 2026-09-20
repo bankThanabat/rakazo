@@ -46,6 +46,7 @@
   },
   "devDependencies": {
     "@chat-adapter/tests": "4.40.0",
+    "@rakazo/memory": "workspace:*",
     "@types/d3-dsv": "3.0.7",
     "@types/jsdom": "30.0.0",
     "@types/nodemailer": "8.0.1",

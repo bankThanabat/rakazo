@@ -1,0 +1,60 @@
+appId: com.rakazo.app
+name: Native customer attention and control
+---
+- launchApp:
+    clearState: true
+    permissions:
+      notifications: deny
+- runFlow: sign-in.yaml
+- extendedWaitUntil:
+    visible: "Document reviewer.*"
+    timeout: 30000
+- tapOn: ".*Customer"
+- extendedWaitUntil:
+    visible: ".*Review customer.*"
+    timeout: 10000
+- takeScreenshot: "customer-inbox"
+- tapOn: ".*Review customer.*"
+- extendedWaitUntil:
+    visible: "A staff member should check the size chart."
+    timeout: 10000
+- assertVisible: "Can you help me choose a size?"
+- tapOn: "Acknowledge"
+- extendedWaitUntil:
+    visible: "Acknowledged"
+    timeout: 10000
+- tapOn: "Assign to me"
+- tapOn: "Guide agent"
+- tapOn: "Private guidance.*"
+- inputText: "Ask for measurements before recommending a size."
+- hideKeyboard
+- tapOn: "Apply guidance"
+- extendedWaitUntil:
+    visible: "Guidance saved"
+    timeout: 10000
+- assertVisible: "Applies before the next reply."
+- tapOn: "OK"
+- tapOn: "Guide agent"
+- tapOn: "Reply to customer.*"
+- inputText: "Please share your measurements so I can check the size chart."
+- hideKeyboard
+- tapOn: "Send"
+- extendedWaitUntil:
+    visible: "Please share your measurements so I can check the size chart."
+    timeout: 10000
+- takeScreenshot: "staff-reply"
+- tapOn: "Resume AI"
+- extendedWaitUntil:
+    visible: "Take over"
+    timeout: 10000
+- assertNotVisible: "Reply to customer.*"
+- takeScreenshot: "agent-control"
+- tapOn: "Take over"
+- extendedWaitUntil:
+    visible: "Reply to customer.*"
+    timeout: 10000
+- tapOn: "Resolve"
+- extendedWaitUntil:
+    visible: "Reopen"
+    timeout: 10000
+- takeScreenshot: "resolved-under-staff-control"

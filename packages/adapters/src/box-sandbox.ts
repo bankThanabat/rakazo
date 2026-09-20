@@ -26,7 +26,13 @@ import type {
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { boxResponseError, wrapBoxCall } from "./box-errors.js";
-import { normalizeWorkspacePath, shellQuote, workspacePath } from "./computer-support.js";
+import {
+  assertComputerKind,
+  assertProvisionKind,
+  normalizeWorkspacePath,
+  shellQuote,
+  workspacePath,
+} from "./computer-support.js";
 import {
   PORTABLE_TRANSFER_BATCH_BYTES,
   shouldSkipPortableWorkspaceFile,
@@ -137,14 +143,10 @@ export class BoxSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: {
-      botId: string;
-      homePath: string;
-      providerRef?: string;
-      providerKind?: ComputerRef["kind"];
-    },
+    request: Parameters<SandboxProvider["provision"]>[0],
     context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, "box");
     const reconnecting = request.providerRef && request.providerKind === "box";
     const key = reconnecting ? request.providerRef! : `new:${request.botId}`;
     const pending = this.pendingProvisions.get(key);
@@ -421,6 +423,7 @@ export class BoxSandboxProvider implements SandboxProvider {
   }
 
   async stop(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "box");
     const id = this.id(computer);
     try {
       const current = await this.client.get({ boxId: id }, { signal: context.signal });
@@ -436,6 +439,7 @@ export class BoxSandboxProvider implements SandboxProvider {
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "box");
     const id = this.id(computer);
     try {
       await this.client.deleteBox(id);

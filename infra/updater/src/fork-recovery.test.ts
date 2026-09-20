@@ -20,7 +20,14 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true })));
 });
 
-type Failure = "checkout" | "merge" | "recreate" | "restore-checkout" | "recover" | "read-head";
+type Failure =
+  | "checkout"
+  | "merge"
+  | "build"
+  | "recreate"
+  | "restore-checkout"
+  | "recover"
+  | "read-head";
 interface Invocation {
   command: string;
   args: string[];
@@ -57,9 +64,17 @@ if (command === "docker") {
   call.envFile = fs.readFileSync(args[args.indexOf("--env-file") + 1], "utf8");
   call.imageTag = process.env.RAKAZO_IMAGE_TAG;
   log();
-  if (!args.includes("up")) fail("Unexpected Docker command");
-  if (args.includes("--build") && fixture.failures.length > 0) fail("new API unhealthy");
-  if (args.includes("--no-build") && hasFailure("recover")) fail("cached image unavailable");
+  if (args.includes("run")) {
+    process.stdout.write('RAKAZO_MIGRATION_STATE='+JSON.stringify({database:"a".repeat(64),history:"b".repeat(64),complete:true,matchesHistory:true,matchesImage:true}));
+    process.exit(0);
+  }
+  if (!args.some(arg => ["up", "stop", "build"].includes(arg))) fail("Unexpected Docker command");
+  if (args.includes("build") && hasFailure("build")) fail("build failed");
+  if (args.includes("up")) {
+    const target = process.env.RAKAZO_IMAGE_TAG === "local-" + fixture.targetCommit;
+    if (target && fixture.failures.length > 0) fail("new API unhealthy");
+    if (!target && hasFailure("recover")) fail("cached image unavailable");
+  }
 } else if (command === "git") {
   log();
   const joined = args.join(" ");
@@ -143,7 +158,10 @@ async function deployment(options: { failures: Failure[]; branch?: string; compo
   const subject = createUpdaterApp(config);
   const response = await subject.request("/apply", {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+    },
     body: JSON.stringify({ repoUrl: nextRemote, branch: "main" }),
   });
   const calls = (await readFile(path.join(bin, "calls.jsonl"), "utf8"))
@@ -161,15 +179,47 @@ async function deployment(options: { failures: Failure[]; branch?: string; compo
 }
 
 describe.skipIf(process.platform === "win32")("fork recovery through fake executables", () => {
+  it("keeps the running services untouched when image preparation fails", async () => {
+    const fixture = await deployment({ failures: ["build"] });
+    expect(fixture.record).toMatchObject({
+      ok: false,
+      restart: "not-required",
+    });
+    const docker = fixture.calls.filter((call) => call.command === "docker");
+    expect(docker).toHaveLength(1);
+    expect(docker[0]?.args).toContain("build");
+    expect(fixture.state.commit).toBe(currentCommit);
+    expect(await readFile(fixture.config.envFile, "utf8")).toBe(originalEnv);
+  });
+
   it.each([
     { branch: "deploy", composePath: undefined },
     { branch: "HEAD", composePath: "ops/custom-compose.yml" },
   ])("restores $branch and its Compose configuration before recovery", async (options) => {
-    const fixture = await deployment({ ...options, failures: ["recreate"] });
+    const fixture = await deployment({
+      ...options,
+      failures: ["recreate"],
+    });
     expect(fixture.response.status).toBe(200);
-    expect(fixture.record).toMatchObject({ ok: false, restart: "not-required" });
-    const docker = fixture.calls.filter((call) => call.command === "docker");
+    expect(fixture.record).toMatchObject({
+      ok: false,
+      restart: "not-required",
+    });
+    const docker = fixture.calls.filter(
+      (call) => call.command === "docker" && call.args.includes("up"),
+    );
     expect(docker).toHaveLength(2);
+    const stops = fixture.calls.filter(
+      (call) => call.command === "docker" && call.args.includes("stop"),
+    );
+    expect(stops).toHaveLength(2);
+    for (const stop of stops) {
+      expect(stop).toMatchObject({
+        commit: targetCommit,
+        serviceEnv: "REVISION=new\n",
+        imageTag: `local-${targetCommit}`,
+      });
+    }
     expect(docker[0]).toMatchObject({
       commit: targetCommit,
       compose: expect.stringContaining("command: new"),
@@ -187,8 +237,13 @@ describe.skipIf(process.platform === "win32")("fork recovery through fake execut
       "fetch",
       "checkout",
       "merge",
+      "build",
+      "stop",
+      "migrations-before",
       "recreate",
+      "stop-failed-update",
       "restore-checkout",
+      "migrations-after",
       "recover",
       "restore-remote",
     ]);
@@ -216,14 +271,19 @@ describe.skipIf(process.platform === "win32")("fork recovery through fake execut
     expect(fixture.record).toMatchObject({
       ok: false,
       restart: "manual",
-      error: "Build the new images and recreate the services failed.",
+      error: "Recreate the services failed.",
     });
     expect(fixture.record.restartAdvice).toMatch(/skipped.*checkout could not be restored/);
-    expect(fixture.calls.filter((call) => call.command === "docker")).toHaveLength(1);
+    expect(
+      fixture.calls.filter((call) => call.command === "docker" && call.args.includes("up")),
+    ).toHaveLength(1);
     expect(fixture.record.steps.filter((step) => step.id === "restore-checkout")).toEqual([
       expect.objectContaining({ ok: false }),
     ]);
-    expect(fixture.record.steps.at(-1)).toMatchObject({ id: "restore-remote", ok: true });
+    expect(fixture.record.steps.at(-1)).toMatchObject({
+      id: "restore-remote",
+      ok: true,
+    });
     expect(fixture.state.remote).toBe(originalRemote);
     expect(await readFile(fixture.config.envFile, "utf8")).toBe(originalEnv);
   });
@@ -233,10 +293,12 @@ describe.skipIf(process.platform === "win32")("fork recovery through fake execut
     expect(fixture.record).toMatchObject({
       ok: false,
       restart: "manual",
-      error: "Build the new images and recreate the services failed.",
+      error: "Recreate the services failed.",
     });
     expect(fixture.record.steps.find((step) => step.id === "recover")).toMatchObject({ ok: false });
-    expect(fixture.calls.filter((call) => call.command === "docker")[1]).toMatchObject({
+    expect(
+      fixture.calls.filter((call) => call.command === "docker" && call.args.includes("up"))[1],
+    ).toMatchObject({
       commit: currentCommit,
       serviceEnv: "REVISION=old\n",
       imageTag: oldTag,
@@ -288,8 +350,14 @@ describe.skipIf(process.platform === "win32")("fork recovery through fake execut
     expect(
       fixture.record.steps.some((step) => step.id.startsWith("restore") || step.id === "recover"),
     ).toBe(false);
-    expect(fixture.calls.filter((call) => call.command === "docker")).toHaveLength(1);
-    expect(fixture.state).toEqual({ commit: targetCommit, branch: "main", remote: nextRemote });
+    expect(
+      fixture.calls.filter((call) => call.command === "docker" && call.args.includes("up")),
+    ).toHaveLength(1);
+    expect(fixture.state).toEqual({
+      commit: targetCommit,
+      branch: "main",
+      remote: nextRemote,
+    });
     expect(await readFile(fixture.config.envFile, "utf8")).toContain(
       `RAKAZO_IMAGE_TAG=local-${targetCommit}\n`,
     );

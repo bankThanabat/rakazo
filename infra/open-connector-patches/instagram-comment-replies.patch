@@ -1,0 +1,257 @@
+diff --git a/src/providers/instagram/actions.ts b/src/providers/instagram/actions.ts
+index abde6425..5eb8106b 100644
+--- a/src/providers/instagram/actions.ts
++++ b/src/providers/instagram/actions.ts
+@@ -114,8 +114,9 @@ const commentSchema = s.object(
+       ),
+     ),
+     parentId: s.optional(instagramId("Parent comment ID when Meta includes reply metadata.")),
++    userId: s.optional(instagramId("Author IG User ID, returned by Meta only when the app user created the comment.")),
+   },
+-  { required: ["id", "text"], description: "Normalized top-level Instagram media comment." },
++  { required: ["id", "text"], description: "Normalized Instagram comment or reply." },
+ );
+ 
+ const insightMetricNames = [
+@@ -291,6 +292,22 @@ export const instagramActions: ActionDefinition[] = [
+     ),
+     followUpActions: ["instagram.reply_to_comment"],
+   }),
++  action({
++    name: "list_comment_replies",
++    description:
++      "List a page of replies to a comment on owned Instagram media. Follow the returned cursor to read further pages; deleted or unavailable replies are not returned.",
++    requiredScopes: commentScopes,
++    inputSchema: paginationInputSchema(
++      50,
++      { commentId: instagramId("Parent Instagram comment ID whose replies should be listed.") },
++      ["commentId"],
++    ),
++    outputSchema: s.object(
++      { comments: s.array(commentSchema, { description: "Instagram comment replies." }), paging: pagingSchema },
++      { required: ["comments", "paging"], description: "Instagram reply page." },
++    ),
++    followUpActions: ["instagram.list_comment_replies"],
++  }),
+   action({
+     name: "get_media_insights",
+     description:
+diff --git a/src/providers/instagram/comment-replies.test.ts b/src/providers/instagram/comment-replies.test.ts
+new file mode 100644
+index 00000000..845060ff
+--- /dev/null
++++ b/src/providers/instagram/comment-replies.test.ts
+@@ -0,0 +1,162 @@
++import type { OAuthProviderContext } from "../provider-runtime.ts";
++
++import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
++import { validateActionInput } from "../../core/validation.ts";
++import { instagramActions } from "./actions.ts";
++import { instagramActionHandlers } from "./runtime.ts";
++
++beforeAll(() =>
++  vi.stubGlobal("fetch", () => {
++    throw new Error("Unexpected network access");
++  }),
++);
++afterAll(() => vi.unstubAllGlobals());
++
++const context = (fetcher: OAuthProviderContext["fetcher"]): OAuthProviderContext => ({
++  accessToken: "synthetic-token",
++  accountId: "owned-account",
++  fetcher,
++});
++const replyAction = instagramActions.find((action) => action.name === "list_comment_replies")!;
++
++describe("Instagram comment reply reads", () => {
++  it("requires comment permissions and rejects invalid pagination or arbitrary request input", () => {
++    expect(replyAction.requiredScopes).toEqual(["instagram_business_basic", "instagram_business_manage_comments"]);
++    expect(validateActionInput(replyAction, { commentId: "parent", limit: 50, after: "cursor" }).valid).toBe(true);
++    for (const input of [
++      {},
++      { commentId: "" },
++      { commentId: "parent", limit: 51 },
++      { commentId: "parent", limit: 0 },
++      { commentId: "parent", after: "a", before: "b" },
++      { commentId: "parent", method: "POST" },
++    ])
++      expect(validateActionInput(replyAction, input).valid).toBe(false);
++  });
++
++  it("reads separate reply pages with fixed GET requests and keeps app-user author evidence", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target, init) => {
++      const url = new URL(String(target));
++      expect(url.origin).toBe("https://graph.instagram.com");
++      expect(url.pathname).toBe("/v25.0/parent/replies");
++      expect(url.searchParams.get("limit")).toBe("50");
++      expect(url.searchParams.get("fields")).toContain("user{id}");
++      expect(init?.method).toBe("GET");
++      expect(init?.body).toBeUndefined();
++      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-token");
++      if (!url.searchParams.has("after"))
++        return Response.json({
++          data: [
++            {
++              id: "reply-1",
++              text: "  สวัสดีค่ะ  ",
++              timestamp: "2026-09-19T00:00:00+0000",
++              from: { id: "scoped-author" },
++              user: { id: "app-author" },
++              parent_id: "parent",
++            },
++          ],
++          paging: { next: "https://untrusted.example.test/?access_token=private", cursors: { after: "page-2" } },
++        });
++      expect(url.searchParams.get("after")).toBe("page-2");
++      return Response.json({
++        data: [{ id: "reply-2", text: "Customer question", username: "customer", from: { id: "other-scoped-author" } }],
++      });
++    });
++    const first = await instagramActionHandlers.list_comment_replies(
++      { commentId: "parent", limit: 50 },
++      context(fetcher),
++    );
++    expect(first).toEqual({
++      comments: [
++        {
++          id: "reply-1",
++          text: "  สวัสดีค่ะ  ",
++          timestamp: "2026-09-19T00:00:00+0000",
++          from: { id: "scoped-author" },
++          userId: "app-author",
++          parentId: "parent",
++        },
++      ],
++      paging: { after: "page-2", hasNextPage: true, hasPreviousPage: false },
++    });
++    expect(JSON.stringify(first)).not.toContain("private");
++    const second = await instagramActionHandlers.list_comment_replies(
++      { commentId: "parent", limit: 50, after: "page-2" },
++      context(fetcher),
++    );
++    expect(second).toEqual({
++      comments: [
++        { id: "reply-2", text: "Customer question", username: "customer", from: { id: "other-scoped-author" } },
++      ],
++      paging: { hasNextPage: false, hasPreviousPage: false },
++    });
++    expect(fetcher).toHaveBeenCalledTimes(2);
++  });
++
++  it("preserves top-level comment reads and never infers userId from usernames or scoped IDs", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target) => {
++      const url = new URL(String(target));
++      expect(url.pathname).toBe("/v25.0/media/comments");
++      expect(url.searchParams.get("fields")).toBe("id,text,timestamp,username,from{id,username},parent_id");
++      return Response.json({
++        data: [
++          { id: "owned", text: "Business reply", user: { id: "app-author" } },
++          { id: "unknown", text: "Unknown author", username: "owned-name", from: { id: "owned-account" } },
++          { id: "malformed", text: "Unverified author", user: "app-author" },
++        ],
++      });
++    });
++    expect(await instagramActionHandlers.list_media_comments({ mediaId: "media" }, context(fetcher))).toEqual({
++      comments: [
++        { id: "owned", text: "Business reply", userId: "app-author" },
++        { id: "unknown", text: "Unknown author", username: "owned-name", from: { id: "owned-account" } },
++        { id: "malformed", text: "Unverified author" },
++      ],
++      paging: { hasNextPage: false, hasPreviousPage: false },
++    });
++  });
++
++  it("encodes parent IDs and ignores attempted HTTP overrides even at the handler boundary", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target, init) => {
++      const url = new URL(String(target));
++      expect(url.origin).toBe("https://graph.instagram.com");
++      expect(url.pathname).toBe("/v25.0/parent%2Fmessages%3Faccess_token%3Dother/replies");
++      expect(init?.method).toBe("GET");
++      expect(init?.body).toBeUndefined();
++      expect(url.searchParams.has("access_token")).toBe(false);
++      return Response.json({ data: [] });
++    });
++    await instagramActionHandlers.list_comment_replies(
++      {
++        commentId: "parent/messages?access_token=other",
++        method: "POST",
++        endpoint: "https://untrusted.example.test",
++        body: { text: "send" },
++      },
++      context(fetcher),
++    );
++    expect(fetcher).toHaveBeenCalledTimes(1);
++  });
++
++  it.each([403, 404, 429])(
++    "keeps HTTP %i as a failure instead of claiming an empty completed history",
++    async (status) => {
++      const fetcher = vi
++        .fn<OAuthProviderContext["fetcher"]>()
++        .mockResolvedValue(Response.json({ error: { message: "Unavailable" } }, { status }));
++      await expect(
++        instagramActionHandlers.list_comment_replies({ commentId: "parent" }, context(fetcher)),
++      ).rejects.toMatchObject({ status });
++    },
++  );
++
++  it("rejects missing IDs and conflicting cursors before contacting Meta", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>();
++    await expect(instagramActionHandlers.list_comment_replies({}, context(fetcher))).rejects.toThrow();
++    await expect(
++      instagramActionHandlers.list_comment_replies({ commentId: "parent", after: "a", before: "b" }, context(fetcher)),
++    ).rejects.toThrow();
++    expect(fetcher).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/providers/instagram/runtime.ts b/src/providers/instagram/runtime.ts
+index 9864985a..5b5ebd12 100644
+--- a/src/providers/instagram/runtime.ts
++++ b/src/providers/instagram/runtime.ts
+@@ -88,7 +88,12 @@ function createInstagramActionHandlers(): ProviderActionHandlers<"instagram", In
+     },
+     list_media: listMedia,
+     get_media: getMedia,
+-    list_media_comments: listMediaComments,
++    list_media_comments(input, context) {
++      return listComments(input, context, "mediaId", "comments");
++    },
++    list_comment_replies(input, context) {
++      return listComments(input, context, "commentId", "replies");
++    },
+     get_media_insights: getMediaInsights,
+     publish_media(input, context) {
+       return publishMedia(input, {
+@@ -178,18 +183,20 @@ async function getMedia(
+   return { media: normalizeMedia(requiredRecord(payload, "Instagram media", providerResponseError)) };
+ }
+ 
+-async function listMediaComments(
++async function listComments(
+   input: Record<string, unknown>,
+   context: OAuthProviderContext,
++  idField: "mediaId" | "commentId",
++  edge: "comments" | "replies",
+ ): Promise<Record<string, unknown>> {
+   assertExclusiveCursors(input);
+-  const mediaId = requiredString(input.mediaId, "mediaId", providerInputError);
++  const parentId = requiredString(input[idField], idField, providerInputError);
+   const payload = requiredRecord(
+     await instagramRequestJson(
+       {
+-        path: `/${encodePathSegment(mediaId)}/comments`,
++        path: `/${encodePathSegment(parentId)}/${edge}`,
+         query: {
+-          fields: commentFields,
++          fields: edge === "replies" ? `${commentFields},user{id}` : commentFields,
+           after: optionalString(input.after),
+           before: optionalString(input.before),
+           limit: stringifyInteger(input.limit),
+@@ -698,6 +705,7 @@ function normalizeComment(payload: Record<string, unknown>): Record<string, unkn
+     username: optionalString(payload.username),
+     from: from ? compactObject({ id: optionalString(from.id), username: optionalString(from.username) }) : undefined,
+     parentId: optionalString(payload.parent_id),
++    userId: optionalString(optionalRecord(payload.user)?.id),
+   });
+ }
+ 

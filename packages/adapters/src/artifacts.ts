@@ -8,6 +8,7 @@ import type {
   ArtifactStore,
   NotificationMessage,
   NotificationProvider,
+  NotificationResult,
 } from "@rakazo/adapter-kit";
 
 const O_NOFOLLOW = constants.O_NOFOLLOW ?? 0;
@@ -71,7 +72,8 @@ export class CapturingNotificationProvider implements NotificationProvider {
     };
   }
 
-  async send(message: NotificationMessage, _context: AdapterContext): Promise<void> {
+  async send(message: NotificationMessage, _context: AdapterContext): Promise<NotificationResult> {
     this.sent.push(message);
+    return { status: "accepted" };
   }
 }

@@ -1,4 +1,5 @@
-import { type CommandResult, Sandbox, TimeoutError } from "@e2b/desktop";
+import type { CommandResult } from "@e2b/desktop";
+import { Sandbox, SandboxNotFoundError, TimeoutError } from "@e2b/desktop";
 import type {
   AdapterContext,
   CommandRequest,
@@ -16,7 +17,13 @@ import type {
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { sandboxIdleMs } from "./computer-idle.js";
-import { normalizeWorkspacePath, shellQuote, workspacePath } from "./computer-support.js";
+import {
+  assertComputerKind,
+  assertProvisionKind,
+  normalizeWorkspacePath,
+  shellQuote,
+  workspacePath,
+} from "./computer-support.js";
 import {
   PORTABLE_TRANSFER_BATCH_BYTES,
   shouldSkipPortableWorkspaceFile,
@@ -29,7 +36,14 @@ const E2B_BROWSER_PROFILES = `${E2B_WORKSPACE}/.browser-profiles`;
 export interface E2BSandboxSdk {
   create(options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
   connect(id: string, options: { apiKey: string; timeoutMs: number }): Promise<Sandbox>;
-  pause(id: string, options: { apiKey: string }): Promise<void>;
+  pause(
+    id: string,
+    options: { apiKey: string; signal?: AbortSignal; requestTimeoutMs?: number },
+  ): Promise<boolean>;
+  kill(
+    id: string,
+    options: { apiKey: string; signal?: AbortSignal; requestTimeoutMs?: number },
+  ): Promise<boolean>;
 }
 
 export function e2bCreateOptions(botId: string, apiKey: string) {
@@ -101,6 +115,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         takeover: true,
         persistentHome: true,
         multiScreen: true,
+        replaySafeDestroy: true,
       },
     };
   }
@@ -144,14 +159,10 @@ export class E2BSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: {
-      botId: string;
-      homePath: string;
-      providerRef?: string;
-      providerKind?: ComputerRef["kind"];
-    },
+    request: Parameters<SandboxProvider["provision"]>[0],
     _context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, "e2b");
     if (request.providerRef && request.providerKind === "e2b") {
       try {
         const desktop = await this.box({
@@ -366,23 +377,34 @@ export class E2BSandboxProvider implements SandboxProvider {
     return this.desktops.releaseScreen(computer, context);
   }
 
-  async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+  async stop(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "e2b");
     const id = computer.providerRef || computer.id;
-    const desktop = this.boxes.get(id);
-    this.forget(id);
-    if (desktop) {
-      await desktop.pause().catch(() => undefined);
-      return;
+    try {
+      await this.sdk.pause(id, {
+        apiKey: this.apiKey,
+        signal: context.signal,
+        requestTimeoutMs: 30_000,
+      });
+    } catch (error) {
+      // A confirmed missing sandbox is stopped. Transport/authentication failures are not.
+      if (!(error instanceof SandboxNotFoundError)) throw error;
     }
-    await this.sdk.pause(id, { apiKey: this.apiKey }).catch(() => undefined);
+    this.forget(id);
   }
 
-  async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+  async destroy(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "e2b");
     const id = computer.providerRef || computer.id;
-    const desktop = this.boxes.get(id) ?? (await this.box(computer).catch(() => undefined));
-    this.forget(id);
+    // Delete by ID without reconnecting, which could resume a paused sandbox or fail
+    // before deletion. Keep the handle on failure so cleanup remains retryable.
     // The SDK returns false when the sandbox is already gone; teardown is complete.
-    await desktop?.kill();
+    await this.sdk.kill(id, {
+      apiKey: this.apiKey,
+      signal: context.signal,
+      requestTimeoutMs: 30_000,
+    });
+    this.forget(id);
   }
 
   private forget(id: string): void {

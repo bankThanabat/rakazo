@@ -76,7 +76,7 @@ describe("local settings authority", () => {
       expect((await f.request(procedure)).status).toBe(200);
     }
     expect(f.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId: "owner" } }),
+      expect.objectContaining({ where: { userId: "owner", member: { user: { deletion: null } } } }),
     );
     expect(f.handle).toHaveBeenCalledWith(
       expect.any(Request),

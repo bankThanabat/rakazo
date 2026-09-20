@@ -6,6 +6,10 @@ import { addScreenProxyCapability, mountScreenTarget } from "./screen-proxy.js";
 
 const secret = "fake-screen-secret";
 const scope = {
+  spaceId: "space",
+  userId: "user",
+  sessionId: "session",
+  membershipId: "membership",
   botId: "bot",
   computerId: "computer",
   botGeneration: 0,
@@ -24,12 +28,15 @@ function fixture(interactive = false) {
   };
   const bot = {
     id: "bot",
+    spaceId: "space",
+    userId: "user",
     computerId: "computer",
     archivedAt: null as Date | null,
     screenGeneration: 0,
     computer,
   };
-  const findFirst = vi.fn(async ({ where }) =>
+  const findFirst = vi.fn(async ({ where: { space: _space, ...where } }) =>
+    // Real relational authorization is covered by screen-revocation.postgres.test.ts.
     Object.entries(where).every(([key, value]) => bot[key as keyof typeof bot] === value)
       ? bot
       : null,

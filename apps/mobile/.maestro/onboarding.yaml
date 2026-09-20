@@ -1,0 +1,44 @@
+appId: com.rakazo.app
+name: Merchant setup in the staff conversation
+---
+- launchApp:
+    clearState: true
+    permissions:
+      notifications: deny
+- runFlow: sign-in.yaml
+- extendedWaitUntil:
+    visible: "Create"
+    timeout: 30000
+- tapOn: "Create"
+- tapOn: "New bot"
+- extendedWaitUntil:
+    visible: "What would you like to set up first[?]"
+    timeout: 30000
+- assertVisible: "Customer replies"
+- assertVisible: "Products & policies"
+- assertVisible: "My brand voice"
+- assertVisible: "Dismiss"
+- takeScreenshot: "merchant-setup-choices"
+- tapOn: "Customer replies"
+- extendedWaitUntil:
+    visible: ".*Where do customers contact you, and which store do you use[?]"
+    timeout: 15000
+- assertNotVisible: "My brand voice"
+- takeScreenshot: "merchant-setup-context"
+- stopApp
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "New Bot.*"
+    timeout: 30000
+- tapOn: "New Bot.*"
+- extendedWaitUntil:
+    visible: "Chat settings"
+    timeout: 15000
+- extendedWaitUntil:
+    visible: ".*Where do customers contact you, and which store do you use[?]"
+    timeout: 15000
+- assertNotVisible: "My brand voice"
+- assertVisible: "Customer replies"
+- takeScreenshot: "merchant-setup-restored"

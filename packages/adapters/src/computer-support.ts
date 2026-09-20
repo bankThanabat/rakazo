@@ -1,7 +1,32 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import type { ComputerAction, ComputerObservation, ComputerRef } from "@rakazo/adapter-kit";
+import type {
+  ComputerAction,
+  ComputerObservation,
+  ComputerRef,
+  SandboxProvider,
+} from "@rakazo/adapter-kit";
 import type { ComputerMode } from "@rakazo/contracts";
+
+/** A boundary rejection before the adapter dispatches any operation. */
+export class ComputerProviderMismatchError extends Error {
+  constructor() {
+    super("Computer provider does not match");
+    this.name = "ComputerProviderMismatchError";
+  }
+}
+
+export function assertComputerKind(computer: ComputerRef, expected: ComputerRef["kind"]): void {
+  if (computer.kind !== expected) throw new ComputerProviderMismatchError();
+}
+
+export function assertProvisionKind(
+  request: Parameters<SandboxProvider["provision"]>[0],
+  expected: ComputerRef["kind"],
+): void {
+  if (request.providerRef && request.providerKind !== expected)
+    throw new ComputerProviderMismatchError();
+}
 
 export function toComputerRef(computer: {
   homeKey: string;

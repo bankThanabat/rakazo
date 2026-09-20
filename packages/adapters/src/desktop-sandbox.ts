@@ -31,6 +31,8 @@ import type {
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import {
   applyPlaceholderAction,
+  assertComputerKind,
+  assertProvisionKind,
   boundedComputerActions,
   normalizeWorkspacePath,
   placeholderObservation,
@@ -80,9 +82,10 @@ export class DesktopSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: { botId: string; homePath: string },
+    request: Parameters<SandboxProvider["provision"]>[0],
     _context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, "desktop");
     const home = path.resolve(
       this.opts.root ?? path.join(process.cwd(), "data"),
       "desktop-computers",
@@ -261,11 +264,13 @@ export class DesktopSandboxProvider implements SandboxProvider {
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "desktop");
     const box = this.boxFor(computer);
     if (box) box.running = false;
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "desktop");
     const box = this.boxFor(computer);
     if (box) this.boxes.delete(box.ref.id);
     this.boxes.delete(computer.id);

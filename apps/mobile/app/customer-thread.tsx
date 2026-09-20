@@ -1,5 +1,6 @@
 import { useCustomerActions } from "@rakazo/chat-ui/customer-actions";
 import type { CustomerSnapshot } from "@rakazo/contracts";
+import { customerDeliveryUnconfirmed } from "@rakazo/core";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
@@ -26,6 +27,10 @@ export default function CustomerThread() {
   const { t } = useI18n();
   const router = useRouter();
   const [before, setBefore] = useState<number>();
+  const [acknowledging, setAcknowledging] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const [guidance, setGuidance] = useState("");
+  const [steerBusy, setSteerBusy] = useState(false);
   const polling = useFocusedPolling(
     () => rpc<CustomerSnapshot>("customers/snapshot", { id: conversationId, before }),
     `${conversationId}:${before}`,
@@ -79,6 +84,37 @@ export default function CustomerThread() {
         }}
       />
       <View style={{ flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 8 }}>
+        {current?.conversation.canReply &&
+          current.conversation.needsHuman &&
+          current.conversation.state === "open" && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: acknowledging || Boolean(current.conversation.acknowledgedAt),
+              }}
+              disabled={acknowledging || Boolean(current.conversation.acknowledgedAt)}
+              style={{ padding: 12 }}
+              onPress={async () => {
+                setAcknowledging(true);
+                try {
+                  await updateCase({ acknowledge: true });
+                } finally {
+                  setAcknowledging(false);
+                }
+              }}
+            >
+              <Text
+                style={{
+                  color:
+                    current.conversation.acknowledgedAt || acknowledging
+                      ? tokens.mutedForeground
+                      : tokens.foreground,
+                }}
+              >
+                {current.conversation.acknowledgedAt ? t("Acknowledged") : t("Acknowledge")}
+              </Text>
+            </Pressable>
+          )}
         <Pressable
           accessibilityRole="button"
           style={{ padding: 12 }}
@@ -143,6 +179,73 @@ export default function CustomerThread() {
         <Text style={{ color: tokens.mutedForeground, padding: 16 }}>
           {current.conversation.handoffReason}
         </Text>
+      )}
+      {current?.conversation.canReply && (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setSteering(!steering)}
+          style={{ padding: 16 }}
+        >
+          <Text style={{ color: tokens.foreground }}>{t("Guide agent")}</Text>
+        </Pressable>
+      )}
+      {current?.notificationIssue && (
+        <Text accessibilityLiveRegion="polite" style={{ color: tokens.destructive, padding: 16 }}>
+          {current.notificationIssue === "uncertain"
+            ? t("Staff notification delivery is unconfirmed.")
+            : t("Could not notify staff.")}
+        </Text>
+      )}
+      {steering && (
+        <View style={{ padding: 16, gap: 12 }}>
+          <TextInput
+            accessibilityLabel={t("Private guidance")}
+            placeholder={t("Private guidance")}
+            placeholderTextColor={tokens.mutedForeground}
+            multiline
+            value={guidance}
+            onChangeText={setGuidance}
+            maxLength={4000}
+            editable={!steerBusy}
+            style={{
+              color: tokens.foreground,
+              borderColor: tokens.border,
+              borderWidth: 1,
+              borderRadius: 8,
+              padding: 12,
+              minHeight: 80,
+            }}
+          />
+          <Pressable
+            accessibilityRole="button"
+            disabled={steerBusy || !guidance.trim()}
+            style={{ padding: 12 }}
+            onPress={async () => {
+              setSteerBusy(true);
+              try {
+                const result = await rpc<{ inFlight: boolean }>("customers/steer", {
+                  id: conversationId,
+                  guidance,
+                  nonce: newClientNonce(),
+                });
+                setGuidance("");
+                polling.refresh();
+                Alert.alert(
+                  t("Guidance saved"),
+                  result.inFlight
+                    ? t("An earlier action may already have been sent.")
+                    : t("Applies before the next reply."),
+                );
+              } catch {
+                Alert.alert(t("Could not save guidance"));
+              } finally {
+                setSteerBusy(false);
+              }
+            }}
+          >
+            <Text style={{ color: tokens.foreground }}>{t("Apply guidance")}</Text>
+          </Pressable>
+        </View>
       )}
       {current?.before && (
         <Pressable
@@ -217,7 +320,11 @@ export default function CustomerThread() {
                   marginTop: 4,
                 }}
               >
-                {item.status === "failed" ? t("Reply failed") : t("Cancelled")}
+                {customerDeliveryUnconfirmed(item)
+                  ? t("Delivery unconfirmed")
+                  : item.status === "failed"
+                    ? t("Reply failed")
+                    : t("Cancelled")}
               </Text>
             ) : null}
           </View>

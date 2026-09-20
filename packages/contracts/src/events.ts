@@ -91,6 +91,11 @@ export type SecretAskPurpose = z.infer<typeof SecretAskPurpose>;
 export const MessageBlock = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),
   z.object({
+    kind: z.literal("learning_updates"),
+    botId: Id,
+    taskIds: z.array(Id).min(1).max(500),
+  }),
+  z.object({
     kind: z.literal("card"),
     lines: z.array(z.object({ k: z.string(), v: z.string() })),
   }),
@@ -98,6 +103,13 @@ export const MessageBlock = z.discriminatedUnion("kind", [
     kind: z.literal("ask"),
     text: z.string(),
     approvalEffectId: Id.optional(),
+    /** Locates the exact JSON request after any approval reason in detail. */
+    approvalRequest: z
+      .object({
+        tool: z.string(),
+        offset: z.number().int().nonnegative(),
+      })
+      .optional(),
     detail: z.string().optional(),
     input: z.enum(["text", "secret"]).optional(),
     /** Why the secret is needed; drives field label on the masked card. */

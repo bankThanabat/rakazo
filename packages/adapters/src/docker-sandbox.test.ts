@@ -23,6 +23,47 @@ describe("Docker sandbox", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["../outside", "/home/rakazo/../outside", "/home/rakazo/notes/../../outside"])(
+    "rejects command directory traversal before contacting the supervisor: %s",
+    async (cwd) => {
+      const fetchMock = vi.fn(async () => Response.json({ stdout: "", stderr: "", code: 0 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+      const execute = async () => {
+        for await (const _event of provider.execute(
+          { id: "computer", botId: "bot", kind: "docker", providerRef: "computer" },
+          { argv: ["pwd"], cwd },
+          context,
+        )) {
+          // Consume the command stream so validation runs.
+        }
+      };
+      await expect(execute()).rejects.toThrow("Path escapes the computer workspace");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["notes/reports", "/home/rakazo/notes/reports", "/home/rakazo//notes//reports"])(
+    "keeps valid command directories inside the workspace: %s",
+    async (cwd) => {
+      const fetchMock = vi.fn(async (_input: unknown, _init?: RequestInit) =>
+        Response.json({ stdout: "", stderr: "", code: 0 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const provider = new DockerSandboxProvider("http://supervisor.test", "test-token");
+      for await (const _event of provider.execute(
+        { id: "computer", botId: "bot", kind: "docker", providerRef: "computer" },
+        { argv: ["pwd"], cwd },
+        context,
+      )) {
+        // Consume the command stream so the supervisor request completes.
+      }
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).cwd).toBe(
+        "/home/rakazo/notes/reports",
+      );
+    },
+  );
+
   it("sends the bounded timeout to the supervisor and preserves its honest result", async () => {
     const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Response.json({

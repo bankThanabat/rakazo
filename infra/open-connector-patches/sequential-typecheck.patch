@@ -1,0 +1,15 @@
+diff --git a/scripts/typecheck.ts b/scripts/typecheck.ts
+--- a/scripts/typecheck.ts
++++ b/scripts/typecheck.ts
+@@ -26,7 +26,10 @@
+ await mkdir(buildInfoDir, { recursive: true });
+ 
+ const projects = selectProjects(process.argv.slice(2));
+-const results = await Promise.all(projects.map((project) => typecheckProject(project)));
++const results: TypecheckResult[] = [];
++for (const project of projects) {
++  results.push(await typecheckProject(project));
++}
+ const failedResults = results.filter((result) => result.exitCode !== 0 || result.signal);
+ 
+ for (const result of failedResults.length > 0 ? results : results.filter((result) => result.output)) {

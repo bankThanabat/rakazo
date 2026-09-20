@@ -3,12 +3,14 @@ import type {
   AgentRuntime,
   JobPublisher,
   SemanticMemoryResponse,
+  SemanticMemorySaveResponse,
 } from "@rakazo/adapter-kit";
 import { historyCompactJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
+import { beginSemanticHistoryMutation, finishSemanticHistoryMutation } from "@rakazo/db";
 import { createLogger, createTestSink, installLogger } from "@rakazo/logging";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   compactHistory,
   formatCompactedSummary,
@@ -20,6 +22,16 @@ import {
   selectCompactedHistory,
   shouldEnqueueCompaction,
 } from "./history-compaction.js";
+
+vi.mock("@rakazo/db", async (original) => ({
+  ...(await original<typeof import("@rakazo/db")>()),
+  beginSemanticHistoryMutation: vi.fn(),
+  finishSemanticHistoryMutation: vi.fn(),
+}));
+beforeEach(() => {
+  vi.mocked(beginSemanticHistoryMutation).mockReset().mockResolvedValue("history:test-save");
+  vi.mocked(finishSemanticHistoryMutation).mockReset().mockResolvedValue(undefined);
+});
 
 describe("shouldEnqueueCompaction", () => {
   it("is false when nothing has aged out of the window yet", () => {
@@ -152,7 +164,7 @@ describe("selectCompactedHistory", () => {
 describe("formatCompactedSummary", () => {
   it("labels the summary as data and records its coverage", () => {
     expect(formatCompactedSummary("facts", 49)).toContain(
-      "Rakazo-owned compacted context through message sequence 49",
+      "Deskazo-owned compacted context through message sequence 49",
     );
     expect(formatCompactedSummary("facts", 49)).toContain("<compacted_thread_summary>");
   });
@@ -328,7 +340,7 @@ function compactionHarness(
     }),
   };
   const saveMemory = vi.fn(
-    async (): Promise<SemanticMemoryResponse> => ({ ok: true, value: undefined }),
+    async (): Promise<SemanticMemorySaveResponse> => ({ ok: true, value: [] }),
   );
   const purgeHistory = vi.fn(
     async (): Promise<SemanticMemoryResponse> => ({ ok: true, value: undefined }),
@@ -337,6 +349,7 @@ function compactionHarness(
     resolve: vi.fn(async () =>
       memoryConfig
         ? {
+            configurationRevision: "fixture-config:1",
             defaultScope:
               memoryConfig.defaultMemoryScope === "shared"
                 ? ("shared" as const)
@@ -384,6 +397,47 @@ function compactionHarness(
 }
 
 describe("compactHistory", () => {
+  it("reserves evidence before dispatch and retains the provider receipt", async () => {
+    const harness = compactionHarness({ deploymentModelKey: "synthetic-key" });
+    const receipt = {
+      version: 1 as const,
+      id: "summary-1",
+      entity: "history-1",
+      content: "Recorded summary",
+      created: true,
+    };
+    harness.saveMemory.mockImplementationOnce(async () => {
+      expect(beginSemanticHistoryMutation).toHaveBeenCalledWith(
+        harness.deps.prisma,
+        expect.objectContaining({ botId: "bot-1" }),
+        expect.objectContaining({ scope: "isolated" }),
+        expect.objectContaining({
+          kind: "save",
+          threadId: "thread-1",
+          generation: 0,
+          throughSeq: 49,
+        }),
+      );
+      expect(finishSemanticHistoryMutation).not.toHaveBeenCalled();
+      return { ok: true, value: [receipt] };
+    });
+    await compactHistory(harness.deps, harness.thread.id);
+    expect(finishSemanticHistoryMutation).toHaveBeenCalledWith(
+      harness.deps.prisma,
+      expect.anything(),
+      "history:test-save",
+      { ok: true, value: [receipt] },
+    );
+  });
+  it("keeps the local summary but prevents transport when evidence cannot be reserved", async () => {
+    const harness = compactionHarness({ deploymentModelKey: "synthetic-key" });
+    vi.mocked(beginSemanticHistoryMutation).mockRejectedValueOnce(new Error("Audit unavailable"));
+    await compactHistory(harness.deps, harness.thread.id);
+    expect(harness.thread.historyCompactionSummary).toBe("Summary of 50 messages.");
+    expect(harness.saveMemory).not.toHaveBeenCalled();
+    expect(finishSemanticHistoryMutation).not.toHaveBeenCalled();
+  });
+
   it("summarizes the next batch, saves it through the provider, and advances the cursor", async () => {
     const harness = compactionHarness({ deploymentModelKey: "openrouter-key" });
 
@@ -721,7 +775,7 @@ describe("compactHistory", () => {
     harness.saveMemory.mockImplementationOnce(async () => {
       saveBegan();
       await saveCanFinish;
-      return { ok: true, value: undefined };
+      return { ok: true, value: [] };
     });
 
     const pending = compactHistory(harness.deps, "thread-1");
@@ -754,7 +808,7 @@ describe("compactHistory", () => {
     });
     harness.saveMemory.mockImplementationOnce(async () => {
       harness.thread.historyCompactionGeneration = 1;
-      return { ok: true, value: undefined };
+      return { ok: true, value: [] };
     });
     harness.purgeHistory.mockRejectedValueOnce(new Error("provider unavailable"));
     const sink = createTestSink();
@@ -764,8 +818,8 @@ describe("compactHistory", () => {
 
     expect(harness.jobs.enqueue).toHaveBeenCalledWith(historyCompactJob("thread-1"));
     expect(
-      sink.events.some(
-        (event) => event.message === "history.compact could not purge stale semantic memory",
+      sink.events.some((event) =>
+        event.message.startsWith("history.compact could not purge stale semantic memory"),
       ),
     ).toBe(true);
     installLogger(createLogger({ service: "rakazo-worker", level: "off", sinks: [] }));
@@ -952,7 +1006,12 @@ describe("compactHistory", () => {
 
   it("keeps local compaction when the optional provider save fails", async () => {
     const harness = compactionHarness({ deploymentModelKey: "openrouter-key" });
-    harness.saveMemory.mockResolvedValueOnce({ ok: false, error: "network error" });
+    harness.saveMemory.mockResolvedValueOnce({
+      ok: false,
+      error: "network error",
+      receipts: [],
+      uncertainEntities: ["history"],
+    });
 
     await compactHistory(harness.deps, "thread-1");
 

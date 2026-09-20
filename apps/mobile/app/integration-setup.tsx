@@ -50,7 +50,7 @@ export default function IntegrationSetup() {
     { id: "composio", label: "Composio" },
     { id: "pipedream", label: "Pipedream" },
     { id: "open-connector", label: "OpenConnector" },
-    { id: "gateway", label: t("Rakazo gateway") },
+    { id: "gateway", label: t("Deskazo gateway") },
     { id: "executor", label: "Executor" },
   ];
   const providerId = integrationChoiceProvider(choice);

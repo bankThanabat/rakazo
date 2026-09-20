@@ -13,7 +13,7 @@ import { ConvoyRelay } from "./convoy-relay.js";
 import { loadManagedWebhook } from "./customer-incoming-settings.js";
 import { equalWebhookSecret, verifyCustomerWebhook } from "./customer-ingress.js";
 import type { IntegrationProviderSettings } from "./integration-provider-settings.js";
-import { OpenConnector } from "./open-connector.js";
+import { isInstagramHistoryRead, OpenConnector } from "./open-connector.js";
 import { loadOperatorSettings, saveOperatorSettings } from "./operator-settings.js";
 import type { EncryptedSecretStore } from "./secrets.js";
 
@@ -102,6 +102,7 @@ export class IntegrationGateway {
     if (!runtime || runtime.revokedAt) throw new IsolationError();
     const actor = await requireMembership(prisma, runtime.userId, runtime.spaceId);
     const adapter = await integrations.resolve("open-connector");
+    const readReceipt = adapter?.receipt?.bind(adapter);
     if (!(adapter instanceof OpenConnector))
       throw new Error("Gateway requires a direct connector configuration");
     const context: AdapterContext = {
@@ -111,7 +112,9 @@ export class IntegrationGateway {
       traceId: randomUUID(),
       signal,
     };
-    return prisma.$transaction(
+    const deferredRead =
+      command.op === "execute" && isInstagramHistoryRead(command.call.route?.toolName);
+    const result = await prisma.$transaction(
       async (tx) => {
         await tx.$queryRaw`SELECT id FROM gateway_runtimes WHERE id = ${runtime.id} FOR UPDATE`;
         if ((await tx.gatewayRuntime.findUniqueOrThrow({ where: { id: runtime.id } })).revokedAt)
@@ -208,10 +211,17 @@ export class IntegrationGateway {
           case "resolve":
             return (await adapter.resolveCall(command.call, context)) ?? null;
           case "execute": {
+            // History waits must not occupy every pool connection before admission
+            // needs another one. Authorization is rechecked before dispatch and result.
+            if (deferredRead) return null;
             const events: ConnectorEvent[] = [];
             for await (const event of adapter.execute(command.call, context)) events.push(event);
             return events;
           }
+          case "receipt":
+            return readReceipt?.(command.query, context) ?? { status: "missing" };
+          case "accountIdentity":
+            return adapter.accountIdentity(command.connectionId, context);
           case "incoming":
             if (!(await adapter.pollConnection(command.ref, context)))
               throw new Error("Account authorization is pending");
@@ -230,6 +240,34 @@ export class IntegrationGateway {
       },
       { timeout: 120000 },
     );
+    if (!deferredRead || command.op !== "execute") return result;
+    context.assertConnectorReadAccess = async () => {
+      signal.throwIfAborted();
+      await requireMembership(prisma, actor.userId, actor.spaceId);
+      if (!(await prisma.gatewayRuntime.count({ where: { id: runtime.id, revokedAt: null } })))
+        throw new IsolationError();
+      const current = await prisma.gatewayAccount.findMany({
+        where: { runtimeId: runtime.id, revokedAt: null },
+        select: { providerRef: true, provider: true },
+      });
+      if (
+        context.connectedConnections?.some(
+          (connection) =>
+            !current.some(
+              (account) =>
+                account.providerRef === connection.providerRef &&
+                account.provider === connection.externalId,
+            ),
+        )
+      )
+        throw new IsolationError();
+    };
+    await context.assertConnectorReadAccess();
+    const resolved = await adapter.resolveCall(command.call, context);
+    if (!resolved?.tool.readOnly) throw new Error("History action is no longer read-only");
+    const events: ConnectorEvent[] = [];
+    for await (const event of adapter.execute(resolved.call, context)) events.push(event);
+    return events;
   }
   /** One relay route per account and local channel. The route row is written with
    * the base client, outside the command transaction, so it survives a failed
@@ -321,7 +359,7 @@ export class IntegrationGateway {
       payload: row.payload!,
     }));
   }
-  async removeUserAccounts(userId: string) {
+  async removeUserAccounts(userId: string, signal?: AbortSignal) {
     // Wait for commands holding a runtime row lock, then prevent new commands
     // before collecting credentials that user deletion would otherwise cascade.
     await this.deps.prisma.gatewayRuntime.updateMany({
@@ -329,7 +367,7 @@ export class IntegrationGateway {
       data: { revokedAt: new Date() },
     });
     const accounts = await this.deps.prisma.gatewayAccount.findMany({
-      where: { runtime: { userId } },
+      where: { runtime: { userId }, revokedAt: null },
       include: { runtime: true },
     });
     if (!accounts.length) return;
@@ -337,19 +375,21 @@ export class IntegrationGateway {
     if (!(adapter instanceof OpenConnector))
       throw new Error("Connector unavailable during account removal");
     for (const account of accounts) {
+      signal?.throwIfAborted();
       await adapter.revoke(account.providerRef, {
         spaceId: account.runtime.spaceId,
         userId,
         operationId: "gateway.remove-user",
         traceId: account.id,
-        signal: AbortSignal.timeout(10000),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
+          : AbortSignal.timeout(10000),
+      });
+      await this.deps.prisma.gatewayAccount.update({
+        where: { id: account.id },
+        data: { revokedAt: new Date() },
       });
     }
-
-    await this.deps.prisma.gatewayAccount.updateMany({
-      where: { runtime: { userId } },
-      data: { revokedAt: new Date() },
-    });
     await this.deps.prisma.gatewayRoute.updateMany({
       where: { account: { runtime: { userId } } },
       data: { enabled: false },

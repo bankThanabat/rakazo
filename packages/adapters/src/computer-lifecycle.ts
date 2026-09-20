@@ -19,7 +19,8 @@ import {
   expireComputerControl,
   hasActiveComputerControl,
 } from "./computer-control.js";
-import { toComputerRef } from "./computer-support.js";
+import { beginComputerProvision } from "./computer-provisions.js";
+import { ComputerProviderMismatchError, toComputerRef } from "./computer-support.js";
 import {
   checkpointComputerWorkspace,
   ensureComputerWorkspaceLayout,
@@ -156,6 +157,7 @@ export async function provisionComputer(
   controlHolder: "bot" | "none" = "none",
   onProgress?: ComputerUpdateProgress,
 ): Promise<ComputerRef> {
+  context.signal.throwIfAborted();
   let existing = await deps.prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
   if (existing.maintenanceId && existing.maintenanceId !== context.operationId)
     throw new ComputerBusyError();
@@ -167,7 +169,6 @@ export async function provisionComputer(
     }
   }
   const homePath = resolveAgentHomePath(deps.home, existing.homeKey, deps.dataDir ?? "./data");
-  await mkdir(homePath, { recursive: true });
 
   // If we first observe abandoned "booting", remember that stamp before waiting. A concurrent
   // reclaim bumps updatedAt while state stays "booting"; fencing the claim on the pre-wait
@@ -267,7 +268,7 @@ export async function provisionComputer(
   // worker that observed the same stamp could also claim and provision.
   const observedStamp = reclaimStamp ?? suspendStamp ?? existing.updatedAt;
   const claimStamp = new Date(Math.max(Date.now(), observedStamp.getTime() + 1));
-  const claimed = await deps.prisma.computer.updateMany({
+  const receipt = await beginComputerProvision(deps.prisma, existing, context, {
     where: {
       id: computerId,
       ...claimWhere,
@@ -276,10 +277,15 @@ export async function provisionComputer(
     },
     data: { state: "booting", updatedAt: claimStamp },
   });
-  if (claimed.count !== 1) throw new ComputerBusyError();
+  if (!receipt) throw new ComputerBusyError();
   let provisioned: ComputerRef | undefined;
+  let dispatched = false;
   try {
+    context.signal.throwIfAborted();
+    await mkdir(homePath, { recursive: true });
     await onProgress?.("recreating");
+    context.signal.throwIfAborted();
+    dispatched = true;
     const ref = await deps.sandbox.provision(
       {
         botId: existing.homeKey,
@@ -290,7 +296,10 @@ export async function provisionComputer(
       context,
     );
     provisioned = ref;
+    await receipt.record(ref, ref.fresh ? "destroy" : reconnecting ? "none" : "stop");
+    context.signal.throwIfAborted();
     await deps.sandbox.prepare(ref, context);
+    context.signal.throwIfAborted();
     const replacement =
       ref.fresh === true ||
       !existing.providerRef ||
@@ -298,9 +307,11 @@ export async function provisionComputer(
       existing.kind !== ref.kind;
     if (replacement) {
       await onProgress?.("restoring");
+      context.signal.throwIfAborted();
       await restoreComputerWorkspace(deps.home, deps.sandbox, existing.homeKey, ref, context);
     }
     await onProgress?.("reconnecting");
+    context.signal.throwIfAborted();
     await ensureComputerWorkspaceLayout(
       deps.sandbox,
       ref,
@@ -308,8 +319,9 @@ export async function provisionComputer(
       context.botId,
       context,
     );
+    context.signal.throwIfAborted();
     const activeControl = hasActiveComputerControl(existing);
-    const activated = await deps.prisma.computer.updateMany({
+    const activated = await receipt.activate({
       where: {
         id: computerId,
         state: "booting",
@@ -348,6 +360,11 @@ export async function provisionComputer(
         ? await rollbackProvisionedComputer(deps.sandbox, provisioned, context, error)
         : undefined;
     try {
+      await receipt.finish(
+        dispatched && !(error instanceof ComputerProviderMismatchError),
+        provisioned,
+        Boolean(rollbackError),
+      );
       await deps.prisma.computer.updateMany({
         where: {
           id: computerId,
@@ -402,18 +419,21 @@ async function rollbackProvisionedComputer(
   context: AdapterContext,
   cause: unknown,
 ): Promise<unknown | undefined> {
+  // Cancellation stops the run, but must not cancel cleanup of its late allocation.
+  // Retain scope/correlation while giving cooperative provider cleanup its own deadline.
+  const cleanup = { ...context, signal: AbortSignal.timeout(30_000) };
   try {
-    await sandbox.releaseScreen?.(computer, context).catch(() => undefined);
+    await sandbox.releaseScreen?.(computer, cleanup).catch(() => undefined);
     if (computer.fresh) {
-      await sandbox.destroy(computer, context);
+      await sandbox.destroy(computer, cleanup);
     } else if (cause instanceof ComputerBusyError) {
       try {
-        await sandbox.stop(computer, context);
+        await sandbox.stop(computer, cleanup);
       } catch {
-        await sandbox.destroy(computer, context);
+        await sandbox.destroy(computer, cleanup);
       }
     } else {
-      await sandbox.stop(computer, context);
+      await sandbox.stop(computer, cleanup);
     }
     return undefined;
   } catch (error) {
@@ -712,11 +732,7 @@ export async function replaceComputer(
     await onProgress?.("recreating");
     if (oldRef) {
       await deps.sandbox.releaseScreen?.(oldRef, context).catch(() => undefined);
-      try {
-        await deps.sandbox.destroy(oldRef, context);
-      } catch (error) {
-        if (mode !== "recover") throw error;
-      }
+      await deps.sandbox.destroy(oldRef, context);
     }
     const stopped = await deps.prisma.computer.updateMany({
       where: {

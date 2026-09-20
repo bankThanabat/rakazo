@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Alert, Pressable, Text, View, type ViewProps } from "react-native";
+import type { ViewProps } from "react-native";
+import { Alert, Pressable, Text, View } from "react-native";
 import { mobileTokens } from "../lib/appearance";
 import { useI18n } from "../lib/i18n";
 
@@ -51,11 +52,13 @@ export function AskActions({
         return (
           <Pressable
             key={action.id}
+            accessibilityRole="button"
             accessibilityActions={accessibilityActions}
             onAccessibilityAction={onAccessibilityAction}
             disabled={disabled || submitting}
             onPress={() => void submit(action.id)}
             style={{
+              minHeight: 48,
               alignSelf: "stretch",
               borderRadius: 12,
               paddingHorizontal: 14,

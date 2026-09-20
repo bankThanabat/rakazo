@@ -88,7 +88,21 @@ export function customerPage(binding: CustomerBinding, data: unknown, startedAt:
             : z.array(z.unknown()).parse(customerField(batch, binding.receive.items)),
         ),
     );
-  const { fields, incoming } = binding.receive;
+  const { fields, incoming, withdrawal } = binding.receive;
+  const withdrawals = withdrawal
+    ? items
+        .filter((item) => {
+          try {
+            return customerField(item, withdrawal.event.path) === withdrawal.event.equals;
+          } catch {
+            return false;
+          }
+        })
+        .map((item) => ({
+          externalThreadId: identifier.parse(customerFieldValue(item, fields.threadId)),
+          providerMessageId: identifier.parse(customerFieldValue(item, withdrawal.messageId)),
+        }))
+    : [];
   const messages = items
     .filter((item) => {
       // Ignore non-message events, attachment-only updates, and items missing an
@@ -124,6 +138,13 @@ export function customerPage(binding: CustomerBinding, data: unknown, startedAt:
       if (!Number.isFinite(timestamp.getTime())) throw new Error("Invalid message timestamp");
       return {
         externalId: identifier.parse(customerFieldValue(item, fields.id)),
+        ...(fields.providerMessageId
+          ? {
+              providerMessageId: identifier.parse(
+                customerFieldValue(item, fields.providerMessageId),
+              ),
+            }
+          : {}),
         externalThreadId: identifier.parse(customerFieldValue(item, fields.threadId)),
         customerId: identifier.parse(customerFieldValue(item, fields.customerId)),
         body:
@@ -163,5 +184,5 @@ export function customerPage(binding: CustomerBinding, data: unknown, startedAt:
     );
     cursor = Math.max(...ids) + 1;
   }
-  return { messages, cursor };
+  return { messages, withdrawals, cursor };
 }

@@ -1,0 +1,590 @@
+diff --git a/src/providers/woocommerce/actions.ts b/src/providers/woocommerce/actions.ts
+index 23d8955d..075be4cc 100644
+--- a/src/providers/woocommerce/actions.ts
++++ b/src/providers/woocommerce/actions.ts
+@@ -3,6 +3,7 @@ import type { JsonSchema } from "../../core/types.ts";
+ 
+ import { s } from "../../core/json-schema.ts";
+ import { defineProviderAction } from "../../core/provider-definition.ts";
++import { woocommerceStoreActions } from "./store-actions.ts";
+ 
+ const service = "woocommerce";
+ 
+@@ -109,6 +110,9 @@ const orderSchema = s.object("A normalized WooCommerce order.", {
+   customerId: nullableInteger("The WooCommerce customer ID associated with the order."),
+   dateCreated: nullableString("The order creation timestamp in the store timezone."),
+   dateModified: nullableString("The order update timestamp in the store timezone."),
++  customerNote: nullableString(
++    "The note saved with checkout; may contain the purchase reference and private customer text.",
++  ),
+   paymentUrl: nullableString("The provider's payment URL for this order. Share only with its customer."),
+   needsPayment: s.nullableBoolean(
+     "Whether WooCommerce currently requests payment. False alone does not prove payment.",
+@@ -294,6 +298,7 @@ const paginationOutput = {
+ };
+ 
+ export const woocommerceActions: ProviderActionDefinition[] = [
++  ...woocommerceStoreActions,
+   action(
+     "list_products",
+     "List WooCommerce products with common catalog filters and pagination metadata.",
+diff --git a/src/providers/woocommerce/order-payment.test.ts b/src/providers/woocommerce/order-payment.test.ts
+index d79813c5..a337b36e 100644
+--- a/src/providers/woocommerce/order-payment.test.ts
++++ b/src/providers/woocommerce/order-payment.test.ts
+@@ -13,6 +13,7 @@ describe("WooCommerce order payment facts", () => {
+       const payload = {
+         id: 17,
+         status: "processing",
++        customer_note: "Deskazo purchase synthetic-reference",
+         payment_url: "https://store.example.test/checkout/order-pay/17/?key=fixture-only",
+         needs_payment: false,
+         payment_method: "bacs",
+@@ -32,6 +33,7 @@ describe("WooCommerce order payment facts", () => {
+       const action = provider.actions.find((item) => item.name === name)!;
+       expect(new Validator(action.outputSchema as Schema).validate(output)).toMatchObject({ valid: true });
+       const expected = {
++        customerNote: payload.customer_note,
+         paymentUrl: payload.payment_url,
+         needsPayment: false,
+         paymentMethod: "bacs",
+@@ -56,6 +58,7 @@ describe("WooCommerce order payment facts", () => {
+     );
+     expect(await woocommerceActionHandlers.get_order({ orderId: 17 }, context)).toMatchObject({
+       status: payload.status,
++      customerNote: null,
+       needsPayment: payload.needs_payment ?? null,
+       paymentUrl: null,
+       paymentMethod: null,
+diff --git a/src/providers/woocommerce/runtime.ts b/src/providers/woocommerce/runtime.ts
+index 180b248a..2b70f7c4 100644
+--- a/src/providers/woocommerce/runtime.ts
++++ b/src/providers/woocommerce/runtime.ts
+@@ -22,6 +22,7 @@ import {
+   readTransitFileInput,
+   requiredInputString,
+ } from "../provider-runtime.ts";
++import { woocommerceStoreHandlers } from "./store-runtime.ts";
+ 
+ const maxMediaUploadSourceBytes = 20 * 1024 * 1024;
+ 
+@@ -68,6 +69,7 @@ export const woocommerceActionHandlers: ProviderActionHandlers<
+   "woocommerce",
+   ProviderRuntimeHandler<WooCommerceCredentialContext>
+ > = {
++  ...woocommerceStoreHandlers,
+   list_products: listProducts,
+   get_product: getProduct,
+   create_product: createProduct,
+@@ -857,6 +859,7 @@ function normalizeOrder(input: Record<string, unknown>): Record<string, unknown>
+     customerId: optionalInteger(input.customer_id) ?? null,
+     dateCreated: nullableText(input.date_created),
+     dateModified: nullableText(input.date_modified),
++    customerNote: nullableText(input.customer_note),
+     paymentUrl: nullableText(input.payment_url),
+     needsPayment: optionalBoolean(input.needs_payment) ?? null,
+     paymentMethod: nullableText(input.payment_method),
+diff --git a/src/providers/woocommerce/store-actions.ts b/src/providers/woocommerce/store-actions.ts
+new file mode 100644
+index 00000000..e586c2d4
+--- /dev/null
++++ b/src/providers/woocommerce/store-actions.ts
+@@ -0,0 +1,165 @@
++import type { ProviderActionDefinition } from "../../core/provider-definition.ts";
++import type { JsonSchema } from "../../core/types.ts";
++
++import { s } from "../../core/json-schema.ts";
++import { defineProviderAction } from "../../core/provider-definition.ts";
++
++const cartToken = s.nonEmptyString(
++  "Secret Store API cart capability. Keep server-side and scoped to one shopper and purchase; never log or publish it.",
++  { maxLength: 8192 },
++);
++const address = s.object(
++  "Shopper-supplied Store API address. WooCommerce validates required fields.",
++  Object.fromEntries(
++    [
++      "first_name",
++      "last_name",
++      "company",
++      "address_1",
++      "address_2",
++      "city",
++      "state",
++      "postcode",
++      "country",
++      "email",
++      "phone",
++    ].map((key) => [key, s.string(key, { maxLength: 500 })]),
++  ),
++  {
++    optional: [
++      "first_name",
++      "last_name",
++      "company",
++      "address_1",
++      "address_2",
++      "city",
++      "state",
++      "postcode",
++      "country",
++      "email",
++      "phone",
++    ],
++  },
++);
++const quantity = s.positiveInteger("Requested quantity, subject to current stock and store limits.", {
++  maximum: Number.MAX_SAFE_INTEGER,
++});
++const key = s.nonEmptyString("Item key returned by this cart.");
++const code = s.nonEmptyString("Coupon code to apply or remove.");
++
++function action(
++  name: string,
++  description: string,
++  fields: Record<string, JsonSchema>,
++  required: string[],
++  checkout = false,
++): ProviderActionDefinition {
++  return defineProviderAction("woocommerce", {
++    name,
++    description,
++    inputSchema: s.actionInput(fields, required),
++    outputSchema: s.actionOutput({
++      cartToken,
++      [checkout ? "checkout" : "cart"]: s.unknownObject(
++        checkout
++          ? "Provider checkout response. order_id zero is not a persisted order. payment_result success alone does not prove payment. Contains private customer/order capabilities."
++          : "Provider cart response, including current items, integer-string minor-unit totals, currency, addresses, available shipping rates and payment methods. Contains private shopper data.",
++      ),
++    }),
++  });
++}
++
++export const woocommerceStoreActions: ProviderActionDefinition[] = [
++  action(
++    "create_cart",
++    "Create a new isolated guest cart. Persist its secret capability before further work. Creation is not idempotent; do not automatically repeat an uncertain call.",
++    {},
++    [],
++  ),
++  action(
++    "get_cart",
++    "Read one existing cart by its secret capability. Invalid or expired capabilities must not silently select a new cart.",
++    { cartToken },
++    ["cartToken"],
++  ),
++  action(
++    "add_cart_item",
++    "Add a product or variation to this cart. Repeating this call can increase quantity; reconcile uncertain calls first.",
++    {
++      cartToken,
++      productId: s.positiveInteger("Product or variation ID."),
++      quantity,
++      variation: s.array(
++        "Chosen variation attributes.",
++        s.object("Attribute selection.", {
++          attribute: s.nonEmptyString("Attribute name."),
++          value: s.nonEmptyString("Selected value."),
++        }),
++      ),
++    },
++    ["cartToken", "productId", "quantity"],
++  ),
++  action(
++    "update_cart_item",
++    "Set the quantity of an existing cart item. Read the returned totals before checkout.",
++    { cartToken, key, quantity },
++    ["cartToken", "key", "quantity"],
++  ),
++  action("remove_cart_item", "Remove an existing item from this cart.", { cartToken, key }, ["cartToken", "key"]),
++  action(
++    "apply_cart_coupon",
++    "Apply a coupon under current store rules and return recalculated totals.",
++    { cartToken, code },
++    ["cartToken", "code"],
++  ),
++  action("remove_cart_coupon", "Remove a coupon and return recalculated totals.", { cartToken, code }, [
++    "cartToken",
++    "code",
++  ]),
++  action(
++    "update_cart_customer",
++    "Set shopper billing/shipping details for this cart and recalculate tax and shipping. Does not authenticate or link a merchant customer account.",
++    {
++      cartToken,
++      billingAddress: address,
++      shippingAddress: address,
++    },
++    ["cartToken"],
++  ),
++  action(
++    "select_cart_shipping_rate",
++    "Select one of the rates returned by this cart for its package. Recalculate and confirm totals afterward.",
++    {
++      cartToken,
++      packageId: s.nonNegativeInteger("Package ID returned by this cart."),
++      rateId: s.nonEmptyString("Rate ID returned for this package."),
++    },
++    ["cartToken", "packageId", "rateId"],
++  ),
++  action(
++    "get_checkout",
++    "Read this cart's checkout state. Some store versions create or update a draft order, so treat this as consequential. A draft order ID can be zero.",
++    { cartToken },
++    ["cartToken"],
++    true,
++  ),
++  action(
++    "submit_checkout",
++    "Submit this cart using a configured payment method that needs no additional payment data. Requires the shopper-confirmed maximum total in minor units. May create an order or initiate payment; never blindly retry. Read provider order/payment status afterward. Does not accept card details or create customer accounts.",
++    {
++      cartToken,
++      billingAddress: address,
++      shippingAddress: address,
++      paymentMethod: s.nonEmptyString(
++        "Enabled provider payment method, such as bacs. Gateway-specific payment data is not supported.",
++      ),
++      expectedTotal: s.string(
++        "Shopper-confirmed maximum total in currency minor units, from cart.totals.total_price. WooCommerce 11.1 rejects increases but permits decreases.",
++        { pattern: "^(0|[1-9][0-9]*)$", maxLength: 30 },
++      ),
++      customerNote: s.string("Shopper note for this order.", { maxLength: 2000 }),
++    },
++    ["cartToken", "paymentMethod", "expectedTotal", "billingAddress", "shippingAddress"],
++    true,
++  ),
++];
+diff --git a/src/providers/woocommerce/store-api.test.ts b/src/providers/woocommerce/store-api.test.ts
+new file mode 100644
+index 00000000..abbcc18e
+--- /dev/null
++++ b/src/providers/woocommerce/store-api.test.ts
+@@ -0,0 +1,159 @@
++import type { Schema } from "@cfworker/json-schema";
++
++import { Validator } from "@cfworker/json-schema";
++import { Buffer } from "node:buffer";
++import { describe, expect, it, vi } from "vitest";
++import { getProviderActionHandler } from "../provider-runtime.ts";
++import { woocommerceStoreActions } from "./store-actions.ts";
++import { woocommerceStoreHandlers } from "./store-runtime.ts";
++
++const capability = (user_id = "fixture-session", exp = 9999999999) =>
++  `e30.${Buffer.from(JSON.stringify({ user_id, iss: "store-api", exp })).toString("base64url")}.fixture`;
++const cartToken = capability();
++const call = async (name: string, input: Record<string, unknown>, fetcher: typeof fetch) => {
++  const action = woocommerceStoreActions.find((item) => item.name === name)!;
++  expect(new Validator(action.inputSchema as Schema).validate(input)).toMatchObject({ valid: true });
++  const output = await getProviderActionHandler(woocommerceStoreHandlers, name)!(input, {
++    storeUrl: "https://store.example.test/shop",
++    fetcher,
++  });
++  expect(new Validator(action.outputSchema as Schema).validate(output)).toMatchObject({ valid: true });
++  return output;
++};
++
++describe("WooCommerce Store API boundary", () => {
++  it.each([
++    ["create_cart", {}, "/cart", undefined],
++    ["get_cart", { cartToken }, "/cart", undefined],
++    [
++      "add_cart_item",
++      { cartToken, productId: 7, quantity: 2, variation: [{ attribute: "Size", value: "M" }] },
++      "/cart/add-item",
++      { id: 7, quantity: 2, variation: [{ attribute: "Size", value: "M" }] },
++    ],
++    [
++      "update_cart_item",
++      { cartToken, key: "item-key", quantity: 3 },
++      "/cart/update-item",
++      { key: "item-key", quantity: 3 },
++    ],
++    ["remove_cart_item", { cartToken, key: "item-key" }, "/cart/remove-item", { key: "item-key" }],
++    ["apply_cart_coupon", { cartToken, code: "SAVE" }, "/cart/apply-coupon", { code: "SAVE" }],
++    ["remove_cart_coupon", { cartToken, code: "SAVE" }, "/cart/remove-coupon", { code: "SAVE" }],
++    [
++      "update_cart_customer",
++      { cartToken, billingAddress: { country: "TH" }, shippingAddress: { city: "Bangkok" } },
++      "/cart/update-customer",
++      { billing_address: { country: "TH" }, shipping_address: { city: "Bangkok" } },
++    ],
++    [
++      "select_cart_shipping_rate",
++      { cartToken, packageId: 0, rateId: "flat_rate:1" },
++      "/cart/select-shipping-rate",
++      { package_id: 0, rate_id: "flat_rate:1" },
++    ],
++    ["get_checkout", { cartToken }, "/checkout", undefined],
++    [
++      "submit_checkout",
++      {
++        cartToken,
++        billingAddress: {},
++        shippingAddress: {},
++        paymentMethod: "bacs",
++        expectedTotal: "12500",
++        customerNote: "Fixture",
++      },
++      "/checkout",
++      {
++        billing_address: {},
++        shipping_address: {},
++        payment_method: "bacs",
++        expected_total: "12500",
++        customer_note: "Fixture",
++        create_account: false,
++      },
++    ],
++  ])(
++    "%s uses the selected capability without administrator auth or automatic replay",
++    async (name, input, path, body) => {
++      const fetcher = vi.fn(async (url, init) => {
++        expect(String(url)).toBe(`https://store.example.test/shop/wp-json/wc/store/v1${path}`);
++        expect(init).toMatchObject({ method: body ? "POST" : "GET", redirect: "manual", credentials: "omit" });
++        const headers = new Headers(init?.headers);
++        expect(headers.get("authorization")).toBeNull();
++        expect(headers.get("cookie")).toBeNull();
++        expect(headers.get("cart-token")).toBe(name === "create_cart" ? null : cartToken);
++        expect(init?.body ? JSON.parse(String(init.body)) : undefined).toEqual(body);
++        return Response.json(
++          { fixture: true },
++          { headers: { "Cart-Token": capability("fixture-session", 9999999998) } },
++        );
++      });
++      await call(name as string, input as Record<string, unknown>, fetcher);
++      expect(fetcher).toHaveBeenCalledTimes(1);
++    },
++  );
++
++  it("rejects silent replacement of an expired cart", async () => {
++    await expect(
++      call("get_cart", { cartToken }, async () =>
++        Response.json({ items: [] }, { headers: { "Cart-Token": capability("another-session") } }),
++      ),
++    ).rejects.toThrow("expired or changed");
++  });
++  it.each([302, 403, 409, 429, 500])("does not replay or expose private error bodies for HTTP %s", async (status) => {
++    const fetcher = vi.fn(async () =>
++      Response.json(
++        { message: "private-address-and-token" },
++        { status, headers: { location: "https://other.example.test" } },
++      ),
++    );
++    await expect(
++      call(
++        "submit_checkout",
++        { cartToken, billingAddress: {}, shippingAddress: {}, paymentMethod: "bacs", expectedTotal: "12500" },
++        fetcher,
++      ),
++    ).rejects.toThrow(`request failed with status ${status}`);
++    expect(fetcher).toHaveBeenCalledTimes(1);
++  });
++  it.each([undefined, "", "12.50", "-1", "1e3"])(
++    "requires an integer-string checkout maximum %s",
++    async (expectedTotal) => {
++      const fetcher = vi.fn();
++      expect(() =>
++        woocommerceStoreHandlers.submit_checkout(
++          { cartToken, billingAddress: {}, shippingAddress: {}, paymentMethod: "bacs", expectedTotal },
++          { storeUrl: "https://store.example.test", fetcher },
++        ),
++      ).toThrow();
++      expect(fetcher).not.toHaveBeenCalled();
++    },
++  );
++  it("requires a returned capability and a JSON object", async () => {
++    await expect(call("create_cart", {}, async () => Response.json({}))).rejects.toThrow("did not return");
++    await expect(
++      call("get_cart", { cartToken }, async () => Response.json([], { headers: { "Cart-Token": cartToken } })),
++    ).rejects.toThrow("Invalid WooCommerce");
++  });
++  it("rejects malformed capabilities before dispatch", async () => {
++    const fetcher = vi.fn();
++    await expect(call("get_cart", { cartToken: "invalid" }, fetcher)).rejects.toThrow("Invalid cart");
++    expect(fetcher).not.toHaveBeenCalled();
++  });
++  it("rejects customer account creation and arbitrary payment data at the contract boundary", () => {
++    const schema = woocommerceStoreActions.find((action) => action.name === "submit_checkout")!.inputSchema;
++    for (const extra of [{ createAccount: true }, { paymentData: [{ key: "card", value: "private" }] }]) {
++      expect(
++        new Validator(schema as Schema).validate({
++          cartToken,
++          billingAddress: {},
++          shippingAddress: {},
++          paymentMethod: "bacs",
++          expectedTotal: "12500",
++          ...extra,
++        }).valid,
++      ).toBe(false);
++    }
++  });
++});
+diff --git a/src/providers/woocommerce/store-runtime.ts b/src/providers/woocommerce/store-runtime.ts
+new file mode 100644
+index 00000000..5faad68d
+--- /dev/null
++++ b/src/providers/woocommerce/store-runtime.ts
+@@ -0,0 +1,162 @@
++import { Buffer } from "node:buffer";
++import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
++import { readBoundedResponseBytes } from "../../core/request.ts";
++import {
++  providerInputError,
++  providerResponseError,
++  ProviderRequestError,
++  providerUserAgent,
++  requiredInputString,
++} from "../provider-runtime.ts";
++
++interface StoreContext {
++  storeUrl: string;
++  fetcher: typeof fetch;
++  signal?: AbortSignal;
++}
++interface StoreRequest {
++  path: string;
++  cartToken?: string;
++  body?: Record<string, unknown>;
++  checkout?: boolean;
++}
++
++// Decoding only checks session continuity. WooCommerce, not this decoder, validates signatures.
++function cartSession(token: string): string {
++  if (token.length > 8192 || !/^[A-Za-z0-9_=-]+\.[A-Za-z0-9_=-]+\.[A-Za-z0-9_=-]+$/.test(token))
++    throw providerInputError("Invalid cart capability");
++  let payload: unknown;
++  try {
++    payload = JSON.parse(Buffer.from(token.split(".")[1]!, "base64url").toString("utf8"));
++  } catch {
++    throw providerInputError("Invalid cart capability");
++  }
++  const value = optionalRecord(payload);
++  if (value?.iss !== "store-api" || !optionalString(value.user_id)) throw providerInputError("Invalid cart capability");
++  return requiredInputString(value.user_id, "cart session");
++}
++
++async function request(context: StoreContext, input: StoreRequest): Promise<unknown> {
++  const session = input.cartToken ? cartSession(input.cartToken) : undefined;
++  const headers = new Headers({ accept: "application/json", "user-agent": providerUserAgent });
++  if (input.cartToken) headers.set("Cart-Token", input.cartToken);
++  if (input.body) headers.set("content-type", "application/json");
++  // Never send REST administrator credentials/cookies or follow a capability-bearing redirect.
++  const response = await context.fetcher(`${context.storeUrl}/wp-json/wc/store/v1${input.path}`, {
++    method: input.body ? "POST" : "GET",
++    headers,
++    body: input.body ? JSON.stringify(input.body) : undefined,
++    signal: context.signal,
++    redirect: "manual",
++    credentials: "omit",
++  });
++  if (!response.ok) {
++    // Provider errors can contain cart/address data. Callers can re-read after a confirmed rejection.
++    await response.body?.cancel();
++    throw new ProviderRequestError(
++      response.status >= 400 ? response.status : 502,
++      `WooCommerce Store API request failed with status ${response.status}`,
++    );
++  }
++  const bytes = await readBoundedResponseBytes(response, {
++    maxBytes: 2 * 1024 * 1024,
++    fieldName: "WooCommerce cart response",
++    createError: providerResponseError,
++  });
++  let data: unknown;
++  try {
++    data = JSON.parse(new TextDecoder().decode(bytes));
++  } catch {
++    throw providerResponseError("Invalid WooCommerce Store API response");
++  }
++  if (!optionalRecord(data)) throw providerResponseError("Invalid WooCommerce Store API response");
++  const token = response.headers.get("Cart-Token");
++  if (!token) throw providerResponseError("WooCommerce did not return a cart capability");
++  const returnedSession = cartSession(token);
++  if (session && session !== returnedSession)
++    throw new ProviderRequestError(409, "Cart capability expired or changed; do not substitute a new cart");
++  return { cartToken: token, [input.checkout ? "checkout" : "cart"]: data };
++}
++
++export const woocommerceStoreHandlers = {
++  create_cart(_input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, { path: "/cart" });
++  },
++  get_cart(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, { path: "/cart", cartToken: requiredInputString(input.cartToken, "cartToken") });
++  },
++  add_cart_item(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/add-item",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: compactObject({ id: input.productId, quantity: input.quantity, variation: input.variation }),
++    });
++  },
++  update_cart_item(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/update-item",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: { key: input.key, quantity: input.quantity },
++    });
++  },
++  remove_cart_item(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/remove-item",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: { key: input.key },
++    });
++  },
++  apply_cart_coupon(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/apply-coupon",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: { code: input.code },
++    });
++  },
++  remove_cart_coupon(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/remove-coupon",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: { code: input.code },
++    });
++  },
++  update_cart_customer(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/update-customer",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: compactObject({ billing_address: input.billingAddress, shipping_address: input.shippingAddress }),
++    });
++  },
++  select_cart_shipping_rate(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/cart/select-shipping-rate",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      body: { package_id: input.packageId, rate_id: input.rateId },
++    });
++  },
++  get_checkout(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    return request(context, {
++      path: "/checkout",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      checkout: true,
++    });
++  },
++  submit_checkout(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    const expectedTotal = requiredInputString(input.expectedTotal, "expectedTotal");
++    if (!/^(0|[1-9][0-9]*)$/.test(expectedTotal) || expectedTotal.length > 30)
++      throw providerInputError("expectedTotal must be an integer string in minor units");
++    return request(context, {
++      path: "/checkout",
++      cartToken: requiredInputString(input.cartToken, "cartToken"),
++      checkout: true,
++      body: compactObject({
++        billing_address: input.billingAddress,
++        shipping_address: input.shippingAddress,
++        payment_method: requiredInputString(input.paymentMethod, "paymentMethod"),
++        expected_total: expectedTotal,
++        customer_note: input.customerNote,
++        create_account: false,
++      }),
++    });
++  },
++};

@@ -20,9 +20,14 @@ export const lineIncoming: CustomerIncomingTemplate = {
       },
       incoming: { path: ["type"], equals: "message" },
       nonText: "handoff",
+      withdrawal: {
+        event: { path: ["type"], equals: "unsend" },
+        messageId: ["unsend", "messageId"],
+      },
       timestampFormat: "milliseconds",
       fields: {
         id: ["webhookEventId"],
+        providerMessageId: ["message", "id"],
         threadId: [
           ["source", "groupId"],
           ["source", "roomId"],

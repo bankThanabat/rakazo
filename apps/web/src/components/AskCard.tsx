@@ -2,9 +2,15 @@ import { t } from "@lingui/core/macro";
 import { Trans, useLingui } from "@lingui/react/macro";
 import { ChatMarkdown } from "@rakazo/chat-ui/web";
 import type { ThreadMessage } from "@rakazo/contracts";
-import { isApprovalAskBlock, isSecretAskBlock, selectedAskActionLabel } from "@rakazo/core";
+import {
+  isApprovalAskBlock,
+  isSecretAskBlock,
+  learningApprovalReview,
+  selectedAskActionLabel,
+} from "@rakazo/core";
 import { Button, Input } from "@rakazo/ui-web";
 import { useState } from "react";
+import { LearningApprovalDetail } from "./LearningApprovalDetail";
 
 export type AskBlock = Extract<ThreadMessage["blocks"][number], { kind: "ask" }>;
 
@@ -63,6 +69,7 @@ export function AskCard({
   const approvalActions = isApprovalAskBlock(block) ? block.actions : undefined;
   const askActions = block.actions;
   const secretInput = isSecretAskBlock(block);
+  const learningReview = learningApprovalReview(block);
   const secretLabel = secretFieldLabel(block.purpose);
 
   async function submitAnswer(value: string) {
@@ -86,20 +93,33 @@ export function AskCard({
   return (
     <div
       data-testid={secretInput ? "secret-ask-card" : undefined}
-      className="max-w-[74%] rounded-2xl border border-border bg-card px-5 py-4"
+      className="w-full min-w-0 rounded-2xl border border-border bg-card px-5 py-4"
     >
-      <div className="text-[15.5px] leading-[1.5] text-foreground">
-        <ChatMarkdown>{block.text}</ChatMarkdown>
-      </div>
+      {!learningReview && (
+        <div className="text-[15.5px] leading-[1.5] text-foreground">
+          <ChatMarkdown>{block.text}</ChatMarkdown>
+        </div>
+      )}
       {secretInput && block.credential ? (
         <div className="mt-2 break-all text-[13px] text-muted-foreground">
           {block.credential.origin}
         </div>
       ) : null}
-      {block.detail && !secretInput ? (
-        <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-muted-foreground">
+      {learningReview && block.detail ? (
+        <LearningApprovalDetail
+          key={block.approvalEffectId}
+          review={learningReview}
+          detail={block.detail}
+        />
+      ) : block.detail && !secretInput ? (
+        <section
+          aria-label={block.text}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable approval details must support keyboard review.
+          tabIndex={0}
+          className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted px-3.5 py-3 font-mono text-[12.5px] leading-[1.7] text-muted-foreground"
+        >
           {block.detail}
-        </pre>
+        </section>
       ) : null}
       {block.status === "answered" ? (
         <div className="mt-3.5 text-[13.5px] font-medium text-success">

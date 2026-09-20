@@ -4,6 +4,29 @@ import type { Prisma, PrismaClient } from "@rakazo/db";
 
 type MessageDb = PrismaClient | Prisma.TransactionClient;
 
+// Leave room below mobile's 16 MiB RPC limit for snapshot metadata and live events.
+// Messages are indivisible: an unusually large single message travels alone.
+const MESSAGE_PAGE_BYTES = 8 * 1024 * 1024;
+
+function fitMessageWindow(messages: ThreadMessage[], targetSeq?: number): ThreadMessage[] {
+  const sizes = messages.map((message) => Buffer.byteLength(JSON.stringify(message)) + 1);
+  let bytes = 1 + sizes.reduce((sum, size) => sum + size, 0);
+  let start = 0;
+  let end = messages.length;
+  // Remove only the ends, preserving chronological continuity and the jump target.
+  while (bytes > MESSAGE_PAGE_BYTES && end - start > 1) {
+    if (
+      targetSeq === undefined ||
+      Math.abs(messages[start]!.seq - targetSeq) > Math.abs(messages[end - 1]!.seq - targetSeq)
+    ) {
+      bytes -= sizes[start++]!;
+    } else {
+      bytes -= sizes[--end]!;
+    }
+  }
+  return messages.slice(start, end);
+}
+
 export async function loadMessagePage(
   prisma: MessageDb,
   threadId: string,
@@ -31,17 +54,18 @@ export async function loadMessagePage(
         orderBy: { seq: "asc" },
         take: pageSize,
       });
-      const first = rows[0];
-      const hasOlder = first
-        ? (await prisma.message.count({ where: { threadId, seq: { lt: first.seq } } })) > 0
-        : false;
       // Peer text/activity stays out of the normal transcript (including the
       // around target). Receipts remain via withoutPeerRunMessages; full peer
       // history belongs in the bot-messages overlay (includePeerRuns).
-      const messages = includePeerRuns ? rows : await withoutPeerRunMessages(prisma, rows);
+      const visibleRows = includePeerRuns ? rows : await withoutPeerRunMessages(prisma, rows);
+      const messages = fitMessageWindow(visibleRows.map(toThreadMessage), targetSeq);
+      const first = messages[0] ?? rows[0];
+      const hasOlder = first
+        ? (await prisma.message.count({ where: { threadId, seq: { lt: first.seq } } })) > 0
+        : false;
       return {
         threadId,
-        messages: messages.map(toThreadMessage),
+        messages,
         olderCursor: hasOlder ? (first?.seq ?? null) : null,
       };
     }
@@ -57,24 +81,25 @@ export async function loadMessagePage(
       orderBy: { seq: "desc" },
       take: pageSize + 1,
     });
-    const hasOlder = rows.length > pageSize;
     const pageRows = rows.slice(0, pageSize).reverse();
     const visibleRows = includePeerRuns ? pageRows : await withoutPeerRunMessages(prisma, pageRows);
+    const messages = fitMessageWindow(visibleRows.map(toThreadMessage));
+    const trimmed = messages.length < visibleRows.length;
+    const hasOlder = rows.length > pageSize || trimmed;
+    const firstSeq = trimmed ? messages[0]?.seq : pageRows[0]?.seq;
     // Web hides receipts client-side, so its receipt-only pages keep scanning.
     // Mobile explicitly retains them and must receive each page for pagination.
-    const hasSubstantive = visibleRows.some(
-      (row) => !isPeerReceiptBlocks(row.blocks as MessageBlock[]),
-    );
+    const hasSubstantive = messages.some((message) => !isPeerReceiptBlocks(message.blocks));
     if (hasSubstantive || includePeerReceipts || !hasOlder || includePeerRuns) {
       return {
         threadId,
-        messages: visibleRows.map(toThreadMessage),
-        olderCursor: hasOlder ? (pageRows[0]?.seq ?? null) : null,
+        messages,
+        olderCursor: hasOlder ? (firstSeq ?? null) : null,
       };
     }
     // TODO: only rescan when a raw page is entirely peer output. Consider a run relation if
     // long peer-only histories make this path hot.
-    cursor = pageRows[0]?.seq;
+    cursor = firstSeq;
   }
 }
 

@@ -22,6 +22,13 @@ cloud API and to customer runtimes before enabling gateway connections.
 
 ## Operator setup
 
+Build OpenConnector from the [locked customer source](customer-v1.md#install-the-local-stack),
+including its account-bound action, Instagram reply and message-history patches. Deploy that
+connector version before updating the gateway and customer runtimes. An older
+connector cannot serve guarded sends and learning reads; the client does not
+fall back to an unguarded action. The source preparation command also supports
+separately managed hosts and leaves the operator's original checkout untouched.
+
 1. Apply migrations with `pnpm --filter @rakazo/db migrate`. Restart the API and
    workers using the same revision. Back up the database before migrating.
 2. On the cloud Rakazo instance, use **Server integrations → OpenConnector** to

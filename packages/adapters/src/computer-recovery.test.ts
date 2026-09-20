@@ -9,6 +9,8 @@ import { DesktopSandboxProvider } from "./desktop-sandbox.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { LocalAgentHomeStore } from "./home.js";
 
+vi.mock("./computer-provisions.js", () => import("./computer-provisions.test-support.js"));
+
 const context = {
   operationId: "recovery",
   traceId: "recovery",
@@ -183,10 +185,10 @@ describe("computer recovery preserves live work", () => {
     }
   });
 
-  it("preserves the reference and workspace through an uncertain reconnect and a retry", async () => {
+  it("preserves the reference and workspace through failed preparation and a retry", async () => {
     const { deps, row, first } = await fixture();
     const error = new Error("fetch failed");
-    vi.spyOn(deps.sandbox, "provision").mockRejectedValueOnce(error);
+    vi.spyOn(deps.sandbox, "prepare").mockRejectedValueOnce(error);
     const restore = vi.spyOn(deps.sandbox, "importWorkspace");
     const destroy = vi.spyOn(deps.sandbox, "destroy");
     await expect(provisionComputer(deps, row.id, context)).rejects.toBe(error);
@@ -311,13 +313,16 @@ describe("computer recovery preserves live work", () => {
     ).toBe("checkpoint");
   });
 
-  it("preserves the reference when reset teardown fails ambiguously", async () => {
-    const { deps, row, first } = await fixture();
-    const failure = new Error("404: configuration file not found");
-    vi.spyOn(deps.sandbox, "destroy").mockRejectedValue(failure);
-    const provision = vi.spyOn(deps.sandbox, "provision");
-    await expect(replaceComputer(deps, row.id, "reset", context)).rejects.toBe(failure);
-    expect(provision).not.toHaveBeenCalled();
-    expect(row.providerRef).toBe(first.providerRef);
-  });
+  it.each(["reset", "recover"] as const)(
+    "preserves the reference when %s teardown fails ambiguously",
+    async (mode) => {
+      const { deps, row, first } = await fixture();
+      const failure = new Error("404: configuration file not found");
+      vi.spyOn(deps.sandbox, "destroy").mockRejectedValue(failure);
+      const provision = vi.spyOn(deps.sandbox, "provision");
+      await expect(replaceComputer(deps, row.id, mode, context)).rejects.toBe(failure);
+      expect(provision).not.toHaveBeenCalled();
+      expect(row.providerRef).toBe(first.providerRef);
+    },
+  );
 });

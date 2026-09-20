@@ -50,6 +50,50 @@ describe("expo push tickets", () => {
 });
 
 describe("expo push", () => {
+  it.each([
+    [429, { errors: [{ message: "rate limited" }] }, "rejected", true],
+    [400, { errors: [{ message: "invalid request" }] }, "rejected", false],
+    [503, { errors: [{ message: "unavailable" }] }, "uncertain", false],
+    [408, { errors: [{ message: "timeout" }] }, "uncertain", false],
+    [
+      200,
+      { data: { status: "error", details: { error: "DeviceNotRegistered" } } },
+      "rejected",
+      false,
+    ],
+    [
+      200,
+      { data: { status: "error", details: { error: "MessageRateExceeded" } } },
+      "rejected",
+      true,
+    ],
+  ])("classifies provider response %s for safe retry", async (status, body, outcome, retryable) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-push-"));
+    dirs.push(dataDir);
+    await savePushToken(dataDir, "user-1", "ExponentPushToken[test]");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body, status)));
+    await expect(
+      new ExpoPushProvider(dataDir).send(
+        { kind: "help", title: "Help", body: "Inbox", botId: "b", threadId: "t" },
+        notifyContext,
+      ),
+    ).rejects.toMatchObject({ name: "NotificationDeliveryError", outcome, retryable });
+  });
+  it.each([{}, { data: {} }, { data: { status: "ok" } }, { data: [] }])(
+    "does not treat an incomplete ticket as acceptance: %j",
+    async (body) => {
+      const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-push-"));
+      dirs.push(dataDir);
+      await savePushToken(dataDir, "user-1", "ExponentPushToken[test]");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(body)));
+      await expect(
+        new ExpoPushProvider(dataDir).send(
+          { kind: "help", title: "Help", body: "Inbox", botId: "b", threadId: "t" },
+          notifyContext,
+        ),
+      ).rejects.toMatchObject({ outcome: "uncertain" });
+    },
+  );
   it("keeps refreshed push tokens owner-only", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-push-"));
     dirs.push(dataDir);
@@ -92,7 +136,7 @@ describe("expo push", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const push = new ExpoPushProvider(dataDir);
-    await push.send(
+    const result = await push.send(
       { kind: "completion", title: "done", body: "ok", botId: "b", threadId: "t" },
       {
         operationId: "n",
@@ -103,6 +147,7 @@ describe("expo push", () => {
       },
     );
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: "skipped" });
   });
 
   it("posts to Expo when a token is registered", async () => {
@@ -114,11 +159,12 @@ describe("expo push", () => {
       .mockResolvedValue(jsonResponse({ data: { status: "ok", id: "ticket" } }));
     vi.stubGlobal("fetch", fetchMock);
     const push = new ExpoPushProvider(dataDir);
-    await push.send(
+    const result = await push.send(
       { kind: "takeover", title: "Need you", body: "on screen", botId: "bot-1", threadId: "th-1" },
       notifyContext,
     );
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ status: "accepted", reference: "ticket" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://exp.host/--/api/v2/push/send");
     const body = JSON.parse(String(init.body)) as {

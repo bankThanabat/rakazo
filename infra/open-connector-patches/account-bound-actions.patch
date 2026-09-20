@@ -1,0 +1,590 @@
+diff --git a/src/server/actions/action-idempotency.ts b/src/server/actions/action-idempotency.ts
+index 51cbdfbc..5bc6b4c3 100644
+--- a/src/server/actions/action-idempotency.ts
++++ b/src/server/actions/action-idempotency.ts
+@@ -28,6 +28,7 @@ export interface ActionRequestFingerprintInput {
+   connectionName: string;
+   input: unknown;
+   runtimeTokenId?: string;
++  expectedAccountId?: string;
+ }
+ 
+ /**
+@@ -66,6 +67,7 @@ export function hashActionRequest(input: ActionRequestFingerprintInput): string
+       connectionName: input.connectionName,
+       input: canonicalize(input.input, 1),
+       runtimeTokenId: input.runtimeTokenId,
++      expectedAccountId: input.expectedAccountId,
+     }),
+   );
+ }
+diff --git a/src/server/actions/action-runner.test.ts b/src/server/actions/action-runner.test.ts
+index b77aa708..cd6e9959 100644
+--- a/src/server/actions/action-runner.test.ts
++++ b/src/server/actions/action-runner.test.ts
+@@ -496,3 +496,181 @@ function createTestLogger(): { entries: TestLogEntry[]; logger: Logger } {
+     logger: { info: record, warn: record } as unknown as Logger,
+   };
+ }
++
++describe("account-bound action execution", () => {
++  it("rejects Marketplace execution even if its displayed profile matches", async () => {
++    const store = new MemoryConnectionStore();
++    await store.set("example", "work", credential);
++    const loader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
++    const load = vi.spyOn(loader, "loadActionExecutor");
++    const resolve = ConnectionService.prototype.resolveForExecution;
++    vi.spyOn(ConnectionService.prototype, "resolveForExecution").mockImplementation(async function (
++      this: ConnectionService,
++      ...args
++    ) {
++      return { ...(await resolve.apply(this, args)), marketplace: true };
++    });
++    const runner = createRunner({
++      runs: new MemoryRunLogStore(),
++      logger: createTestLogger().logger,
++      provider: authenticatedProvider,
++      providerLoader: loader,
++      store,
++    });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy: openPolicy,
++      connectionName: "work",
++      expectedAccountId: "example",
++    });
++    expect(run).toMatchObject({
++      accountGuardRejected: true,
++      result: { ok: false, error: { code: "connection_changed" } },
++    });
++    expect(load).not.toHaveBeenCalled();
++  });
++  it("rejects a different account before loading an executor", async () => {
++    const store = new MemoryConnectionStore();
++    await store.set("example", "work", credential);
++    const loader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
++    const load = vi.spyOn(loader, "loadActionExecutor");
++    const runner = createRunner({
++      runs: new MemoryRunLogStore(),
++      logger: createTestLogger().logger,
++      provider: authenticatedProvider,
++      providerLoader: loader,
++      store,
++    });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy: openPolicy,
++      connectionName: "work",
++      expectedAccountId: "other-account",
++    });
++    expect(run?.result).toMatchObject({ ok: false, error: { code: "connection_changed" } });
++    expect(load).not.toHaveBeenCalled();
++  });
++
++  it("checks the resolved credential instead of the earlier policy summary", async () => {
++    const store = new MemoryConnectionStore();
++    await store.set("example", "work", credential);
++    const get = store.get.bind(store);
++    let reads = 0;
++    vi.spyOn(store, "get").mockImplementation(async (service, name) => {
++      if (++reads === 2)
++        await store.set(service, name, { ...credential, profile: { ...credential.profile, accountId: "replacement" } });
++      return get(service, name);
++    });
++    const loader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
++    const load = vi.spyOn(loader, "loadActionExecutor");
++    const runner = createRunner({
++      runs: new MemoryRunLogStore(),
++      logger: createTestLogger().logger,
++      provider: authenticatedProvider,
++      providerLoader: loader,
++      store,
++    });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy: openPolicy,
++      connectionName: "work",
++      expectedAccountId: "example",
++    });
++    expect(run?.result).toMatchObject({ ok: false, error: { code: "connection_changed" } });
++    expect(load).not.toHaveBeenCalled();
++  });
++
++  it("uses the matched frozen credential if the stored account changes after resolution", async () => {
++    const store = new MemoryConnectionStore();
++    await store.set("example", "work", credential);
++    let used: string | undefined;
++    const loader = new TestProviderLoader(async (_input, context) => {
++      const selected = await context.getCredential("example");
++      used = selected?.authType === "api_key" ? selected.profile.accountId : undefined;
++      return { ok: true, output: {} };
++    });
++    const load = loader.loadActionExecutor.bind(loader);
++    vi.spyOn(loader, "loadActionExecutor").mockImplementation(async () => {
++      await store.set("example", "work", {
++        ...credential,
++        profile: { ...credential.profile, accountId: "replacement" },
++      });
++      return load();
++    });
++    const runner = createRunner({
++      runs: new MemoryRunLogStore(),
++      logger: createTestLogger().logger,
++      provider: authenticatedProvider,
++      providerLoader: loader,
++      store,
++    });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy: openPolicy,
++      connectionName: "work",
++      expectedAccountId: "example",
++    });
++    expect(run?.result.ok).toBe(true);
++    expect(used).toBe("example");
++    expect((await store.get("example", "work"))?.credential).toMatchObject({ profile: { accountId: "replacement" } });
++  });
++
++  it("rechecks connection grants when the connection is replaced between summary and resolution", async () => {
++    const store = new MemoryConnectionStore();
++    const original = await store.set("example", "work", credential);
++    const policy = new ActionPolicyService().createSnapshot(undefined, {
++      allowedActions: [],
++      blockedActions: [],
++      allowedProxies: [],
++      allowedConnections: [original.id],
++    });
++    const get = store.get.bind(store);
++    let reads = 0;
++    vi.spyOn(store, "get").mockImplementation(async (service, name) => {
++      if (++reads === 2) {
++        await store.delete(service, name);
++        await store.set(service, name, credential);
++      }
++      return get(service, name);
++    });
++    const loader = new TestProviderLoader(async () => ({ ok: true, output: {} }));
++    const load = vi.spyOn(loader, "loadActionExecutor");
++    const runner = createRunner({
++      runs: new MemoryRunLogStore(),
++      logger: createTestLogger().logger,
++      provider: authenticatedProvider,
++      providerLoader: loader,
++      store,
++    });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy,
++      connectionName: "work",
++      expectedAccountId: "example",
++    });
++    expect(run?.result).toMatchObject({ ok: false, error: { code: "connection_not_allowed" } });
++    expect(load).not.toHaveBeenCalled();
++  });
++
++  it("does not accept virtual no-auth accounts as a bound provider identity", async () => {
++    const runner = createRunner({ runs: new MemoryRunLogStore(), logger: createTestLogger().logger });
++    const run = await runner.run({
++      actionId: "example.echo",
++      input: {},
++      caller: "http",
++      policy: openPolicy,
++      expectedAccountId: "example:default",
++    });
++    expect(run?.result).toMatchObject({ ok: false, error: { code: "connection_changed" } });
++  });
++});
+diff --git a/src/server/actions/action-runner.ts b/src/server/actions/action-runner.ts
+index b8546770..10e076ce 100644
+--- a/src/server/actions/action-runner.ts
++++ b/src/server/actions/action-runner.ts
+@@ -26,12 +26,14 @@ export interface RunActionInput {
+   input: unknown;
+   caller: RunLogCaller;
+   connectionName?: string;
++  expectedAccountId?: string;
+   policy: ActionPolicySnapshot;
+   runtimeTokenId?: string;
+   signal?: AbortSignal;
+ }
+ 
+ export interface ActionRunResult {
++  accountGuardRejected?: true;
+   executionId: string;
+   auditPersisted: boolean;
+   result: ExecutionResult;
+@@ -75,6 +77,7 @@ export class ActionRunner {
+     let policy: ActionPolicyDecision = input.policy.evaluate(action);
+     let connection: ExecutionConnection | undefined;
+     let result: ExecutionResult;
++    let accountGuardRejected = false;
+     if (!policy.allowed) {
+       result = { ok: false, error: { code: policy.code, message: policy.message } };
+     } else if (input.signal?.aborted) {
+@@ -99,6 +102,23 @@ export class ActionRunner {
+         } else {
+           connection = await this.options.connections.resolveForExecution(action.service, input.connectionName);
+           input.signal?.throwIfAborted();
++          const resolvedPolicy =
++            connection.summary?.authType === "no_auth"
++              ? undefined
++              : input.policy.evaluateConnection(connection.summary?.id);
++          if (resolvedPolicy && !resolvedPolicy.allowed) {
++            policy = resolvedPolicy;
++            throw new ConnectionError(resolvedPolicy.code, resolvedPolicy.message);
++          }
++          if (
++            input.expectedAccountId !== undefined &&
++            (connection.marketplace ||
++              connection.summary?.authType === "no_auth" ||
++              connection.summary?.profile.accountId !== input.expectedAccountId)
++          ) {
++            accountGuardRejected = true;
++            throw new ConnectionError("connection_changed", "The selected provider account changed before execution.");
++          }
+           const executor =
+             action.execution.locallyExecutable && !connection.marketplace
+               ? await this.options.providerLoader.loadActionExecutor(
+@@ -189,7 +209,13 @@ export class ActionRunner {
+       this.options.logger?.warn(completedLogContext, "action run failed");
+     }
+ 
+-    return { executionId, auditPersisted, result, connection: connection?.summary };
++    return {
++      executionId,
++      auditPersisted,
++      result,
++      connection: connection?.summary,
++      ...(accountGuardRejected ? { accountGuardRejected: true } : {}),
++    };
+   }
+ 
+   listRuns(input?: RunLogListInput): Promise<RunLogPage> {
+diff --git a/src/server/api/openapi.ts b/src/server/api/openapi.ts
+index 4f818551..2bbb5bc4 100644
+--- a/src/server/api/openapi.ts
++++ b/src/server/api/openapi.ts
+@@ -349,6 +349,7 @@ export function createOpenApiDocument(
+     "/api/files": createTransitFilesPath(),
+     "/api/files/{fileId}": createTransitFilePath(),
+     "/v1/actions/{actionId}": runPath,
++    "/v1/actions/{actionId}/for-account/{accountId}": createRunPath(true),
+     "/v1/proxy/{service}": createProxyPath(),
+     "/api/runs": createRunsPath(),
+     "/api/runs/{id}": createRunDetailPath(),
+@@ -1107,24 +1108,46 @@ function createRunDetailPath(): Record<string, unknown> {
+   };
+ }
+ 
+-function createRunPath(): Record<string, unknown> {
++function createRunPath(accountBound = false): Record<string, unknown> {
+   return {
+-    get: {
+-      tags: ["Catalog"],
+-      summary: "Get one runtime action.",
+-      parameters: [actionIdParameter],
+-      responses: {
+-        200: jsonResponse(runtimeSuccessSchema({ $ref: "#/components/schemas/RuntimeActionMetadata" })),
+-        404: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema), "unknown_action."),
+-      },
+-    },
++    ...(accountBound
++      ? {}
++      : {
++          get: {
++            tags: ["Catalog"],
++            summary: "Get one runtime action.",
++            parameters: [actionIdParameter],
++            responses: {
++              200: jsonResponse(runtimeSuccessSchema({ $ref: "#/components/schemas/RuntimeActionMetadata" })),
++              404: jsonResponse(runtimeFailureSchema(actionFailureMetaSchema), "unknown_action."),
++            },
++          },
++        }),
+     post: {
+       tags: ["Runs"],
+-      summary: "Execute a runtime action.",
++      summary: accountBound ? "Execute an action for an expected provider account." : "Execute a runtime action.",
+       description:
++        (accountBound
++          ? "Checks the expected provider account ID against the credential snapshot used by the action. A changed, missing, no-auth or Marketplace account is rejected before executor loading. "
++          : "") +
+         "Use the action catalog to discover provider-specific input and output schemas. For a compact strongly typed OpenAPI document for one action, request /openapi.json?actionId=<actionId>. " +
+         actionIdempotencyDescription,
+-      parameters: [actionIdParameter, idempotencyKeyParameter, ...namedConnectionParameters],
++      parameters: [
++        actionIdParameter,
++        idempotencyKeyParameter,
++        ...namedConnectionParameters,
++        ...(accountBound
++          ? [
++              {
++                name: "accountId",
++                in: "path",
++                required: true,
++                description: "Provider account ID from the managed connection profile.",
++                schema: { type: "string", minLength: 1, maxLength: 500 },
++              },
++            ]
++          : []),
++      ],
+       requestBody: actionRunBody(
+         jsonSchema.unknownObject("Action input matching the catalog schema. Omitted input is treated as {}."),
+         "Generic action run creation request.",
+diff --git a/src/server/api/runtime-api.ts b/src/server/api/runtime-api.ts
+index 041dfefc..f40766f0 100644
+--- a/src/server/api/runtime-api.ts
++++ b/src/server/api/runtime-api.ts
+@@ -83,6 +83,7 @@ export interface RuntimeFailureInput {
+ }
+ 
+ export interface RuntimeActionResultInput {
++  accountGuardRejected?: true;
+   actionId: string;
+   executionId: string;
+   auditPersisted: boolean;
+@@ -187,7 +188,12 @@ export function serializeRuntimeFailure(input: RuntimeFailureInput): RuntimeActi
+ /** Build the persistable HTTP response for a completed action execution. */
+ export function serializeRuntimeActionResult(input: RuntimeActionResultInput): RuntimeActionHttpResult {
+   const { actionId, executionId, auditPersisted, result } = input;
+-  const meta = { executionId, actionId, auditPersisted };
++  const meta = {
++    executionId,
++    actionId,
++    auditPersisted,
++    ...(input.accountGuardRejected ? { dispatch: "not_started" } : {}),
++  };
+   if (result.ok) {
+     return {
+       status: 200,
+@@ -274,7 +280,7 @@ function mapExecutionErrorStatus(code: string | undefined, details?: unknown): R
+   if (code === "internal_error" || code === "provider_error" || code === "executor_unavailable") {
+     return 500;
+   }
+-  if (code === "oauth_token_expired" || code === "oauth_refresh_unavailable") {
++  if (code === "connection_changed" || code === "oauth_token_expired" || code === "oauth_refresh_unavailable") {
+     return 409;
+   }
+   if (code === "connection_not_found" || code === "unknown_service" || code === "unknown_action") {
+diff --git a/src/server/connect-server.test.ts b/src/server/connect-server.test.ts
+index 5bd9584f..d786cc34 100644
+--- a/src/server/connect-server.test.ts
++++ b/src/server/connect-server.test.ts
+@@ -3671,6 +3671,7 @@ interface TestAuthOptions {
+ }
+ 
+ interface CreateTestServerOptions {
++  connectionStore?: IConnectionStore;
+   auth?: TestAuthOptions;
+   publicOrigin?: string;
+   actionPolicy?: ActionPolicyService;
+@@ -3701,7 +3702,7 @@ function createTestServer(providers: ProviderDefinition[], options: CreateTestSe
+   const connections = new ConnectionService({
+     catalog,
+     providerLoader,
+-    store: new MemoryConnectionStore(),
++    store: options.connectionStore ?? new MemoryConnectionStore(),
+   });
+   const allowedCustomOAuth = new Set(options.allowedCustomOAuth);
+   const isCustomClientConfigAllowed = (service: string): boolean =>
+@@ -4214,3 +4215,82 @@ function createRunLog(id: string, startedAt: string): RunLog {
+     ok: true,
+   };
+ }
++
++describe("account-bound HTTP actions", () => {
++  async function fixture() {
++    const store = new MemoryConnectionStore();
++    const execute = vi.fn<ActionExecutor>(async (input) => ({ ok: true, output: input }));
++    const app = createTestServer([{ ...apiKeyProvider, actions: [echoAction] }], {
++      providerLoader: new ActionProviderLoader(execute),
++      connectionStore: store,
++      auth: { adminToken: "synthetic-admin", runtimeToken: "synthetic-runtime" },
++    }).createApp();
++    const response = await app.request("/api/connections/example", {
++      method: "PUT",
++      headers: { authorization: "Bearer synthetic-admin", "content-type": "application/json" },
++      body: JSON.stringify({ authType: "api_key", values: { apiKey: "synthetic-key" } }),
++    });
++    expect(response.status).toBe(200);
++    const connection = (await response.json()) as { profile: { accountId: string } };
++    const send = (account: string, key?: string, authorization = "Bearer synthetic-runtime") =>
++      app.request(`/v1/actions/example.echo/for-account/${encodeURIComponent(account)}`, {
++        method: "POST",
++        headers: { authorization, "content-type": "application/json", ...(key ? { "Idempotency-Key": key } : {}) },
++        body: JSON.stringify({ input: { message: "synthetic" } }),
++      });
++    return { app, execute, send, store, account: connection.profile.accountId };
++  }
++  it("dispatches only for the expected account and fingerprints it for idempotency", async () => {
++    const f = await fixture();
++    expect((await f.send(f.account, "same-key")).status).toBe(200);
++    expect((await f.send(f.account, "same-key")).status).toBe(200);
++    const conflict = await f.send("different-account", "same-key");
++    expect(conflict.status).toBe(409);
++    expect(await conflict.json()).toMatchObject({ errorCode: "idempotency_key_conflict" });
++    expect(f.execute).toHaveBeenCalledOnce();
++  });
++  it("rejects a changed account without idempotency before the provider action", async () => {
++    const f = await fixture();
++    const response = await f.send("different-account");
++    expect(response.status).toBe(409);
++    expect(await response.json()).toMatchObject({ errorCode: "connection_changed", meta: { dispatch: "not_started" } });
++    expect(f.execute).not.toHaveBeenCalled();
++  });
++  it("replays historical results after reauthorization but rejects fresh sends for the old account", async () => {
++    const f = await fixture();
++    const first = await (await f.send(f.account, "completed-key")).json();
++    const previous = await f.store.get("example", "default");
++    if (previous?.credential.authType !== "api_key") throw new Error("Expected API key credential");
++    await f.store.set("example", "default", {
++      ...previous!.credential,
++      profile: { ...previous!.credential.profile, accountId: "replacement" },
++    });
++    expect(await (await f.send(f.account, "completed-key")).json()).toEqual(first);
++    const fresh = await f.send(f.account, "fresh-key");
++    expect(fresh.status).toBe(409);
++    expect(await fresh.json()).toMatchObject({ errorCode: "connection_changed", meta: { dispatch: "not_started" } });
++    expect(f.execute).toHaveBeenCalledOnce();
++  });
++  it("does not label an executor failure as a proven predispatch rejection", async () => {
++    const f = await fixture();
++    f.execute.mockResolvedValue({ ok: false, error: { code: "connection_changed", message: "Provider failure" } });
++    const response = await f.send(f.account, "provider-failure");
++    expect(response.status).toBe(409);
++    expect((await response.json()).meta).not.toHaveProperty("dispatch");
++    expect(f.execute).toHaveBeenCalledOnce();
++  });
++  it("keeps runtime authentication and account input bounds on the new endpoint", async () => {
++    const f = await fixture();
++    expect((await f.send(f.account, undefined, "Bearer invalid")).status).toBe(401);
++    expect((await f.send("x".repeat(501))).status).toBe(400);
++    expect(f.execute).not.toHaveBeenCalled();
++    const document = (await (
++      await f.app.request("/openapi.json", { headers: { authorization: "Bearer synthetic-admin" } })
++    ).json()) as { paths: Record<string, { post?: { parameters: unknown[] }; get?: unknown }> };
++    const path = document.paths["/v1/actions/{actionId}/for-account/{accountId}"];
++    expect(path?.get).toBeUndefined();
++    expect(path?.post?.parameters).toContainEqual(
++      expect.objectContaining({ name: "accountId", in: "path", required: true }),
++    );
++  });
++});
+diff --git a/src/server/connect-server.ts b/src/server/connect-server.ts
+index f15fd03d..9d86dfb5 100644
+--- a/src/server/connect-server.ts
++++ b/src/server/connect-server.ts
+@@ -196,6 +196,9 @@ export class ConnectServer {
+     app.get("/v1/actions/search", (context) => this.searchRuntimeActions(context));
+     app.get("/v1/actions/:actionId", (context) => this.getRuntimeAction(context, context.req.param("actionId")));
+     app.post("/v1/actions/:actionId", (context) => this.createRuntimeActionRun(context, context.req.param("actionId")));
++    app.post("/v1/actions/:actionId/for-account/:accountId", (context) =>
++      this.createRuntimeActionRun(context, context.req.param("actionId"), context.req.param("accountId")),
++    );
+     app.route("/v1", createConnectionRoutes(this.options));
+     app.get("/v1/apps", (context) => this.listRuntimeApps(context));
+     app.get("/v1/apps/authenticated", (context) => this.listAuthenticatedRuntimeApps(context));
+@@ -538,7 +541,18 @@ export class ConnectServer {
+     return writeRuntimeSuccess(context, serializeRuntimeAction(action));
+   }
+ 
+-  private async createRuntimeActionRun(context: Context, actionId: string): Promise<Response> {
++  private async createRuntimeActionRun(
++    context: Context,
++    actionId: string,
++    expectedAccountId?: string,
++  ): Promise<Response> {
++    if (expectedAccountId !== undefined && (!expectedAccountId.trim() || expectedAccountId.length > 500)) {
++      return writeRuntimeFailure(context, {
++        status: 400,
++        errorCode: "invalid_input",
++        message: "Invalid expected provider account ID.",
++      });
++    }
+     const action = this.options.catalog.actionsById.get(actionId);
+     if (!action) {
+       return writeRuntimeFailure(context, unknownActionFailure(actionId));
+@@ -562,7 +576,15 @@ export class ConnectServer {
+     if (!policy.evaluate(action).allowed) {
+       return writeRuntimeActionHttpResult(
+         context,
+-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
++        await this.executeRuntimeAction(
++          actionId,
++          input,
++          connectionName,
++          policy,
++          runtimeGrant,
++          context.req.raw.signal,
++          expectedAccountId,
++        ),
+       );
+     }
+     const idempotencyKey = readIdempotencyKey(context.req.header("idempotency-key"));
+@@ -578,7 +600,15 @@ export class ConnectServer {
+     if (!idempotencyKey.key) {
+       return writeRuntimeActionHttpResult(
+         context,
+-        await this.executeRuntimeAction(actionId, input, connectionName, policy, runtimeGrant, context.req.raw.signal),
++        await this.executeRuntimeAction(
++          actionId,
++          input,
++          connectionName,
++          policy,
++          runtimeGrant,
++          context.req.raw.signal,
++          expectedAccountId,
++        ),
+       );
+     }
+ 
+@@ -591,6 +621,7 @@ export class ConnectServer {
+         connectionName: connectionName ?? defaultConnectionName,
+         input,
+         runtimeTokenId: runtimeGrant?.tokenId,
++        expectedAccountId,
+       });
+     } catch (error) {
+       if (!(error instanceof ActionInputDepthError)) {
+@@ -639,6 +670,7 @@ export class ConnectServer {
+       policy,
+       runtimeGrant,
+       context.req.raw.signal,
++      expectedAccountId,
+     );
+     const completed = await this.options.idempotency.complete({
+       keyHash,
+@@ -661,6 +693,7 @@ export class ConnectServer {
+     policy: ActionPolicySnapshot,
+     runtimeGrant: RuntimeGrant | undefined,
+     signal: AbortSignal | undefined,
++    expectedAccountId?: string,
+   ): Promise<RuntimeActionHttpResult> {
+     try {
+       const run = await this.options.actions.run({
+@@ -670,6 +703,7 @@ export class ConnectServer {
+         connectionName,
+         policy,
+         runtimeTokenId: runtimeGrant?.tokenId,
++        expectedAccountId,
+         signal,
+       });
+       if (!run) {
+@@ -681,6 +715,7 @@ export class ConnectServer {
+         executionId: run.executionId,
+         auditPersisted: run.auditPersisted,
+         result: run.result,
++        accountGuardRejected: run.accountGuardRejected,
+       });
+     } catch (error) {
+       if (error instanceof ConnectionError) {

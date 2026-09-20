@@ -128,6 +128,21 @@ describe("finalizeRun", () => {
 });
 
 describe("followThreadEvents", () => {
+  it("rechecks a quiet stream at catch-up and releases its subscription after revocation", async () => {
+    const fanout = new TestFanout();
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = { event: { findMany } } as unknown as PrismaClient;
+    const assertAccess = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("Access revoked"));
+    const stream = followThreadEvents(prisma, "thread-1", -1, fanout, undefined, 1, assertAccess);
+    await expect(stream.next()).rejects.toThrow("Access revoked");
+    expect(findMany).toHaveBeenCalledOnce();
+    expect(assertAccess).toHaveBeenCalledTimes(2);
+    expect(fanout.unsubscribed).toBe(true);
+  });
+
   it("does not lose a notification that arrives while querying", async () => {
     const fanout = new TestFanout();
     const findMany = vi

@@ -5,6 +5,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "re
 import { Navigate, Route, Routes, useSearchParams } from "react-router-dom";
 import { LoadingState } from "./components/ai/primitives";
 import { authClient } from "./lib/auth";
+import { customerAlertPath, safeSignInPath } from "./lib/customer-alert-link";
 import { markAfterPaint, markOnce } from "./lib/performance";
 import {
   holdUnreachableGate,
@@ -39,8 +40,7 @@ export function App() {
 
 function SessionApp() {
   const [searchParams] = useSearchParams();
-  const signInDestination =
-    searchParams.get("next") === "/integrations/setup" ? "/integrations/setup" : "/app";
+  const signInDestination = safeSignInPath(searchParams.get("next"));
   const session = authClient.useSession();
   const gate = sessionGate(session);
   const [holdingUnreachable, setHoldingUnreachable] = useState(false);
@@ -110,7 +110,19 @@ function SessionApp() {
               )
             }
           />
-          <Route path="/app" element={user ? <ShellPage /> : <Navigate to="/sign-in" replace />} />
+          <Route
+            path="/app"
+            element={
+              user ? (
+                <ShellPage />
+              ) : (
+                <Navigate
+                  to={`/sign-in?${new URLSearchParams({ next: customerAlertPath(searchParams) })}`}
+                  replace
+                />
+              )
+            }
+          />
           <Route
             path="/app/g/:groupId"
             element={user ? <ShellPage /> : <Navigate to="/sign-in" replace />}

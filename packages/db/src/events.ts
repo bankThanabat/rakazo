@@ -49,7 +49,12 @@ export interface ThreadEvents {
   pauseRunForInput(input: PauseRunForInput): Promise<boolean>;
   pauseRunForTakeover(input: PauseRunForTakeover): Promise<boolean>;
   sendUserMessage(input: SendUserMessageInput): Promise<SendUserMessageResult>;
-  follow(threadId: string, cursor: number, signal?: AbortSignal): AsyncGenerator<ProductEvent>;
+  follow(
+    threadId: string,
+    cursor: number,
+    signal?: AbortSignal,
+    assertAccess?: () => Promise<void>,
+  ): AsyncGenerator<ProductEvent>;
 }
 
 export interface ClearThreadInput {
@@ -239,8 +244,16 @@ export function createThreadEvents(
     pauseRunForInput: (input) => pauseRunForInput(prisma, input, realtime),
     pauseRunForTakeover: (input) => pauseRunForTakeover(prisma, input, realtime),
     sendUserMessage: (input) => sendUserMessage(prisma, input, realtime),
-    follow: (threadId, cursor, signal) =>
-      followThreadEvents(prisma, threadId, cursor, realtime, signal, options.catchUpMs),
+    follow: (threadId, cursor, signal, assertAccess) =>
+      followThreadEvents(
+        prisma,
+        threadId,
+        cursor,
+        realtime,
+        signal,
+        options.catchUpMs,
+        assertAccess,
+      ),
   };
 }
 
@@ -1203,6 +1216,7 @@ export async function* followThreadEvents(
   realtime?: RealtimeFanout,
   signal?: AbortSignal,
   catchUpMs = realtime ? PUSH_CATCH_UP_MS : POLL_ONLY_CATCH_UP_MS,
+  assertAccess?: () => Promise<void>,
 ): AsyncGenerator<ProductEvent> {
   let seq = cursor;
   const latch = new ChangeLatch();
@@ -1216,6 +1230,8 @@ export async function* followThreadEvents(
       const observedGeneration = latch.generation;
       let batchSize = 0;
       do {
+        // Catch-up also revalidates quiet authenticated streams when no event wakes them.
+        await assertAccess?.();
         const events = await eventsAfter(prisma, threadId, seq, EVENT_BATCH_SIZE);
         batchSize = events.length;
         for (const event of events) {

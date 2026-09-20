@@ -52,10 +52,42 @@ function button(label: string) {
   return element;
 }
 
+it.each([
+  ["staff", "execution_uncertain", "Delivery unconfirmed"],
+  ["bot", "execution_uncertain", "Delivery unconfirmed"],
+  ["customer", "execution_uncertain", "Reply failed"],
+  ["staff", null, "Reply failed"],
+])("describes a failed %s message with %s accurately", async (role, errorCode, label) => {
+  api.snapshot.mockResolvedValue({
+    conversation: { id: "case", name: "Customer", canReply: false },
+    messages: [
+      {
+        id: "reply",
+        seq: 1,
+        role,
+        errorCode,
+        status: "failed",
+        body: "Synthetic reply",
+        sentParts: 0,
+      },
+    ],
+    before: null,
+  });
+  await act(async () =>
+    root.render(<CustomerThread id="case" onOpenNavigation={() => undefined} />),
+  );
+  expect(container.textContent).toContain(label);
+  expect(container.textContent).not.toContain(
+    label === "Reply failed" ? "Delivery unconfirmed" : "Reply failed",
+  );
+});
+
 it("keeps loaded visitor history across moving windows and catches up after reconnecting", async () => {
   window.history.replaceState(null, "", "/support/channel?origin=http%3A%2F%2Flocalhost");
   let latest = 199;
   const fetch = vi.fn(async (url: string) => {
+    if (new URL(url, location.origin).pathname.endsWith("/purchases"))
+      return Response.json({ reviews: [] });
     const before = Number(new URL(url, location.origin).searchParams.get("before")) || latest + 1;
     const last = Math.min(latest, before - 1);
     const first = Math.max(1, last - 99);

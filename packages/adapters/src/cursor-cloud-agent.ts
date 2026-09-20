@@ -93,6 +93,10 @@ export class CursorCloudAgentProvider implements CloudAgentProvider {
     return this.handle(parsed.data.agent, parsed.data.run);
   }
 
+  async recoverLaunch(idempotencyKey: string, context: AdapterContext) {
+    return this.get(cursorAgentId(idempotencyKey), context);
+  }
+
   async get(id: string, context: AdapterContext, runId?: string): Promise<CloudAgentSnapshot> {
     const agent = await this.agent(id, context.signal);
     const currentRunId = runId ?? agent.latestRunId;

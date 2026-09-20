@@ -1,3 +1,21 @@
+import type { CustomerMessage } from "@rakazo/contracts";
+
+/** An interrupted outgoing send may already have reached the customer. */
+export function customerDeliveryUnconfirmed(
+  message: Pick<CustomerMessage, "role" | "status" | "errorCode">,
+): boolean {
+  return (
+    message.role !== "customer" &&
+    message.status === "failed" &&
+    message.errorCode === "execution_uncertain"
+  );
+}
+
+/** Internal practice channels never have a connector or a public visitor endpoint. */
+export const CUSTOMER_PREVIEW_PROVIDER = "deskazo-preview";
+export const customerChannelUsesConnector = (provider: string) =>
+  provider !== "web" && provider !== CUSTOMER_PREVIEW_PROVIDER;
+
 /** Preserve every Unicode code point while fitting the channel's actual wire limit. */
 export function customerReplyParts(
   body: string,

@@ -603,7 +603,7 @@ test("runtime owners configure a scoped gateway key without an OpenConnector adm
     await route.fulfill({ json: { json: { ok: true } } });
   });
   await page.goto("/e2e/fixtures/open-connector.html?setup");
-  await page.getByRole("button", { name: "Rakazo gateway", exact: true }).click();
+  await page.getByRole("button", { name: "Deskazo gateway", exact: true }).click();
   await expect(page.getByLabel("Admin token", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Get credentials" })).toHaveCount(0);
   await page.getByLabel("Server URL", { exact: true }).fill("https://");
@@ -627,7 +627,7 @@ test("runtime owners configure a scoped gateway key without an OpenConnector adm
   await captureScreenshot(page, testInfo, "gateway-runtime-settings");
 });
 
-test("cloud users issue and revoke their runtime keys inside Rakazo", async ({
+test("cloud users issue and revoke their runtime keys inside Deskazo", async ({
   page,
 }, testInfo) => {
   let rows: Array<{ id: string; name: string; revokedAt: string | null }> = [];

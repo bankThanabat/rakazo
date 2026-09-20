@@ -123,8 +123,49 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["computer/readFile", { botId: "missing-bot", path: "MEMORY.md" }],
       ["computer/screenUrl", { botId: "missing-bot" }],
       ["computer/heartbeat", { botId: "missing-bot" }],
+      ["privateHistory/history", { kind: "memory", id: "missing-memory" }],
+      ["privateHistory/version", { kind: "memory", id: "missing-memory", revision: 1 }],
+      [
+        "privateHistory/preview",
+        {
+          kind: "memory",
+          id: "missing-memory",
+          revision: 1,
+          expectedRevision: 1,
+          action: "restore",
+        },
+      ],
+      [
+        "privateHistory/apply",
+        {
+          kind: "memory",
+          id: "missing-memory",
+          revision: 1,
+          expectedRevision: 1,
+          action: "restore",
+          reason: "Review",
+          reviewed: { content: "Nope", removed: false },
+        },
+      ],
+      ["learning/taskEvidence", { botId: "missing-bot", taskId: "missing-task" }],
+      ["learning/taskList", { botId: "missing-bot" }],
+      ["learning/task", { botId: "missing-bot", taskId: "missing-task" }],
       ["memory/list", {}],
-      ["memory/update", { documentId: "missing-memory", content: "Nope" }],
+      ["memory/update", { documentId: "missing-memory", content: "Nope", expectedRevision: 1 }],
+      ["memory/history", { documentId: "missing-memory" }],
+      ["memory/read", { documentId: "missing-memory" }],
+      [
+        "memory/previewUndo",
+        { documentId: "missing-memory", revision: 1, expectedRevision: 1, reason: "Review" },
+      ],
+      [
+        "memory/undo",
+        { documentId: "missing-memory", revision: 1, expectedRevision: 1, reason: "Review" },
+      ],
+      [
+        "memory/restore",
+        { documentId: "missing-memory", revision: 1, expectedRevision: 1, reason: "Review" },
+      ],
       ["memory/exportMarkdown", {}],
       ["routines/list", { botId: "missing-bot" }],
       ["routines/create", routineInput("missing-bot")],
@@ -136,7 +177,7 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["scratchpad/update", { itemId: "missing-item", title: "Nope" }],
       ["scratchpad/remove", { itemId: "missing-item" }],
       ["skills/list", { botId: "missing-bot" }],
-      ["skills/get", { skillId: "missing-skill" }],
+      ["skills/get", { skillId: "missing-skill", expectedRevision: 1 }],
       ["skills/start", { botId: "missing-bot", goal: "Demonstrate export" }],
       [
         "skills/appendEvent",
@@ -145,17 +186,32 @@ describeWithDatabase("API authorization and resource isolation", () => {
           event: { at: new Date().toISOString(), kind: "key", key: "a" },
         },
       ],
-      ["skills/snapshot", { skillId: "missing-skill" }],
-      ["skills/stop", { skillId: "missing-skill" }],
+      ["skills/snapshot", { skillId: "missing-skill", expectedRevision: 1 }],
+      ["skills/stop", { skillId: "missing-skill", expectedRevision: 1 }],
       ["skills/updateDraft", { skillId: "missing-skill", playbook: skillPlaybookInput() }],
-      ["skills/save", { skillId: "missing-skill" }],
-      ["skills/testRun", { skillId: "missing-skill" }],
-      ["skills/remove", { skillId: "missing-skill" }],
+      ["skills/save", { skillId: "missing-skill", expectedRevision: 1 }],
+      ["skills/testRun", { skillId: "missing-skill", expectedRevision: 1 }],
+      ["skills/remove", { skillId: "missing-skill", expectedRevision: 1 }],
       ["agentSkills/list"],
-      ["agentSkills/get", { skillId: "missing-skill" }],
+      ["agentSkills/get", { skillId: "missing-skill", expectedRevision: 1 }],
       ["agentSkills/create", { name: "Unauthenticated", description: "Nope", body: "Steps" }],
-      ["agentSkills/update", { skillId: "missing-skill", description: "Nope" }],
-      ["agentSkills/remove", { skillId: "missing-skill" }],
+      [
+        "agentSkills/update",
+        { skillId: "missing-skill", expectedRevision: 1, description: "Nope" },
+      ],
+      ["agentSkills/remove", { skillId: "missing-skill", expectedRevision: 1 }],
+      ["agentSkills/history", { skillId: "missing-skill" }],
+      ["agentSkills/readVersion", { skillId: "missing-skill" }],
+      ["agentSkills/previewUndo", { skillId: "missing-skill", expectedRevision: 1, revision: 1 }],
+      [
+        "agentSkills/undo",
+        { skillId: "missing-skill", expectedRevision: 1, revision: 1, reason: "Test" },
+      ],
+      [
+        "agentSkills/restore",
+        { skillId: "missing-skill", expectedRevision: 1, revision: 1, reason: "Test" },
+      ],
+      ["agentSkills/listHistory", {}],
       ["capabilities/list"],
       ["capabilities/install", capabilityInput("Unauthenticated")],
       ["capabilities/remove", { id: "missing-capability" }],
@@ -387,6 +443,52 @@ describeWithDatabase("API authorization and resource isolation", () => {
     });
 
     const resourceIdCalls = [
+      ["learning/taskEvidence", { botId: ownerBot.id, taskId: "missing-task" }],
+      ["learning/taskList", { botId: ownerBot.id }],
+      ["learning/task", { botId: ownerBot.id, taskId: "missing-task" }],
+      ["privateHistory/history", { kind: "memory", id: ownerMemory.id }],
+      ["privateHistory/version", { kind: "memory", id: ownerMemory.id, revision: 1 }],
+      [
+        "privateHistory/preview",
+        { kind: "memory", id: ownerMemory.id, revision: 1, expectedRevision: 1, action: "restore" },
+      ],
+      [
+        "privateHistory/apply",
+        {
+          kind: "memory",
+          id: ownerMemory.id,
+          revision: 1,
+          expectedRevision: 1,
+          action: "restore",
+          reason: "Review",
+          reviewed: { content: "Nope", removed: false },
+        },
+      ],
+      ["privateHistory/history", { kind: "skill", id: ownerAgentSkill.id }],
+      ["privateHistory/version", { kind: "skill", id: ownerAgentSkill.id, revision: 1 }],
+      [
+        "privateHistory/preview",
+        {
+          kind: "skill",
+          id: ownerAgentSkill.id,
+          revision: 1,
+          expectedRevision: 1,
+          action: "restore",
+        },
+      ],
+      [
+        "privateHistory/apply",
+        {
+          kind: "skill",
+          id: ownerAgentSkill.id,
+          revision: 1,
+          expectedRevision: 1,
+          action: "restore",
+          reason: "Review",
+          reviewed: { content: "Nope", removed: false },
+        },
+      ],
+
       ["routines/update", { routineId: ownerRoutine.id, name: "Stolen Routine" }],
       ["routines/remove", { routineId: ownerRoutine.id }],
       ["routines/testRun", { routineId: ownerRoutine.id }],
@@ -403,10 +505,41 @@ describeWithDatabase("API authorization and resource isolation", () => {
       ["skills/save", { skillId: ownerSkill.id }],
       ["skills/testRun", { skillId: ownerSkill.id }],
       ["skills/remove", { skillId: ownerSkill.id }],
-      ["agentSkills/get", { skillId: ownerAgentSkill.id }],
-      ["agentSkills/update", { skillId: ownerAgentSkill.id, description: "Stolen" }],
-      ["agentSkills/remove", { skillId: ownerAgentSkill.id }],
-      ["memory/update", { documentId: ownerMemory.id, content: "stolen" }],
+      ["agentSkills/get", { skillId: ownerAgentSkill.id, expectedRevision: 1 }],
+      [
+        "agentSkills/update",
+        { skillId: ownerAgentSkill.id, expectedRevision: 1, description: "Stolen" },
+      ],
+      ["agentSkills/remove", { skillId: ownerAgentSkill.id, expectedRevision: 1 }],
+      ["agentSkills/history", { skillId: ownerAgentSkill.id }],
+      ["agentSkills/readVersion", { skillId: ownerAgentSkill.id }],
+      [
+        "agentSkills/previewUndo",
+        { skillId: ownerAgentSkill.id, expectedRevision: 1, revision: 1 },
+      ],
+      [
+        "agentSkills/undo",
+        { skillId: ownerAgentSkill.id, expectedRevision: 1, revision: 1, reason: "Test" },
+      ],
+      [
+        "agentSkills/restore",
+        { skillId: ownerAgentSkill.id, expectedRevision: 1, revision: 1, reason: "Test" },
+      ],
+      ["memory/update", { documentId: ownerMemory.id, content: "stolen", expectedRevision: 1 }],
+      ["memory/history", { documentId: ownerMemory.id }],
+      ["memory/read", { documentId: ownerMemory.id }],
+      [
+        "memory/previewUndo",
+        { documentId: ownerMemory.id, revision: 1, expectedRevision: 1, reason: "Stolen" },
+      ],
+      [
+        "memory/undo",
+        { documentId: ownerMemory.id, revision: 1, expectedRevision: 1, reason: "Stolen" },
+      ],
+      [
+        "memory/restore",
+        { documentId: ownerMemory.id, revision: 1, expectedRevision: 1, reason: "Stolen" },
+      ],
       ["connections/complete", { connectionId: ownerConnection.connectionId }],
     ] satisfies Array<[string, unknown]>;
     await Promise.all(
@@ -473,7 +606,13 @@ describeWithDatabase("API authorization and resource isolation", () => {
     const ownerActor = await rpc<Actor>(app, owner, "me");
     const memberActor = await rpc<Actor>(app, member, "me");
 
-    await handles.prisma.member.deleteMany({ where: { userId: memberActor.userId } });
+    // Remove the signup-only organization rather than orphaning its last membership.
+    await handles.prisma.organization.deleteMany({
+      where: {
+        spaces: { some: { id: memberActor.spaceId } },
+        members: { every: { userId: memberActor.userId } },
+      },
+    });
     await handles.prisma.member.create({
       data: {
         id: `approval-member-${stamp}`,
@@ -898,7 +1037,13 @@ describeWithDatabase("API authorization and resource isolation", () => {
       "Space Member",
     );
     const memberActor = await rpc<Actor>(app, memberCookie, "me");
-    await handles.prisma.member.deleteMany({ where: { userId: memberActor.userId } });
+    // Remove the signup-only organization rather than orphaning its last membership.
+    await handles.prisma.organization.deleteMany({
+      where: {
+        spaces: { some: { id: memberActor.spaceId } },
+        members: { every: { userId: memberActor.userId } },
+      },
+    });
     await handles.prisma.member.create({
       data: {
         id: `space-delete-org-member-${stamp}`,

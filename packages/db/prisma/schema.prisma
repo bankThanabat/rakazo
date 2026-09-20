@@ -7,6 +7,15 @@ datasource db {
   provider = "postgresql"
 }
 
+// Short-lived operational admission state. Keys are hashed provider/account/bucket IDs.
+model ConnectorRateLimit {
+  key String @id
+  availableAt DateTime @db.Timestamptz(3)
+
+  @@index([availableAt], map: "connector_rate_limits_available_at_idx")
+  @@map("connector_rate_limits")
+}
+
 model AiDataConsent {
   userId String
   spaceId String
@@ -22,6 +31,17 @@ model AiDataConsent {
 }
 
 model User {
+  customerPublications CustomerPublication[]
+  computerProvisions ComputerProvision[]
+  agentSkills AgentSkill[]
+  learningFeeds LearningFeed[]
+  customerAlertDestinations CustomerAlertDestination[]
+  deletion AccountDeletion?
+  semanticMemoryMutations SemanticMemoryMutation[]
+  memoryDocuments MemoryDocument[]
+  notificationPreferences NotificationPreference[]
+  customerConversationReads CustomerConversationRead[]
+  assignedCustomerConversations CustomerConversation[]
   aiDataConsents AiDataConsent[]
   id                          String                       @id
   name                        String
@@ -48,6 +68,35 @@ model User {
 
   @@unique([email])
   @@map("user")
+}
+
+// Keep credentials and cleanup identities until every deletion effect has finished.
+model AccountDeletion {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  requestedAt DateTime @default(now())
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  claimId String?
+  leaseUntil DateTime?
+  errorCode String?
+  resources AccountDeletionResource[]
+
+  @@index([nextAttemptAt])
+  @@map("account_deletions")
+}
+
+model AccountDeletionResource {
+  userId String
+  deletion AccountDeletion @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  kind String
+  spaceId String
+  key String
+  providerKind String?
+  providerRef String?
+
+  @@id([userId, kind, spaceId, key])
+  @@map("account_deletion_resources")
 }
 
 model Session {
@@ -161,6 +210,14 @@ model Member {
 }
 
 model Space {
+  computerProvisions ComputerProvision[]
+  instagramSends InstagramSend[]
+  learningFeeds LearningFeed[]
+  customerAlertDestinations CustomerAlertDestination[]
+  customerOperations CustomerOperation[]
+  learningTasks LearningTask[]
+  learningImports LearningImport[]
+  learningDocuments LearningDocument[]
   knowledgeLibrary KnowledgeLibrary?
   aiDataConsents AiDataConsent[]
   id                          String                       @id
@@ -187,6 +244,7 @@ model Space {
   agentSkills                 AgentSkill[]
   connections                 Connection[]
   capabilities                CapabilityInstall[]
+  semanticMemoryMutations      SemanticMemoryMutation[]
   memoryDocuments             MemoryDocument[]
   agentHomes                  AgentHome[]
   browserProfiles             BrowserProfile[]
@@ -338,6 +396,13 @@ model SpaceVoicePreference {
 }
 
 model Bot {
+  learningHistoryItems LearningHistoryItem[]
+  learningFeeds LearningFeed[]
+  learningDocuments LearningDocument[]
+  learningEnabled Boolean @default(true)
+  learningSummaryAt DateTime?
+  learningTasks LearningTask[]
+  learningImports LearningImport[]
   knowledgeLibraryId String?
   knowledgeLibrary KnowledgeLibrary? @relation(fields: [knowledgeLibraryId], references: [id], onDelete: SetNull)
   screenGeneration Int @default(0)
@@ -378,6 +443,7 @@ model Bot {
   routines          Routine[]
   scratchpadItems   ScratchpadItem[]
   taughtSkills      TaughtSkill[]
+  semanticMemoryMutations SemanticMemoryMutation[]
   memoryDocuments   MemoryDocument[]
   agentHome         AgentHome?
   browserProfile    BrowserProfile?
@@ -420,6 +486,11 @@ model BotSection {
 }
 
 model BotDeletion {
+  userId String?
+  artifactKeys String[] @default([])
+  homeKey String?
+  computerKind String?
+  providerRef String?
   id                String   @id
   spaceId           String
   space             Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -429,6 +500,7 @@ model BotDeletion {
   deletedAt         DateTime @default(now())
 
   @@index([spaceId, deletedAt])
+  @@index([userId])
   @@map("bot_deletions")
 }
 
@@ -597,6 +669,7 @@ model Run {
   externalMessage      ExternalMessage?
 
   @@unique([spaceId, clientNonce])
+  @@index([spaceId, userId, status])
   @@index([status, leaseExpiresAt])
   @@index([status, updatedAt, id])
   @@index([botOutcomeReturnedAt, status])
@@ -673,9 +746,37 @@ model CloudAgent {
   errorCount          Int      @default(0)
   createdAt           DateTime @default(now())
 
+  @@index([userId])
   @@index([providerKey, nextPollAt])
   @@index([spaceId, userId, id])
   @@map("cloud_agents")
+}
+
+// Independent of runs: deleting source chat does not erase the mutation history.
+model SemanticMemoryMutation {
+  id                    String @id
+  spaceId               String
+  space                 Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId                String
+  user                  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botId                 String
+  bot                   Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  sourceRunId           String?
+  sourceThreadId        String
+  operation             String
+  reversesId            String?
+  reversalKey           String? @unique
+  provider              String
+  configurationRevision String
+  scope                 String
+  status                String
+  request               Json
+  result                Json?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([spaceId, userId, botId, id])
+  @@map("semantic_memory_mutations")
 }
 
 model ExternalEffect {
@@ -724,6 +825,7 @@ model Routine {
   updatedAt      DateTime  @updatedAt
   runs           Run[]
 
+  @@index([spaceId, userId, active])
   @@index([active, nextRunAt])
   @@index([spaceId, botId])
   @@map("routines")
@@ -776,6 +878,10 @@ model TaughtSkill {
 /// The Pi runtime already understands this format; we persist and inject them.
 /// Distinct from TaughtSkill (demo/record playbooks).
 model AgentSkill {
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  revision Int @default(1)
+  removedAt DateTime?
+  revisions AgentSkillRevision[]
   id          String   @id @default(cuid())
   spaceId     String
   space       Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -789,11 +895,40 @@ model AgentSkill {
   updatedAt   DateTime @updatedAt
 
   @@index([spaceId, userId])
+  @@index([userId])
   // Case-insensitive unique index agent_skills_spaceId_userId_name_lower_key is created in SQL.
   @@map("agent_skills")
 }
 
+model AgentSkillRevision {
+  learningTaskId String?
+  learningTask LearningTask? @relation(fields: [learningTaskId], references: [id], onDelete: SetNull)
+  operation String @default("baseline")
+  id String @id @default(cuid())
+  skillId String
+  skill AgentSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  revision Int
+  content String
+  removed Boolean @default(false)
+  reason String
+  actorKind String @default("unknown")
+  agentId String?
+  sourceRunId String?
+  sourceThreadId String?
+  restoredFrom Int?
+  undoneRevision Int?
+  createdAt DateTime @default(now())
+
+  @@unique([skillId, revision])
+  @@index([learningTaskId], map: "agent_skill_revisions_learning_task_idx")
+  @@map("agent_skill_revisions")
+}
+
 model Connection {
+  learningFeeds LearningFeed[]
+  customerAlertDestinations CustomerAlertDestination[]
+  customerPurchases CustomerPurchase[]
+  customerIdentities CustomerIdentity[]
   /// Accepted action defaults and owner overrides; missing actions are internal.
   actionPolicy Json @default("{}")
   id          String   @id @default(cuid())
@@ -839,6 +974,7 @@ model MemoryDocument {
   spaceId   String
   space     Space            @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   userId    String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   botId     String?
   bot       Bot?             @relation(fields: [botId], references: [id], onDelete: Cascade)
   scope     String
@@ -851,10 +987,18 @@ model MemoryDocument {
 
   @@unique([spaceId, scope, botId, path])
   @@index([spaceId, userId])
+  @@index([userId])
   @@map("memory_documents")
 }
 
 model MemoryRevision {
+  learningTaskId String?
+  learningTask LearningTask? @relation(fields: [learningTaskId], references: [id], onDelete: SetNull)
+  actorKind String @default("unknown")
+  reason String @default("Memory saved")
+  agentId String?
+  restoredFrom Int?
+  undoneRevision Int?
   id             String         @id @default(cuid())
   documentId     String
   document       MemoryDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -865,6 +1009,7 @@ model MemoryRevision {
   createdAt      DateTime       @default(now())
 
   @@unique([documentId, revision])
+  @@index([learningTaskId], map: "memory_revisions_learning_task_idx")
   @@map("memory_revisions")
 }
 
@@ -910,6 +1055,27 @@ model ComputerUpdate {
   @@index([computerId, createdAt])
   @@index([status, updatedAt])
   @@map("computer_updates")
+}
+
+// Survives bot/computer removal until an allocation has been adopted or cleaned up.
+model ComputerProvision {
+  id String @id
+  computerId String @unique
+  homeKey String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Restrict)
+  status String @default("active")
+  kind String?
+  providerRef String?
+  cleanup String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([userId])
+  @@map("computer_provisions")
 }
 
 model Computer {
@@ -1017,11 +1183,14 @@ model NotificationPreference {
   spaceId  String
   space    Space   @relation(fields: [spaceId], references: [id], onDelete: Cascade)
   userId   String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   finish   Boolean @default(true)
   help     Boolean @default(true)
   takeover Boolean @default(true)
+  customerQuietHours Json?
 
   @@unique([spaceId, userId])
+  @@index([userId])
   @@map("notification_preferences")
 }
 
@@ -1242,7 +1411,6 @@ model BotSecret {
   @@map("bot_secrets")
 }
 
-
 model ExternalConversation {
   id                       String            @id @default(cuid())
   provider                 String
@@ -1327,7 +1495,35 @@ model IntegrationProviderConfig {
   @@map("integration_provider_configs")
 }
 
+// Survives bot/Space deletion. Keep encrypted cleanup access until removal is confirmed.
+model CustomerPublication {
+  id String @id
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  spaceId String
+  botId String
+  ciphertext String
+  status String @default("preparing")
+  flowId String?
+  confirmed Boolean @default(false)
+  expiresAt DateTime
+  inUseUntil DateTime?
+  claimId String?
+  leaseUntil DateTime?
+  nextAttemptAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  behavior CustomerBehavior?
+
+  @@index([nextAttemptAt])
+  @@index([userId])
+  @@map("customer_publications")
+}
+
 model CustomerBehavior {
+  publicationId String? @unique
+  publication CustomerPublication? @relation(fields: [publicationId], references: [id], onDelete: Restrict)
+  assessment Json?
   actions Json @default("[]")
   botId        String   @id
   bot          Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
@@ -1345,7 +1541,18 @@ model CustomerBehavior {
   @@map("customer_behaviors")
 }
 
+model CustomerMessageWithdrawal {
+  channelId String
+  channel CustomerChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  key String
+  createdAt DateTime @default(now())
+
+  @@id([channelId, key])
+  @@map("customer_message_withdrawals")
+}
+
 model CustomerChannel {
+  withdrawals CustomerMessageWithdrawal[]
   id                  String                 @id @default(cuid())
   spaceId             String
   space               Space                  @relation(fields: [spaceId], references: [id], onDelete: Cascade)
@@ -1385,6 +1592,14 @@ model CustomerChannel {
 }
 
 model CustomerConversation {
+  purchases CustomerPurchase[]
+  identities CustomerIdentity[]
+  alertDeliveries CustomerAlertDelivery[]
+  acknowledgements CustomerAcknowledgement[]
+  acknowledgedAt DateTime?
+  operationReceipts CustomerOperationReceipt[]
+  learningTasks LearningTask[]
+  guidance CustomerGuidance[]
   id                 String                     @id @default(cuid())
   channelId          String
   channel            CustomerChannel            @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -1397,10 +1612,15 @@ model CustomerConversation {
   needsHuman         Boolean                    @default(false)
   state              String                     @default("open")
   assigneeId         String?
+  assignee User? @relation(fields: [assigneeId], references: [id], onDelete: SetNull)
   handoffReason      String?
   draftText          String?
   draftForSeq        Int?
-  notifiedGeneration Int                        @default(-1)
+  attentionId String?
+  attentionStartedAt DateTime?
+  attentionAlertStage Int @default(0)
+  nextAttentionAlertAt DateTime?
+  ownerAttentionAlertAt DateTime?
   lastCustomerSeq    Int                        @default(0)
   reads              CustomerConversationRead[]
   visitorSessions    CustomerVisitorSession[]
@@ -1415,7 +1635,218 @@ model CustomerConversation {
   @@unique([channelId, externalThreadId])
   @@index([profileRefreshAt])
   @@index([channelId, updatedAt])
+  @@index([assigneeId])
+  @@index([nextAttentionAlertAt])
+  @@index([ownerAttentionAlertAt])
   @@map("customer_conversations")
+}
+
+model CustomerIdentity {
+  id String @id @default(cuid())
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  customerId String
+  connectionId String
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  providerRef String
+  value Json
+  revision Int @default(1)
+  history Json @default("[]")
+  updatedAt DateTime @updatedAt
+
+  @@unique([conversationId, customerId, connectionId])
+  @@index([connectionId])
+  @@map("customer_identities")
+}
+
+model CustomerAlertDelivery {
+  id String @id @default(cuid())
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  attentionId String
+  stage Int
+  recipientId String
+  provider String
+  status String @default("sending")
+  attempts Int @default(1)
+  claimToken String?
+  leaseUntil DateTime?
+  retryable Boolean @default(false)
+  reference String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([attentionId, stage, provider])
+  @@index([conversationId, createdAt])
+  @@map("customer_alert_deliveries")
+}
+
+model CustomerAlertDestination {
+  id String @id
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId String?
+  connection Connection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  providerRef String
+  botAccountId String
+  recipientId String
+  kind String
+  nonce String
+  activeKey String? @unique
+  status String @default("testing")
+  codeHash String?
+  expiresAt DateTime
+  failedVerifications Int @default(0)
+  verifiedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([spaceId, userId, nonce])
+  @@index([userId])
+  @@index([connectionId])
+  @@map("customer_alert_destinations")
+}
+
+model CustomerGuidance {
+  id String @id @default(cuid())
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  nonce String
+  userId String
+  content String @db.Text
+  inFlight Boolean
+  createdAt DateTime @default(now())
+
+  @@unique([conversationId, nonce])
+  @@map("customer_guidance")
+}
+
+model LearningDocument {
+  botId String?
+  bot Bot? @relation(fields: [botId], references: [id], onDelete: Cascade)
+  id String @id @default(cuid())
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  scopeKey String
+  kind String
+  key String
+  title String
+  content String @db.Text
+  customerVisible Boolean @default(false)
+  revision Int @default(1)
+  updatedAt DateTime @updatedAt
+  revisions LearningRevision[]
+
+  @@unique([spaceId, scopeKey, kind, key])
+  @@index([botId])
+  @@map("learning_documents")
+}
+
+model LearningRevision {
+  sourceRef Json?
+  agentId String?
+  id String @id @default(cuid())
+  documentId String
+  document LearningDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  revision Int
+  title String
+  content String @db.Text
+  customerVisible Boolean
+  userId String
+  reason String
+  source String
+  restoredFrom Int?
+  createdAt DateTime @default(now())
+
+  @@unique([documentId, revision])
+  @@map("learning_revisions")
+}
+
+model LearningImport {
+  history LearningHistory?
+  tasks LearningTask[]
+  feedId String?
+  feedRevision Int?
+  feed LearningFeed? @relation(fields: [feedId], references: [id], onDelete: Cascade)
+  id String @id @default(cuid())
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId String
+  digest String
+  label String
+  format String
+  content String? @db.Text
+  coverage Json
+  mapping Json?
+  timezoneOffset String?
+  windowEnd DateTime
+  withdrawnAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([feedId])
+  @@unique([spaceId, botId, digest])
+  @@map("learning_imports")
+}
+
+model LearningTask {
+  targetKind String @default("document")
+  memoryRevisions MemoryRevision[]
+  skillRevisions AgentSkillRevision[]
+  reviews LearningTaskReview[]
+  id String @id @default(cuid())
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId String
+  importId String?
+  import LearningImport? @relation(fields: [importId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation CustomerConversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sourceKey String
+  correctionKey String?
+  inferenceKey String?
+  rejectedAt DateTime?
+  rejectionOverride Boolean @default(false)
+  evidence Json
+  status String @default("queued")
+  proposal Json?
+  error String?
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  leaseToken String?
+  leaseUntil DateTime?
+  documentId String?
+  appliedRevision Int?
+  reviewedByUserId String?
+  reviewReason String?
+  summarizedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([botId, sourceKey])
+  @@index([importId])
+  @@index([botId, rejectedAt])
+  @@index([status, nextAttemptAt])
+  @@index([spaceId, userId, targetKind, documentId], map: "learning_tasks_native_target_idx")
+  @@map("learning_tasks")
+}
+
+model LearningTaskReview {
+  id String @id @default(cuid())
+  taskId String
+  task LearningTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId String
+  decision String
+  reason String
+  createdAt DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@map("learning_task_reviews")
 }
 
 model CustomerToolCall {
@@ -1472,9 +1903,11 @@ model CustomerConversationRead {
   conversationId String
   conversation   CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   userId         String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   seq            Int                  @default(0)
 
   @@id([conversationId, userId])
+  @@index([userId])
   @@map("customer_conversation_reads")
 }
 
@@ -1499,6 +1932,7 @@ model GatewayRuntime {
   revokedAt DateTime?
   createdAt DateTime @default(now())
   accounts  GatewayAccount[]
+
   @@index([spaceId, userId])
   @@map("gateway_runtimes")
 }
@@ -1511,6 +1945,7 @@ model GatewayAccount {
   provider    String
   revokedAt   DateTime?
   routes      GatewayRoute[]
+
   @@index([runtimeId])
   @@map("gateway_accounts")
 }
@@ -1527,6 +1962,7 @@ model GatewayRoute {
   webhookUrl       String?
   enabled          Boolean @default(false)
   deliveries       GatewayDelivery[]
+
   @@unique([accountId, channelId])
   @@map("gateway_routes")
 }
@@ -1539,6 +1975,7 @@ model GatewayDelivery {
   receivedAt  DateTime @default(now())
   nextAttemptAt DateTime @default(now())
   ackedAt     DateTime?
+
   @@index([routeId, ackedAt, receivedAt])
   @@map("gateway_deliveries")
 }
@@ -1554,6 +1991,7 @@ model OpenConnectorAttempt {
   userId    String
   service   String
   createdAt DateTime @default(now())
+
   @@index([endpoint, createdAt])
   @@map("open_connector_attempts")
 }
@@ -1568,6 +2006,7 @@ model KnowledgeLibrary {
   createdAt DateTime @default(now())
   bots Bot[]
   sources KnowledgeSource[]
+
   @@map("knowledge_libraries")
 }
 
@@ -1582,6 +2021,7 @@ model KnowledgeSource {
   deletedAt DateTime?
   createdAt DateTime @default(now())
   revisions KnowledgeRevision[]
+
   @@index([libraryId, deletedAt])
   @@map("knowledge_sources")
 }
@@ -1604,6 +2044,210 @@ model KnowledgeRevision {
   claimId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   @@index([status, leaseUntil])
   @@map("knowledge_revisions")
+}
+
+model CustomerOperation {
+  receipt CustomerOperationReceipt?
+  id String @id
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  requestHash String
+  status String
+  attempt Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([spaceId])
+  @@index([status, updatedAt])
+  @@map("customer_operations")
+}
+
+model CustomerOperationReceipt {
+  operationId String @id
+  operation CustomerOperation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  connectionId String
+  action String
+  recordKey String
+  mapping Json
+  result Json?
+  reviewedByUserId String?
+  reviewedAt DateTime?
+  reviewReason String?
+  providerReference String?
+  reviewHistory Json @default("[]")
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("customer_operation_receipts")
+}
+
+model CustomerAcknowledgement {
+  id String @id @default(cuid())
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId String
+  generation Int
+  customerSeq Int
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("customer_acknowledgements")
+}
+
+model CustomerPurchase {
+  providerOrderId String?
+  id String @id
+  conversationId String
+  conversation CustomerConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  customerId String
+  connectionId String
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  providerRef String
+  activeKey String? @unique
+  requestHash String
+  paymentMethods Json
+  status String
+  revision Int @default(1)
+  ciphertext String?
+  summary Json @default("{}")
+  history Json @default("[]")
+  actionId String?
+  actionHash String?
+  actionKind String?
+  actionStartedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([connectionId, providerRef, providerOrderId])
+  @@index([conversationId])
+  @@index([connectionId])
+  @@map("customer_purchases")
+}
+
+/// Private dispatch provenance. Legacy physical names preserve existing comment receipts.
+/// Survives deleting a run or connection, removed with its Space.
+model InstagramSend {
+  id           String   @id @default(cuid())
+  spaceId      String
+  space        Space    @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  executionKey String
+  requestHash  String
+  bindingHash  String?
+  accountHash  String?
+  action       String?
+  targetId     String?
+  externalId   String?  @map("commentId")
+  result       Json?
+  createdAt    DateTime @default(now())
+
+  @@unique([spaceId, executionKey])
+  @@index([spaceId, externalId])
+  @@index([spaceId, bindingHash, id])
+  @@index([accountHash, externalId])
+  @@map("instagram_comment_writes")
+}
+
+model LearningFeed {
+  id String @id @default(cuid())
+  spaceId String
+  space Space @relation(fields: [spaceId], references: [id], onDelete: Cascade)
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  connectionId String
+  connection Connection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  providerRef String
+  accountId String
+  label String
+  scope String
+  enabled Boolean @default(true)
+  includeReplies Boolean @default(false)
+  includeMessages Boolean @default(false)
+  coverage Json @default("{}")
+  revision Int @default(1)
+  windowStart DateTime
+  windowEnd DateTime
+  cursor String?
+  visitedCursors String[] @default([])
+  cycle Int @default(1)
+  nextAttemptAt DateTime @default(now())
+  leaseToken String?
+  leaseUntil DateTime?
+  lastCheckedAt DateTime?
+  completedAt DateTime?
+  error String?
+  summarizedAt DateTime?
+  accepted Int @default(0)
+  skipped Int @default(0)
+  duplicates Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  imports LearningImport[]
+  items LearningFeedItem[]
+
+  @@unique([botId, connectionId])
+  @@index([enabled, nextAttemptAt])
+  @@index([userId])
+  @@map("learning_feeds")
+}
+
+model LearningFeedItem {
+  feedId String
+  feed LearningFeed @relation(fields: [feedId], references: [id], onDelete: Cascade)
+  externalId String
+  digest String
+  createdAt DateTime @default(now())
+
+  @@id([feedId, externalId, digest])
+  @@map("learning_feed_items")
+}
+
+// One immutable owner-approved job per original private archive.
+model LearningHistory {
+  id String @id @default(cuid())
+  importId String @unique
+  import LearningImport @relation(fields: [importId], references: [id], onDelete: Cascade)
+  scope String
+  sourceKey String
+  exportKey String?
+  // Snapshot identifiers intentionally survive connection deletion to fail closed.
+  connectionId String?
+  connectionOwnerId String?
+  providerRef String?
+  status String @default("queued")
+  nextRow Int @default(0)
+  accepted Int @default(0)
+  skipped Int @default(0)
+  duplicates Int @default(0)
+  earliest DateTime?
+  latest DateTime?
+  errors String[] @default([])
+  error String?
+  completedAt DateTime?
+  summarizedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("learning_histories")
+}
+
+// Retain hashes after raw archive withdrawal so reuploads do not relearn it.
+model LearningHistoryItem {
+  botId String
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+  sourceKey String
+  identity String
+  digest String
+  createdAt DateTime @default(now())
+
+  @@id([botId, sourceKey, identity, digest])
+  @@map("learning_history_items")
 }

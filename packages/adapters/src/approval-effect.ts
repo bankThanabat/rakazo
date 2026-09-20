@@ -1,4 +1,40 @@
-import type { AgentToolExecutionResult } from "@rakazo/adapter-kit";
+import type {
+  AgentToolExecutionResult,
+  ConnectorTool,
+  SemanticMemoryWriteReceipt,
+} from "@rakazo/adapter-kit";
+
+export const DOCUMENT_REVIEW_TOOLS = new Set([
+  "memory_undo",
+  "memory_restore",
+  "skill_create",
+  "skill_update",
+  "skill_delete",
+  "skill_undo",
+  "skill_restore",
+  "customer_learning_decide",
+]);
+
+export const documentApprovalReplayTool: ConnectorTool = {
+  name: "apply_approved_document",
+  description:
+    "Apply the next document change already approved by the user, using its exact server-stored request. Takes no arguments. Follow the listed approval order; never reconstruct document contents. This cannot authorize a new change.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+export function approvedDocumentReplayName(
+  queue: ApprovedEffectReplayQueue,
+  args: Record<string, unknown>,
+  exposedToolNames: ReadonlySet<string>,
+): string | undefined {
+  const name = queue.nextToolName();
+  return name &&
+    Object.keys(args).length === 0 &&
+    DOCUMENT_REVIEW_TOOLS.has(name) &&
+    exposedToolNames.has(name)
+    ? name
+    : undefined;
+}
 
 export type ApprovalPausedToolResult = AgentToolExecutionResult & { terminate: true };
 
@@ -366,7 +402,12 @@ export function resolveDuplicateEffectGate(
   return { action: "uncertain", toolName };
 }
 
-export type UncertainEffectResult = { error: string; uncertain: true };
+export type UncertainEffectResult = {
+  error: string;
+  uncertain: true;
+  receipts?: SemanticMemoryWriteReceipt[];
+  uncertainEntities?: string[];
+};
 
 export function uncertainEffectResult(toolName: string): UncertainEffectResult {
   return {
@@ -389,8 +430,9 @@ export async function settleUncertainEffect(
   },
   effectId: string,
   toolName: string,
+  evidence?: Pick<UncertainEffectResult, "receipts" | "uncertainEntities">,
 ): Promise<unknown> {
-  const result = uncertainEffectResult(toolName);
+  const result = { ...uncertainEffectResult(toolName), ...evidence };
   const settled = await store.externalEffect.updateMany({
     where: { id: effectId, status: "executing" },
     data: { status: "uncertain", result },

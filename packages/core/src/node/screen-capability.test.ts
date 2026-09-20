@@ -8,6 +8,10 @@ import {
 } from "./screen-capability.js";
 
 const scope = {
+  spaceId: "space",
+  userId: "user",
+  sessionId: "session",
+  membershipId: "membership",
   botId: "bot",
   computerId: "computer",
   botGeneration: 2,
@@ -124,6 +128,20 @@ describe("sealed screen capabilities", () => {
     ).toBeNull();
     expect(openScreenCapability(value, "fake-secret", 100 + SCREEN_PROXY_TTL_MS)).toBeNull();
   });
+  it.each(["spaceId", "userId", "sessionId", "membershipId"])(
+    "rejects capabilities without %s binding",
+    (field) => {
+      const legacy = { ...scope, [field]: undefined };
+      const url = sealScreenCapability(
+        "http://127.0.0.1:49152/embed.html",
+        "fake-secret",
+        "https://app.example",
+        legacy,
+        100,
+      );
+      expect(openScreenCapability(new URL(url).pathname, "fake-secret", 101)).toBeNull();
+    },
+  );
   it("rejects truncated capability tokens before decryption", () => {
     const value = path("http://127.0.0.1:49152/embed.html");
     const match = value.match(/^(\/novnc\/session\/view\/\d+\.)([A-Za-z0-9_-]+)(\/.*)$/);

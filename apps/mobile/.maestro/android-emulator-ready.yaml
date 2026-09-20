@@ -1,0 +1,15 @@
+appId: com.android.settings
+name: Refresh Android emulator system bar geometry
+---
+# A fresh API 36 image can size SystemUI before its display cutout is ready.
+# Rotation refreshes that size without changing app code or disabling the cutout.
+- launchApp
+- extendedWaitUntil:
+    visible: "Search Settings"
+    timeout: 30000
+- setOrientation: LANDSCAPE_LEFT
+- waitForAnimationToEnd
+- setOrientation: PORTRAIT
+- waitForAnimationToEnd
+- takeScreenshot: "system-bars-ready"
+- pressKey: Home

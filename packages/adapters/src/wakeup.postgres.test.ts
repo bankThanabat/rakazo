@@ -1,3 +1,4 @@
+import { fork } from "node:child_process";
 import type { BackgroundJobHandlers } from "@rakazo/adapter-kit";
 import { Pool } from "pg";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,6 +21,10 @@ afterEach(async () => {
 function handlers(overrides: Partial<BackgroundJobHandlers> = {}): BackgroundJobHandlers {
   return {
     "knowledge.process": vi.fn(async () => undefined),
+    "account.delete": vi.fn(async () => undefined),
+    "learning.import": vi.fn(async () => undefined),
+    "learning.refresh": vi.fn(async () => undefined),
+    "learning.process": vi.fn(async () => undefined),
     "run.continue": vi.fn(async () => undefined),
     "routine.wakeup": vi.fn(async () => undefined),
     "computer.update": vi.fn(async () => undefined),
@@ -48,6 +53,44 @@ async function waitFor(assertion: () => void, timeoutMs = 10_000): Promise<void>
 }
 
 describePostgres("Graphile background jobs (PostgreSQL contract)", () => {
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "lets application cleanup finish after %s drains an active job",
+    async (signal) => {
+      const child = fork(new URL("./fixtures/worker-signal.ts", import.meta.url), [], {
+        execArgv: ["--import", "tsx"],
+        silent: true,
+      });
+      const events: string[] = [];
+      let diagnostics = "";
+      child.stdout?.on("data", (data) => {
+        diagnostics += data;
+      });
+      child.stderr?.on("data", (data) => {
+        diagnostics += data;
+      });
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, signal) => resolve({ code, signal }));
+        },
+      );
+      child.on("message", (event) => {
+        events.push(String(event));
+        if (event === "entered") child.kill(signal);
+        if (event === "stopping") child.send("release");
+      });
+      const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+      try {
+        expect(await closed, diagnostics).toEqual({ code: 0, signal: null });
+        expect(events).toEqual(["entered", "stopping", "completed", "drained", "closed"]);
+      } finally {
+        clearTimeout(timeout);
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      }
+    },
+  );
+
   it("waits for an active handler during graceful shutdown", async () => {
     const publisher = new GraphileJobPublisher(testPool());
     const host = new GraphileJobWorkerHost(testPool(), { concurrency: 1, pollInterval: 25 });

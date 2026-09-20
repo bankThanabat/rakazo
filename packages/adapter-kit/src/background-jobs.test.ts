@@ -22,6 +22,10 @@ function handlers(): BackgroundJobHandlers {
     "customer.process": vi.fn(async () => undefined),
     "cloud_agent.poll": vi.fn(async () => undefined),
     "knowledge.process": vi.fn(async () => undefined),
+    "account.delete": vi.fn(async () => undefined),
+    "learning.import": vi.fn(async () => undefined),
+    "learning.refresh": vi.fn(async () => undefined),
+    "learning.process": vi.fn(async () => undefined),
   };
 }
 

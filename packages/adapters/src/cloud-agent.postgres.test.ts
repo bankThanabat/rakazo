@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterContext, BackgroundJob, JobPublisher } from "@rakazo/adapter-kit";
-import { clearThread, createDb, type PrismaClient } from "@rakazo/db";
+import { clearThread, createDb, type PrismaClient, requestAccountDeletion } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CloudAgentConnection } from "./cloud-agent-factory.js";
 import { pollCloudAgent } from "./cloud-agent-poll.js";
@@ -31,6 +31,7 @@ describePostgres("cloud agent lifecycle and recovery (PostgreSQL + Cursor emulat
   afterAll(async () => {
     if (!db) return;
     await prisma.cloudAgent.deleteMany({ where: { userId: { in: users } } });
+    await prisma.accountDeletion.deleteMany({ where: { userId: { in: users } } });
     await prisma.organization.deleteMany({ where: { id: { in: users } } });
     await prisma.user.deleteMany({ where: { id: { in: users } } });
     await db.prisma.$disconnect();
@@ -148,6 +149,119 @@ describePostgres("cloud agent lifecycle and recovery (PostgreSQL + Cursor emulat
     };
   }
 
+  async function eraseLegacyOwner(h: Awaited<ReturnType<typeof setup>>) {
+    // Simulate an account erased before cloud cleanup was implemented.
+    await prisma.organization.delete({ where: { id: h.id } });
+    await prisma.user.delete({ where: { id: h.id } });
+  }
+
+  it.each(["queued", "finished"])(
+    "erases safe orphaned %s cloud records without a configured provider",
+    async (state) => {
+      const h = await setup();
+      const id = await h.launch();
+      if (state === "finished") {
+        await h.poll(id);
+        await h.finish(id);
+      }
+      await eraseLegacyOwner(h);
+      const activeOwner = await setup();
+      const kept = await activeOwner.launch();
+      await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+      expect(await prisma.cloudAgent.findUnique({ where: { id } })).toBeNull();
+      expect(await activeOwner.state(kept)).toMatchObject({ status: "running" });
+    },
+  );
+
+  it.each([false, true])(
+    "cancels orphaned remote work before erasure, lost launch=%s",
+    async (lost) => {
+      const h = await setup();
+      const id = await h.launch();
+      h.wire.loseNextLaunchResponse = lost;
+      await h.poll(id);
+      await eraseLegacyOwner(h);
+      await prisma.cloudAgent.update({ where: { id }, data: { nextPollAt: new Date(0) } });
+      h.enqueue.mockClear();
+      await reconcileCloudAgents(h.deps);
+      expect(await prisma.cloudAgent.findUnique({ where: { id } })).not.toBeNull();
+      expect(h.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "cloud_agent.poll", payload: { agentId: id } }),
+      );
+      await h.poll(id);
+      if (lost) await h.poll(id);
+      expect((await h.state(id)).status).toBe("cancelled");
+      await reconcileCloudAgents(h.deps);
+      expect(await prisma.cloudAgent.findUnique({ where: { id } })).toBeNull();
+      expect(
+        h.wire.requests.filter((r) => r.method === "POST" && r.path === "/v1/agents"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("retains an orphaned cloud record while a poll lease is active", async () => {
+    const h = await setup();
+    const id = await h.launch();
+    await prisma.cloudAgent.update({
+      where: { id },
+      data: { leaseToken: "live-claim", leaseExpiresAt: new Date(Date.now() + 60_000) },
+    });
+    await eraseLegacyOwner(h);
+    await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+    expect(await prisma.cloudAgent.findUnique({ where: { id } })).not.toBeNull();
+    await prisma.cloudAgent.update({ where: { id }, data: { leaseExpiresAt: new Date(0) } });
+    await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+    expect(await prisma.cloudAgent.findUnique({ where: { id } })).toBeNull();
+  });
+
+  it("cleans orphaned cloud records in bounded batches", async () => {
+    const h = await setup();
+    await h.launch();
+    await prisma.cloudAgent.createMany({
+      data: Array.from({ length: 204 }, () => ({
+        id: randomUUID(),
+        operationKey: randomUUID(),
+        providerKey: h.connection.key,
+        userId: h.id,
+        spaceId: h.id,
+        botId: h.bot.id,
+        threadId: h.thread.id,
+        title: "Synthetic orphan",
+        launchRequest: {},
+      })),
+    });
+    await eraseLegacyOwner(h);
+    for (const remaining of [105, 5, 0]) {
+      await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+      expect(await prisma.cloudAgent.count({ where: { userId: h.id } })).toBe(remaining);
+    }
+  });
+
+  it("skips a locked orphaned record until its transaction releases it", async () => {
+    const h = await setup();
+    const id = await h.launch();
+    await eraseLegacyOwner(h);
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM cloud_agents WHERE id = ${id} FOR UPDATE`;
+      await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+      expect(await tx.cloudAgent.findUnique({ where: { id } })).not.toBeNull();
+    });
+    await reconcileCloudAgents({ ...h.deps, cloudAgent: null });
+    expect(await prisma.cloudAgent.findUnique({ where: { id } })).toBeNull();
+  });
+
+  it("retains uncertain orphaned launches without repeating remote creation", async () => {
+    const h = await setup();
+    const id = await h.launch();
+    await prisma.cloudAgent.update({ where: { id }, data: { launchDispatched: true } });
+    await eraseLegacyOwner(h);
+    await h.poll(id);
+    await reconcileCloudAgents(h.deps);
+    expect(await prisma.cloudAgent.findUnique({ where: { id } })).not.toBeNull();
+    expect(h.wire.requests.every((r) => r.method === "GET")).toBe(true);
+    expect(h.wire.ids.size).toBe(0);
+  });
+
   it("persists before remote I/O, launches once, and wakes exactly once per generation", async () => {
     const h = await setup();
     const id = await h.launch();
@@ -264,6 +378,45 @@ describePostgres("cloud agent lifecycle and recovery (PostgreSQL + Cursor emulat
     await h.poll(id);
     expect(await h.wakes()).toHaveLength(0);
     expect((await h.state(id)).nextPollAt).toBeNull();
+  });
+
+  it("rejects new launch and follow-up intents after account deletion is requested", async () => {
+    const h = await setup();
+    const id = await h.launch();
+    await h.poll(id);
+    await h.finish(id);
+    const requests = h.wire.requests.length;
+    await requestAccountDeletion(prisma, h.id);
+    await expect(
+      h.tool("launch", { prompt: "Late task" }, { operationId: randomUUID() }),
+    ).rejects.toThrow();
+    await expect(h.tool("reply", { id, prompt: "Late reply" })).rejects.toThrow();
+    expect(h.wire.requests).toHaveLength(requests);
+    expect(await h.state(id)).toMatchObject({ followup: null, nextPollAt: null });
+  });
+
+  it("recovers and cancels a launch accepted while deletion fences its worker", async () => {
+    const h = await setup();
+    const id = await h.launch();
+    const launch = h.connection.provider.launch.bind(h.connection.provider);
+    vi.spyOn(h.connection.provider, "launch").mockImplementationOnce(async (...args) => {
+      const result = await launch(...args);
+      await requestAccountDeletion(prisma, h.id);
+      return result;
+    });
+    await h.poll(id);
+    expect(await h.state(id)).toMatchObject({
+      remoteId: null,
+      launchDispatched: true,
+      cancelRequested: true,
+    });
+    await h.poll(id);
+    await h.poll(id);
+    expect(await h.state(id)).toMatchObject({ status: "cancelled", nextPollAt: null });
+    expect(
+      h.wire.requests.filter((r) => r.method === "POST" && r.path === "/v1/agents"),
+    ).toHaveLength(1);
+    expect(await h.wakes()).toHaveLength(0);
   });
 
   it("isolates users, spaces, and credential bindings before any provider request", async () => {

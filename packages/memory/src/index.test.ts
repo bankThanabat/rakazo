@@ -23,7 +23,14 @@ describe("memory store contract shape", () => {
       .mockResolvedValue([
         { id: "memory-1", path: "facts.md", content: "A fact", revision: 3, updatedAt },
       ]);
-    const store = new MarkdownMemoryStore({ memoryDocument: { findMany } } as never);
+    const client = {
+      memoryDocument: { findMany },
+      $queryRaw: vi.fn(async () => [{ id: "owner" }]),
+      accountDeletion: { count: vi.fn(async () => 0) },
+    };
+    const store = new MarkdownMemoryStore({
+      $transaction: (work: (tx: typeof client) => unknown) => work(client),
+    } as never);
 
     await expect(store.read({ scope: "bot", botId: "bot-1" }, context)).resolves.toEqual({
       documents: [

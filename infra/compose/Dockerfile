@@ -1,4 +1,6 @@
 FROM node:22-bookworm@sha256:0557ac14e0d45d02ed563067b82856ca5e7aa3437fa28d98d4350ea9c3d9494a
+# Build and runtime use the same cache, so USER node can start without downloading pnpm.
+ENV COREPACK_HOME=/opt/corepack
 RUN corepack enable
 WORKDIR /app
 # Normalize modes: a restrictive host umask (e.g. 077 on hardened hosts) would otherwise

@@ -16,6 +16,7 @@ export const ConnectionActionSchema = z.object({
   description: z.string(),
   internal: z.boolean(),
   defaultInternal: z.boolean(),
+  readOnly: z.boolean().default(false),
   overridden: z.boolean(),
 });
 export type ConnectionAction = z.infer<typeof ConnectionActionSchema>;

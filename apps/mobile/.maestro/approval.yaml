@@ -1,0 +1,77 @@
+appId: com.rakazo.app
+name: Native full document approval review
+---
+- launchApp:
+    clearState: true
+    permissions:
+      notifications: deny
+- runFlow: sign-in.yaml
+- extendedWaitUntil:
+    visible: "Document reviewer.*"
+    timeout: 30000
+- tapOn: "Document reviewer.*"
+- extendedWaitUntil:
+    visible: "Allow once"
+    timeout: 30000
+- assertVisible: "Deny"
+# The conversation opens at its latest message's bottom. Scroll its gutter,
+# outside the nested document review, to inspect the approval context first.
+- swipe:
+    start: "90%, 25%"
+    end: "90%, 75%"
+- assertVisible: "Review memory change"
+- assertVisible: "Private to this bot"
+- assertVisible: "Contains guidance for staff only."
+- takeScreenshot: "approval-context"
+- longPressOn: "Review memory change"
+- assertVisible: "Reply"
+- takeScreenshot: "approval-message-actions"
+- runFlow:
+    when:
+      platform: iOS
+    commands:
+      - tapOn: "Cancel"
+- runFlow:
+    when:
+      platform: Android
+    commands:
+      - back
+- swipe:
+    start: "90%, 75%"
+    end: "90%, 25%"
+- assertVisible: "(?s)Start of full document.*"
+- takeScreenshot: "approval-after-start"
+- tapOn: "End"
+- assertVisible: "(?s).*End of full document.*"
+- takeScreenshot: "approval-after-end"
+# Android can place the version tabs just above the conversation viewport.
+# Move the outer gutter a little without scrolling the document itself.
+- runFlow:
+    when:
+      notVisible: "Before"
+    commands:
+      - swipe:
+          start: "90%, 25%"
+          end: "90%, 35%"
+- tapOn: "Before"
+- assertVisible: "(?s)Prior of full document.*"
+- takeScreenshot: "approval-before-start"
+- tapOn: "End"
+- assertVisible: "(?s).*End of full document.*"
+- takeScreenshot: "approval-before-end"
+- tapOn: "Beginning"
+- assertVisible: "(?s)Prior of full document.*"
+- tapOn: "Request details"
+- assertVisible: '(?s).*"taskId": "synthetic-learning".*'
+- tapOn: "End"
+- assertVisible: "(?s).*Synthetic approved examples.*"
+- takeScreenshot: "approval-request-end"
+- tapOn: "Beginning"
+- assertVisible: '(?s).*"taskId": "synthetic-learning".*'
+- takeScreenshot: "approval-request-start"
+- tapOn: "Deny"
+- extendedWaitUntil:
+    visible: "Denied"
+    timeout: 10000
+- assertNotVisible: "Allow once"
+- takeScreenshot: "approval-denied"

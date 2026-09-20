@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import {
   PipedreamConnector,
   ThirdPartyConnectorEmulator,
 } from "@rakazo/adapters";
+import { createCustomerInbox, purchaseRecoveryMs } from "@rakazo/db";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { createApp } from "../../../apps/api/src/app.ts";
 import { sessionCookieHeader } from "./index.js";
@@ -600,6 +602,79 @@ describeWithDatabase("Composio catalog reconciliation", () => {
     );
 
     await rpc(app, cookie, "capabilities/remove", { id: install.id });
+  });
+
+  it("keeps a purchase connection authorized until its in-flight recovery window ends", async () => {
+    const cookie = await signup(app, `purchase-revoke-${stamp}@rakazo.test`, "Owner");
+    const current = await rpc<Actor>(app, cookie, "me");
+    const owner = { userId: current.userId, spaceId: current.spaceId };
+    const started = await rpc<{ connectionId: string }>(app, cookie, "connections/begin", {
+      connectorId: "composio",
+      provider: "GMAIL",
+      displayName: "Synthetic store transport",
+    });
+    const bot = await handles.prisma.bot.create({
+      data: { ...owner, name: "Staff", color: "blue" },
+    });
+    const channel = await handles.prisma.customerChannel.create({
+      data: {
+        ...owner,
+        botId: bot.id,
+        provider: "web",
+        accountId: randomUUID(),
+        name: "Synthetic shop",
+        ciphertext: "synthetic",
+      },
+    });
+    const conversationId = await createCustomerInbox(handles.prisma).receive(channel.id, {
+      externalId: "purchase",
+      externalThreadId: "purchase",
+      customerId: "shopper",
+      name: "Shopper",
+      body: "A shirt",
+    });
+    const purchase = await handles.prisma.customerPurchase.create({
+      data: {
+        id: randomUUID(),
+        conversationId,
+        customerId: "shopper",
+        connectionId: started.connectionId,
+        providerRef: "synthetic",
+        requestHash: "synthetic",
+        paymentMethods: ["bacs"],
+        status: "submitting",
+        actionId: randomUUID(),
+        actionStartedAt: new Date(),
+        ciphertext: "synthetic-encrypted-cart",
+      },
+    });
+    const revoke = vi.spyOn(composio, "revoke");
+    await expect(
+      rpc(app, cookie, "connections/revoke", { connectionId: started.connectionId }),
+    ).rejects.toThrow("409");
+    expect(revoke).not.toHaveBeenCalled();
+    expect(await statuses([started.connectionId])).toEqual([
+      { id: started.connectionId, status: "connected" },
+    ]);
+    await handles.prisma.customerPurchase.update({
+      where: { id: purchase.id },
+      data: { status: "uncertain" },
+    });
+    await expect(
+      rpc(app, cookie, "connections/revoke", { connectionId: started.connectionId }),
+    ).rejects.toThrow("409");
+    await handles.prisma.customerPurchase.update({
+      where: { id: purchase.id },
+      data: { actionStartedAt: new Date(Date.now() - purchaseRecoveryMs - 1) },
+    });
+    await rpc(app, cookie, "connections/revoke", { connectionId: started.connectionId });
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(await statuses([started.connectionId])).toEqual([
+      { id: started.connectionId, status: "revoked" },
+    ]);
+    expect(
+      await handles.prisma.customerPurchase.findUnique({ where: { id: purchase.id } }),
+    ).toMatchObject({ status: "uncertain", ciphertext: "synthetic-encrypted-cart" });
   });
 
   async function createConnection(owner: Actor, provider: string) {

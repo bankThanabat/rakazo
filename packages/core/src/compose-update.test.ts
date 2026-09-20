@@ -193,11 +193,15 @@ describe("strategy and mode selection", () => {
       ...COMPOSE_MANUAL_UPGRADE_COMMANDS,
       "# Local tag (rebuild from checkout)",
       "git pull",
-      "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never --build api worker web",
+      "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml build api worker web",
+      "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web",
+      "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never api worker web",
     ]);
     expect(manualUpgradeCommands("compose", { imageTag: "local" })).toEqual([
       "git pull",
-      "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never --build api worker web",
+      "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml build api worker web",
+      "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web",
+      "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never api worker web",
     ]);
     expect(manualUpgradeCommands("compose", { imageTag: "sha-abc" })).toEqual([
       ...COMPOSE_MANUAL_UPGRADE_COMMANDS,
@@ -469,7 +473,7 @@ describe("dirty-tree argv and CRLF filtering", () => {
 describe("update plans", () => {
   it("pulls then recreates on the official path, with no migration step", () => {
     const steps = composeUpdatePlan({ strategy: "pull", target });
-    expect(steps.map((step) => step.id)).toEqual(["pull", "recreate"]);
+    expect(steps.map((step) => step.id)).toEqual(["pull", "stop", "recreate"]);
     expect(steps.some((step) => step.id === "migrate")).toBe(false);
     for (const step of steps) {
       expect(step.args.slice(0, 3)).toEqual(["compose", "-p", DEFAULT_COMPOSE_PROJECT_NAME]);
@@ -489,12 +493,15 @@ describe("update plans", () => {
       "fetch",
       "checkout",
       "merge",
+      "build",
+      "stop",
       "recreate",
     ]);
     const merge = steps.find((step) => step.id === "merge");
     expect(merge?.args).toEqual(["merge", "--ff-only", "origin/trunk"]);
     expect(steps.find((step) => step.id === "fetch")?.args).not.toContain("--prune");
-    expect(steps.at(-1)?.args).toContain("--build");
+    expect(steps.find((step) => step.id === "build")?.args).toContain("build");
+    expect(steps.at(-1)?.args).toContain("--no-build");
   });
 
   it("leaves the remote alone when the checkout already points at the chosen repository", () => {
@@ -504,7 +511,14 @@ describe("update plans", () => {
       branch: "main",
       repointRemote: false,
     });
-    expect(steps.map((step) => step.id)).toEqual(["fetch", "checkout", "merge", "recreate"]);
+    expect(steps.map((step) => step.id)).toEqual([
+      "fetch",
+      "checkout",
+      "merge",
+      "build",
+      "stop",
+      "recreate",
+    ]);
   });
 
   it("keeps the repository URL in argv rather than in any compose input", () => {

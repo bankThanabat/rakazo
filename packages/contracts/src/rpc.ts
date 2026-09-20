@@ -99,9 +99,74 @@ import {
   KnowledgeStateSchema,
   KnowledgeUploadInput,
 } from "./knowledge.js";
+import {
+  CustomerSteerInput,
+  CustomerSteerResult,
+  LearningArchiveInput,
+  LearningArchiveResultSchema,
+  LearningEvidenceInput,
+  LearningEvidenceSchema,
+  LearningImportInput,
+  LearningImportPreviewSchema,
+  LearningRestoreInput,
+  LearningSaveInput,
+  LearningStateSchema,
+  LearningTaskDecisionInput,
+  LearningTaskDetailSchema,
+  LearningTaskEvidenceInput,
+  LearningTaskListInput,
+  LearningTaskPageSchema,
+  LearningTaskSchema,
+  LearningUndoInput,
+  LearningUndoPreviewSchema,
+  LearningWithdrawInput,
+} from "./learning.js";
+import {
+  MemoryHistoryInput,
+  MemoryHistorySchema,
+  MemoryReadInput,
+  MemoryReadSchema,
+  MemoryRestoreInput,
+  MemoryUndoInput,
+  MemoryUndoPreviewSchema,
+  MemoryUpdateInput,
+} from "./memory-audit.js";
+import {
+  PrivateHistoryAppliedSchema,
+  PrivateHistoryApplyInput,
+  PrivateHistoryInput,
+  PrivateHistoryPreviewInput,
+  PrivateHistoryPreviewSchema,
+  PrivateHistorySchema,
+  PrivateHistoryVersionInput,
+  PrivateHistoryVersionSchema,
+} from "./private-history.js";
 import { MessageReactionSchema } from "./reactions.js";
 import { RunsListOutputSchema } from "./runs.js";
 import { SearchQueryOutputSchema } from "./search.js";
+import {
+  SemanticMemoryDetailInput,
+  SemanticMemoryDetailSchema,
+  SemanticMemoryHistoryInput,
+  SemanticMemoryHistorySchema,
+  SemanticMemoryReversalApplyInput,
+  SemanticMemoryReversalInput,
+  SemanticMemoryReversalPreviewSchema,
+  SemanticMemoryReversalResultSchema,
+} from "./semantic-memory-audit.js";
+import {
+  SkillHistoryInput,
+  SkillHistorySchema,
+  SkillListInput,
+  SkillListSchema,
+  SkillPreviewInput,
+  SkillReadVersionInput,
+  SkillReadVersionSchema,
+  SkillRemoveInput,
+  SkillRestoreInput,
+  SkillUndoInput,
+  SkillUndoPreviewSchema,
+} from "./skill-audit.js";
 
 const botId = z.object({ botId: Id });
 const groupId = z.object({ groupId: Id });
@@ -389,13 +454,28 @@ export const appContract = {
     screenUrl: oc.input(botId).output(z.object({ url: z.string().nullable() })),
     heartbeat: oc.input(botId).output(z.object({ ok: z.literal(true) })),
   },
+  semanticMemory: {
+    preview: oc.input(SemanticMemoryReversalInput).output(SemanticMemoryReversalPreviewSchema),
+    apply: oc.input(SemanticMemoryReversalApplyInput).output(SemanticMemoryReversalResultSchema),
+    history: oc.input(SemanticMemoryHistoryInput).output(SemanticMemoryHistorySchema),
+    detail: oc.input(SemanticMemoryDetailInput).output(SemanticMemoryDetailSchema),
+  },
+  privateHistory: {
+    history: oc.input(PrivateHistoryInput).output(PrivateHistorySchema),
+    version: oc.input(PrivateHistoryVersionInput).output(PrivateHistoryVersionSchema),
+    preview: oc.input(PrivateHistoryPreviewInput).output(PrivateHistoryPreviewSchema),
+    apply: oc.input(PrivateHistoryApplyInput).output(PrivateHistoryAppliedSchema),
+  },
   memory: {
     list: oc
       .input(z.object({ botId: Id.optional(), scope: z.enum(["bot", "user"]).optional() }))
       .output(z.array(MemoryDocumentSchema)),
-    update: oc
-      .input(z.object({ documentId: Id, content: z.string() }))
-      .output(MemoryDocumentSchema),
+    update: oc.input(MemoryUpdateInput).output(MemoryDocumentSchema),
+    read: oc.input(MemoryReadInput).output(MemoryReadSchema),
+    history: oc.input(MemoryHistoryInput).output(MemoryHistorySchema),
+    previewUndo: oc.input(MemoryRestoreInput).output(MemoryUndoPreviewSchema),
+    undo: oc.input(MemoryUndoInput).output(MemoryDocumentSchema),
+    restore: oc.input(MemoryRestoreInput).output(MemoryDocumentSchema),
     exportMarkdown: oc.input(z.object({ botId: Id.optional() })).output(z.string()),
     providerConfig: oc.output(SpaceMemoryConfigSchema.nullable()),
     connectProvider: oc
@@ -537,7 +617,13 @@ export const appContract = {
       .output(AgentSkillSchema),
     create: oc.input(CreateAgentSkillInput).output(AgentSkillSchema),
     update: oc.input(UpdateAgentSkillInput).output(AgentSkillSchema),
-    remove: oc.input(z.object({ skillId: Id })).output(z.object({ ok: z.literal(true) })),
+    remove: oc.input(SkillRemoveInput).output(z.object({ ok: z.literal(true) })),
+    listHistory: oc.input(SkillListInput).output(SkillListSchema),
+    history: oc.input(SkillHistoryInput).output(SkillHistorySchema),
+    readVersion: oc.input(SkillReadVersionInput).output(SkillReadVersionSchema),
+    previewUndo: oc.input(SkillPreviewInput).output(SkillUndoPreviewSchema),
+    undo: oc.input(SkillUndoInput).output(AgentSkillSchema),
+    restore: oc.input(SkillRestoreInput).output(AgentSkillSchema),
   },
   capabilities: {
     list: oc.output(z.array(CapabilityInstallSchema)),
@@ -847,6 +933,7 @@ export const appContract = {
       .output(z.object({ ready: z.boolean(), utterances: z.array(z.string()) })),
   },
   customers: {
+    steer: oc.input(CustomerSteerInput).output(CustomerSteerResult),
     investigate: oc
       .input(z.object({ id: Id, clientNonce: z.string().min(1).max(200) }))
       .output(z.object({ botId: Id, name: z.string() })),
@@ -857,6 +944,34 @@ export const appContract = {
     snapshot: oc
       .input(z.object({ id: Id, before: z.number().int().positive().optional() }))
       .output(CustomerSnapshotSchema),
+  },
+  learning: {
+    configure: oc
+      .input(z.object({ botId: Id, enabled: z.boolean().optional() }))
+      .output(z.object({ enabled: z.boolean() })),
+    taskList: oc.input(LearningTaskListInput).output(LearningTaskPageSchema),
+    task: oc.input(LearningTaskEvidenceInput).output(LearningTaskDetailSchema),
+    tasks: oc.input(z.object({ botId: Id })).output(z.array(LearningTaskSchema)),
+    decideTask: oc.input(LearningTaskDecisionInput).output(
+      z.object({
+        status: z.enum(["applied", "queued", "rejected"]),
+        taskId: Id.optional(),
+        id: Id.optional(),
+        revision: z.number().optional(),
+      }),
+    ),
+    archive: oc.input(LearningArchiveInput).output(LearningArchiveResultSchema),
+    evidence: oc.input(LearningEvidenceInput).output(LearningEvidenceSchema),
+    taskEvidence: oc.input(LearningTaskEvidenceInput).output(LearningEvidenceSchema),
+    withdrawSource: oc.input(LearningWithdrawInput).output(z.object({ removed: z.literal(true) })),
+    state: oc.input(z.object({ botId: Id })).output(LearningStateSchema),
+    save: oc.input(LearningSaveInput).output(z.object({ id: Id, revision: z.number().int() })),
+    restore: oc
+      .input(LearningRestoreInput)
+      .output(z.object({ id: Id, revision: z.number().int() })),
+    previewImport: oc.input(LearningImportInput).output(LearningImportPreviewSchema),
+    previewUndo: oc.input(LearningRestoreInput).output(LearningUndoPreviewSchema),
+    undo: oc.input(LearningUndoInput).output(z.object({ id: Id, revision: z.number().int() })),
   },
   externalConversations: {
     updatePolicy: oc

@@ -457,7 +457,7 @@ export function createKnowledge(deps: {
     await Promise.all(rows.map((r) => enqueue(r.id)));
   }
   /** Space deletion cascades these rows, so files and index entries go first. Repeatable. */
-  async function purge(spaceId: string) {
+  async function purge(spaceId: string, signal?: AbortSignal) {
     const library = await prisma.knowledgeLibrary.findUnique({ where: { spaceId } });
     if (!library) return;
     const revisions = await prisma.knowledgeRevision.findMany({
@@ -473,7 +473,13 @@ export function createKnowledge(deps: {
     });
     const service = provider(library);
     for (const revision of revisions) {
-      await service.remove(revision.providerDocumentKey, AbortSignal.timeout(60_000));
+      signal?.throwIfAborted();
+      await service.remove(
+        revision.providerDocumentKey,
+        signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(60_000)])
+          : AbortSignal.timeout(60_000),
+      );
       await deps.artifacts.remove(revision.storageKey, storageContext(library));
     }
   }

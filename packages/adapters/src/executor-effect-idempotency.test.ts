@@ -130,6 +130,11 @@ function fixture(runId = "run-1") {
     taughtSkill: { findMany: vi.fn(async () => []) },
     agentSecret: { findMany: vi.fn(async () => []) },
     agentSkill: { findMany: vi.fn(async () => []) },
+    $transaction: async function <T>(work: (tx: unknown) => Promise<T>): Promise<T> {
+      return work(this);
+    },
+    $queryRaw: vi.fn(async () => [{ id: "owner" }]),
+    accountDeletion: { count: vi.fn(async () => 0) },
     scratchpadItem: {
       findMany: vi.fn(async () => scratchpadRows),
       create: vi.fn(
@@ -220,7 +225,7 @@ describe("mutating tool effect idempotency keys", () => {
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "team preference" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "team preference" },
         executionId: "call_0",
       },
       {
@@ -237,6 +242,7 @@ describe("mutating tool effect idempotency keys", () => {
     expect(f.effects.map((effect) => effect.idempotencyKey)).toEqual([
       toolEffectIdempotencyKey("run-a", "remember", "call_0", {
         path: "MEMORY.md",
+        expectedRevision: 0,
         content: "team preference",
       }),
       toolEffectIdempotencyKey("run-a", "scratchpad_add", "call_0", {
@@ -257,7 +263,7 @@ describe("mutating tool effect idempotency keys", () => {
     first.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "first bot note" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "first bot note" },
         executionId: "call_0",
       },
     ]);
@@ -269,7 +275,7 @@ describe("mutating tool effect idempotency keys", () => {
     second.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "second bot note" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "second bot note" },
         executionId: "call_0",
       },
     ]);
@@ -279,10 +285,12 @@ describe("mutating tool effect idempotency keys", () => {
     expect(second.effects.map((effect) => effect.idempotencyKey)).toEqual([
       toolEffectIdempotencyKey("run-1", "remember", "call_0", {
         path: "MEMORY.md",
+        expectedRevision: 0,
         content: "first bot note",
       }),
       toolEffectIdempotencyKey("run-2", "remember", "call_0", {
         path: "MEMORY.md",
+        expectedRevision: 0,
         content: "second bot note",
       }),
     ]);
@@ -294,7 +302,7 @@ describe("mutating tool effect idempotency keys", () => {
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "durable fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "durable fact" },
         executionId: "call_0",
       },
     ]);
@@ -305,7 +313,7 @@ describe("mutating tool effect idempotency keys", () => {
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "durable fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "durable fact" },
         executionId: "call_0",
       },
     ]);
@@ -316,6 +324,7 @@ describe("mutating tool effect idempotency keys", () => {
     expect(f.effects[0]?.idempotencyKey).toBe(
       toolEffectIdempotencyKey("run-retry", "remember", "call_0", {
         path: "MEMORY.md",
+        expectedRevision: 0,
         content: "durable fact",
       }),
     );
@@ -327,12 +336,12 @@ describe("mutating tool effect idempotency keys", () => {
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "first fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "first fact" },
         executionId: "call_0",
       },
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "second fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "second fact" },
         executionId: "call_0",
       },
     ]);
@@ -353,13 +362,13 @@ describe("mutating tool effect idempotency keys", () => {
       kind: "remember",
       idempotencyKey: "call_0",
       status: "completed",
-      request: { path: "MEMORY.md", content: "legacy fact" },
+      request: { path: "MEMORY.md", expectedRevision: 0, content: "legacy fact" },
       result: { ok: true, legacy: true },
     });
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "legacy fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "legacy fact" },
         executionId: "call_0",
       },
     ]);
@@ -379,12 +388,12 @@ describe("mutating tool effect idempotency keys", () => {
       kind: "remember",
       idempotencyKey: "call_0",
       status: "intended",
-      request: { path: "MEMORY.md", content: "old fact" },
+      request: { path: "MEMORY.md", expectedRevision: 0, content: "old fact" },
     });
     f.setCalls([
       {
         name: "remember",
-        args: { path: "MEMORY.md", content: "new fact" },
+        args: { path: "MEMORY.md", expectedRevision: 0, content: "new fact" },
         executionId: "call_0",
       },
     ]);
@@ -396,9 +405,23 @@ describe("mutating tool effect idempotency keys", () => {
     expect(f.effects[1]?.idempotencyKey).toBe(
       toolEffectIdempotencyKey("run-legacy-mismatch", "remember", "call_0", {
         path: "MEMORY.md",
+        expectedRevision: 0,
         content: "new fact",
       }),
     );
     expect(f.results[0]).toEqual({ ok: true });
+  });
+  it("rejects a remember call without a reviewed revision before writing", async () => {
+    const f = fixture("run-missing-revision");
+    f.setCalls([
+      {
+        name: "remember",
+        args: { path: "MEMORY.md", content: "Stale draft" },
+        executionId: "call-missing",
+      },
+    ]);
+    await f.run();
+    expect(f.memoryCommit).not.toHaveBeenCalled();
+    expect(f.results).toEqual([{ error: expect.stringContaining("expectedRevision") }]);
   });
 });

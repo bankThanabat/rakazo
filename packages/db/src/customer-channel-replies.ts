@@ -33,7 +33,13 @@ export async function setCustomerChannelReplies(
     // Only future incoming messages trigger replies, never the accumulated backlog.
     await tx.customerConversation.updateMany({
       where: { channelId: channel.id, assigneeId: null, handoffReason: null },
-      data: { owner: "bot", needsHuman: false, generation: { increment: 1 } },
+      data: {
+        owner: "bot",
+        needsHuman: false,
+        nextAttentionAlertAt: null,
+        ownerAttentionAlertAt: null,
+        generation: { increment: 1 },
+      },
     });
   }
 }

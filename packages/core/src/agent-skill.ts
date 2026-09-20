@@ -123,14 +123,22 @@ export function skillCatalogLine(entry: Pick<SkillCatalogEntry, "name" | "descri
 
 export function formatSkillsCatalogInstruction(entries: SkillCatalogEntry[]): string | undefined {
   if (entries.length === 0) return undefined;
-  const lines = entries.slice(0, 50).map(skillCatalogLine).join("\n");
+  const lines = entries
+    .slice(0, 40)
+    .map((entry) =>
+      skillCatalogLine({
+        name: entry.name.slice(0, 80),
+        description: entry.description.slice(0, 160),
+      }),
+    )
+    .join("\n");
   return [
     "Available Claude Agent Skills (SKILL.md recipes shared across assistants; generic how-tos, not account-specific routines). The Pi runtime already understands this format; we persist and inject them:",
     lines,
-    "When a skill matches the user's request, call skill_read for that name and follow it immediately. Prefer matching skills over improvising multi-step recipes.",
-    "Users can force a skill with /Name in the composer. Routines may mention a skill as @Name — that loads the skill at fire time.",
+    "When a skill matches the user's request, call skill_read for that name and read all chunks before following it. Prefer matching skills over improvising multi-step recipes.",
+    "Users can force a skill with /Name in the composer. Routines may mention a skill as @Name — that loads the current skill when execution starts.",
     "Create a skill with skill_create when a multi-step task is worth repeating (or when asked). After creating one, mention /Name so the user can open it.",
-    "Only skill_update / skill_delete user-created skills (not builtin or plugin).",
+    "Skill changes require explicit owner approval. Only user-created skills can be edited or removed.",
   ].join("\n");
 }
 
@@ -236,7 +244,15 @@ function restAlreadyIncludesSkillContent(rest: string, content: string): boolean
   );
 }
 
-/** Expand forced `/Name` or routine `@Name` mentions into full skill bodies for the task prompt. */
+export const MAX_INJECTED_SKILL_CHARACTERS = 24000;
+function requireSkillBudget(content: string) {
+  if (content.length > MAX_INJECTED_SKILL_CHARACTERS)
+    throw new Error(
+      "Selected skills exceed the execution limit. Shorten the recipes or run them separately.",
+    );
+}
+
+/** Expand current skill instructions in full, or reject before the model runs. */
 export function expandSkillReferencesInPrompt(
   prompt: string,
   skills: readonly SkillRecord[],
@@ -245,7 +261,8 @@ export function expandSkillReferencesInPrompt(
   if (forced) {
     const skill = findSkillByName(skills, forced.name);
     if (skill) {
-      // Routines expand at fire time into `Use skill: …`; run time expands again — stay idempotent.
+      requireSkillBudget(formatForcedSkillPrompt(skill.name, skill.content));
+      // Preserve already-expanded current instructions without duplicating them.
       if (restAlreadyIncludesSkillContent(forced.rest, skill.content)) {
         return prompt.trimStart();
       }
@@ -265,6 +282,7 @@ export function expandSkillReferencesInPrompt(
     const skill = findSkillByName(skills, mention);
     if (!skill) continue;
     blocks.push(formatForcedSkillPrompt(skill.name, skill.content));
+    requireSkillBudget(blocks.join("\n\n"));
     // Strip the @mention token so the agent is not confused by a dangling pointer.
     remaining = remaining.replace(
       new RegExp(`(^|[\\s(,])@${escapeRegExp(mention)}(?=[\\s,.)]|$)`, "gi"),
@@ -522,4 +540,34 @@ function formatYamlLine(key: string, value: unknown): string {
     return `${key}:\n${nested}`;
   }
   return `${key}: ${JSON.stringify(String(value))}`;
+}
+
+/** Normalize full replacements and partial edits identically for the API and staff tools. */
+export function resolveAgentSkillContent(
+  input: {
+    content?: string;
+    name?: string;
+    description?: string;
+    body?: string;
+  },
+  prior?: { content: string },
+) {
+  let parsed: ParsedSkillMd | { error: string };
+  if (input.content?.trim()) parsed = parseSkillMd(input.content);
+  else {
+    const previous = prior ? parseSkillMd(prior.content) : undefined;
+    if (previous && "error" in previous) throw new Error(previous.error);
+    parsed = parseSkillMd(
+      buildSkillMd({
+        name: input.name ?? previous?.name ?? "",
+        description: input.description ?? previous?.description ?? "",
+        body: input.body ?? previous?.body ?? "",
+        frontmatter: previous?.frontmatter,
+      }),
+    );
+  }
+  if ("error" in parsed) throw new Error(parsed.error);
+  const content = buildSkillMd(parsed);
+  if (content.length > 100000) throw new Error("Skill content must be at most 100000 characters.");
+  return { name: parsed.name, description: parsed.description, content };
 }

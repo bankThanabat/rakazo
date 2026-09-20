@@ -20,6 +20,8 @@ function savedSkill(name: string, source = "user") {
     description: "Saved review recipe",
     content: buildSkillMd({ name, description: "Saved review recipe", body: "Saved steps" }),
     source,
+    revision: 1,
+    removedAt: null as Date | null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };
@@ -36,11 +38,11 @@ function setup(rows: ReturnType<typeof savedSkill>[] = []) {
     findFirst: vi.fn(async ({ where }: { where: Where }) =>
       rows.find((row) => matches(row, where)),
     ),
-    updateMany: vi.fn(async ({ where, data }: { where: Where; data: object }) => {
+    update: vi.fn(async ({ where, data }: { where: Where; data: object }) => {
       const row = rows.find((row) => matches(row, where));
       if (!row) return { count: 0 };
       Object.assign(row, data);
-      return { count: 1 };
+      return row;
     }),
     deleteMany: vi.fn(async ({ where }: { where: Where }) => {
       const index = rows.findIndex((row) => matches(row, where));
@@ -51,7 +53,16 @@ function setup(rows: ReturnType<typeof savedSkill>[] = []) {
   };
   return {
     agentSkill,
-    service: createAgentSkillsService({ agentSkill } as unknown as PrismaClient),
+    service: createAgentSkillsService({
+      agentSkill: { ...agentSkill, count: async () => 0 },
+      $transaction: async function <T>(work: (tx: unknown) => Promise<T>): Promise<T> {
+        return work(this);
+      },
+      $queryRaw: async () => [{ id: "owner" }],
+      accountDeletion: { count: async () => 0 },
+      agentSkillRevision: { createMany: async () => ({ count: 1 }), create: async () => ({}) },
+      learningTask: { findMany: async () => [] },
+    } as unknown as PrismaClient),
   };
 }
 
@@ -72,9 +83,15 @@ describe("built-in skill precedence in the API", () => {
       });
       await expect(service.get(actor, { skillId: "saved-1" })).resolves.toMatchObject({ name });
       await expect(
-        service.update(actor, { skillId: "saved-1", description: "Updated recipe" }),
+        service.update(actor, {
+          skillId: "saved-1",
+          expectedRevision: 1,
+          description: "Updated recipe",
+        }),
       ).resolves.toMatchObject({ name: name.trim(), description: "Updated recipe" });
-      await expect(service.remove(actor, "saved-1")).resolves.toEqual({ ok: true });
+      await expect(
+        service.remove(actor, { skillId: "saved-1", expectedRevision: 2 }),
+      ).resolves.toEqual({ ok: true });
       await expect(service.get(actor, { name: "Interrogate" })).resolves.toMatchObject({
         id: "builtin:Interrogate",
         readOnly: true,
@@ -89,11 +106,13 @@ describe("built-in skill precedence in the API", () => {
       source: "plugin",
       readOnly: true,
     });
-    await expect(service.update(actor, { skillId: "saved-1", body: "Changed" })).rejects.toThrow(
-      "read-only",
-    );
-    await expect(service.remove(actor, "saved-1")).rejects.toThrow("read-only");
-    expect(agentSkill.updateMany).not.toHaveBeenCalled();
+    await expect(
+      service.update(actor, { skillId: "saved-1", expectedRevision: 1, body: "Changed" }),
+    ).rejects.toThrow("read-only");
+    await expect(
+      service.remove(actor, { skillId: "saved-1", expectedRevision: 1 }),
+    ).rejects.toThrow("read-only");
+    expect(agentSkill.update).not.toHaveBeenCalled();
     expect(agentSkill.deleteMany).not.toHaveBeenCalled();
   });
 

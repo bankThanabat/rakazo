@@ -3,12 +3,22 @@ import type {
   AdapterContext,
   DurableMemoryScope,
   SemanticMemoryForgetRequest,
+  SemanticMemoryForgetResponse,
   SemanticMemoryProvider,
   SemanticMemoryRecallRequest,
   SemanticMemoryResponse,
+  SemanticMemoryRestoreRequest,
   SemanticMemoryResult,
   SemanticMemorySaveRequest,
+  SemanticMemorySaveResponse,
 } from "@rakazo/adapter-kit";
+import {
+  combineMemorySaves,
+  validateMemoryPurgeScope,
+  validateMemoryRestoreScope,
+  validateMemorySaveScope,
+} from "./memory-save-result.js";
+import type { SerenityConnectionConfig, SerenityNetworkDependencies } from "./serenity-client.js";
 import {
   classifySerenityEndpointTrust,
   forgetSerenity,
@@ -17,8 +27,6 @@ import {
   probeSerenity,
   recallSerenity,
   rememberSerenity,
-  type SerenityConnectionConfig,
-  type SerenityNetworkDependencies,
   serenityEndpointRequiresDeploymentOwner,
 } from "./serenity-client.js";
 
@@ -245,16 +253,28 @@ export class SerenityMemoryProvider implements SemanticMemoryProvider {
   async save(
     request: SemanticMemorySaveRequest,
     context: AdapterContext,
-  ): Promise<SemanticMemoryResponse> {
+  ): Promise<SemanticMemorySaveResponse> {
+    const invalid = validateMemorySaveScope(request, context);
+    if (invalid) return invalid;
     if (request.source.kind === "history") {
       // Conversation summaries stay out of the user-owned Serenity brain.
-      return { ok: true, value: undefined };
+      return { ok: true, value: [] };
+    }
+    if (!request.content.trim() || request.content.length > 10000 || context.signal.aborted) {
+      return {
+        ok: false,
+        error: "Memory content is invalid or the save was cancelled.",
+        receipts: [],
+        uncertainEntities: [],
+      };
     }
     if (!this.connection.allowWrites) {
       return {
         ok: false,
         error:
           "Serenity writes are disabled for this Space. Enable writing in Memory settings to save durable facts.",
+        receipts: [],
+        uncertainEntities: [],
       };
     }
     const entities = durableEntities(
@@ -264,24 +284,107 @@ export class SerenityMemoryProvider implements SemanticMemoryProvider {
       this.connection.brainLabel,
     );
     const provenance = `rakazo space:${context.spaceId} bot:${request.botId}`;
-    const results = await Promise.all(
-      entities.map((entity) =>
-        rememberSerenity(request.content, provenance, this.connection, {
-          entity,
-          signal: context.signal,
+    return combineMemorySaves(
+      await Promise.all(
+        entities.map(async (entity): Promise<SemanticMemorySaveResponse> => {
+          const result = await rememberSerenity(request.content, provenance, this.connection, {
+            entity,
+            signal: context.signal,
+          });
+          if (!result.ok) return { ...result, receipts: [], uncertainEntities: [entity] };
+          // The MCP acknowledgement has no before/after version or verified creation
+          // semantics. Preserve the reference without inventing either.
+          return {
+            ok: true,
+            value: [
+              {
+                id: result.value.id,
+                entity,
+                content: null,
+                created: null,
+                providerStatus: result.value.status,
+              },
+            ],
+          };
         }),
       ),
     );
-    const errors = results.filter((result) => !result.ok).map((result) => result.error);
-    return errors.length > 0
-      ? { ok: false, error: errors.join("; ") }
-      : { ok: true, value: undefined };
+  }
+
+  async restore(
+    request: SemanticMemoryRestoreRequest,
+    context: AdapterContext,
+  ): Promise<SemanticMemorySaveResponse> {
+    const invalid = validateMemoryRestoreScope(
+      request,
+      context,
+      durableEntities(request.scope, request.botId, context.spaceId, this.connection.brainLabel),
+    );
+    if (invalid) return invalid;
+    if (!this.connection.allowWrites)
+      return {
+        ok: false,
+        error: "Serenity writes are disabled for this Space.",
+        receipts: [],
+        uncertainEntities: [],
+      };
+    const current = await recallSerenity(request.expectedContent, this.connection, {
+      entity: request.entity,
+      limit: 50,
+      signal: context.signal,
+    });
+    if (!current.ok) return { ...current, receipts: [], uncertainEntities: [] };
+    if (current.value.some((fact) => fact.factId === request.id))
+      return {
+        ok: false,
+        error: "The removed fact is still recalled. Inspect it before restoring.",
+        receipts: [],
+        uncertainEntities: [],
+      };
+    const saved = await rememberSerenity(
+      request.expectedContent,
+      `rakazo space:${context.spaceId} bot:${request.botId} restore:${request.id}`,
+      this.connection,
+      { entity: request.entity, signal: context.signal },
+    );
+    if (!saved.ok) return { ...saved, receipts: [], uncertainEntities: [request.entity] };
+    const receipt = {
+      id: saved.value.id,
+      entity: request.entity,
+      content: null,
+      created: null,
+      providerStatus: saved.value.status,
+    };
+    const confirmed = await recallSerenity(request.expectedContent, this.connection, {
+      entity: request.entity,
+      limit: 50,
+      signal: context.signal,
+    });
+    const fact = confirmed.ok
+      ? confirmed.value.find(
+          (item) =>
+            item.factId === receipt.id &&
+            item.fact === request.expectedContent &&
+            (item.entitySlug === undefined || item.entitySlug === request.entity),
+        )
+      : null;
+    return fact
+      ? { ok: true, value: [{ ...receipt, content: fact.fact }] }
+      : {
+          ok: false,
+          error:
+            "Restoration was acknowledged but the full fact could not be confirmed. Inspect its receipt before another action.",
+          receipts: [receipt],
+          uncertainEntities: [request.entity],
+        };
   }
 
   async purgeHistory(
-    _request: { botId: string; generations: number[] },
-    _context: AdapterContext,
+    request: { botId: string; generations: number[] },
+    context: AdapterContext,
   ): Promise<SemanticMemoryResponse> {
+    const invalid = validateMemoryPurgeScope(request, context);
+    if (invalid) return invalid;
     // History generations are never written to Serenity.
     return { ok: true, value: undefined };
   }
@@ -289,7 +392,7 @@ export class SerenityMemoryProvider implements SemanticMemoryProvider {
   async forget(
     request: SemanticMemoryForgetRequest,
     context: AdapterContext,
-  ): Promise<SemanticMemoryResponse<{ id: string; expired: boolean; reason: string | null }>> {
+  ): Promise<SemanticMemoryForgetResponse> {
     if (!this.connection.allowWrites) {
       return {
         ok: false,
@@ -297,11 +400,67 @@ export class SerenityMemoryProvider implements SemanticMemoryProvider {
           "Serenity writes are disabled for this Space. Enable writing in Memory settings to forget facts.",
       };
     }
-    // Serenity forget is id-scoped (opaque fact_id); entity namespaces do not apply.
+    if (
+      !context.botId ||
+      request.botId !== context.botId ||
+      !["isolated", "shared"].includes(request.scope) ||
+      !request.id ||
+      !request.expectedContent?.trim()
+    ) {
+      return { ok: false, error: "A scoped recall and complete fact content are required." };
+    }
+    const entities = durableEntities(
+      request.scope,
+      request.botId,
+      context.spaceId,
+      this.connection.brainLabel,
+    );
+    if (request.entity !== undefined && !entities.includes(request.entity)) {
+      return { ok: false, error: "The recalled fact is outside this bot's memory scope." };
+    }
+    // Serenity deletes by opaque ID only. Re-read in the caller's namespace before
+    // that unscoped operation; a model-supplied ID/entity never establishes ownership.
+    // This also works after approval resumes in a new worker process.
+    let matchedEntity: string | undefined;
+    let found = false;
+    for (const entity of request.entity ? [request.entity] : entities) {
+      const recalled = await recallSerenity(request.expectedContent, this.connection, {
+        entity,
+        limit: 50,
+        signal: context.signal,
+      });
+      if (!recalled.ok) return recalled;
+      found = recalled.value.some(
+        (fact) =>
+          fact.factId === request.id &&
+          fact.fact === request.expectedContent &&
+          (fact.entitySlug === undefined || fact.entitySlug === entity),
+      );
+      if (found) {
+        matchedEntity = entity;
+        break;
+      }
+    }
+    if (!found) {
+      return {
+        ok: false,
+        error: "The fact is unavailable or changed. Recall it again before requesting removal.",
+      };
+    }
+    context.signal.throwIfAborted();
     const result = await forgetSerenity(request.id, this.connection, {
       reason: request.reason,
       signal: context.signal,
     });
-    return result.ok ? { ok: true, value: result.value } : result;
+    if (result.ok && (result.value.id !== request.id || !result.value.expired)) {
+      return {
+        ok: false,
+        error: "The provider did not confirm this fact's removal. Inspect it before trying again.",
+        uncertain: true,
+      };
+    }
+    return result.ok
+      ? { ok: true, value: { ...result.value, entity: matchedEntity } }
+      : { ...result, uncertain: true };
   }
 }

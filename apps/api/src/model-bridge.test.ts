@@ -35,7 +35,7 @@ function fixture() {
 }
 
 describe("optional model bridge HTTP API", () => {
-  it("issues a scoped key with an existing Rakazo session and accepts it as an OpenAI bearer", async () => {
+  it("issues a scoped key with an existing Deskazo session and accepts it as an OpenAI bearer", async () => {
     const f = fixture();
     const created = await f.grant();
     expect(created.status).toBe(201);

@@ -1,4 +1,11 @@
-import type { ConnectorAuthInput, ConnectorSetup } from "@rakazo/contracts";
+import type {
+  ConnectorAccountIdentity,
+  ConnectorAuthInput,
+  ConnectorReceipt,
+  ConnectorReceiptQuery,
+  ConnectorSetup,
+} from "@rakazo/contracts";
+import type { NotificationResult } from "./notifications.js";
 import type {
   AdapterContext,
   AdapterDescriptor,
@@ -56,11 +63,14 @@ import type {
   SecretRecord,
   SemanticMemoryCapabilities,
   SemanticMemoryForgetRequest,
+  SemanticMemoryForgetResponse,
   SemanticMemoryPurgeHistoryRequest,
   SemanticMemoryRecallRequest,
   SemanticMemoryResponse,
+  SemanticMemoryRestoreRequest,
   SemanticMemoryResult,
   SemanticMemorySaveRequest,
+  SemanticMemorySaveResponse,
   SnapshotRef,
   SpeechClip,
   TransactionalEmail,
@@ -85,7 +95,7 @@ export interface SandboxProvider {
     request: PageBrowserCommand,
     context: AdapterContext,
   ): Promise<PageBrowserResult>;
-  /** Allocate or reconnect the computer, returning its reference before fallible setup. */
+  /** Allocate or reconnect before fallible setup. Reject existing references with a missing or foreign kind before dispatch. */
   provision(
     request: {
       botId: string;
@@ -152,7 +162,9 @@ export interface SandboxProvider {
   keepAlive?(computer: ComputerRef): Promise<void>;
   /** Drop a single-screen graphical claim for this bot so another Team bot can use the display. */
   releaseScreen?(computer: ComputerRef, context: AdapterContext): Promise<void>;
+  /** Reject foreign provider kinds before dispatch; only confirmed absence counts as stopped. */
   stop(computer: ComputerRef, context: AdapterContext): Promise<void>;
+  /** Reject foreign provider kinds before dispatch; only confirmed absence counts as deleted. */
   destroy(computer: ComputerRef, context: AdapterContext): Promise<void>;
 }
 
@@ -165,6 +177,8 @@ export interface ConnectorProvider {
     context: AdapterContext,
   ): Promise<{ call: ConnectorCall; tool: ConnectorTool } | undefined>;
   execute(call: ConnectorCall, context: AdapterContext): AsyncIterable<ConnectorEvent>;
+  /** Inspect durable execution evidence without dispatching or replaying an external action. */
+  receipt?(query: ConnectorReceiptQuery, context: AdapterContext): Promise<ConnectorReceipt>;
 }
 
 export interface ConnectionAuthProvider {
@@ -190,6 +204,11 @@ export interface ManagedConnectorProvider
   extends ConnectorProvider,
     Omit<ConnectionAuthProvider, "describe"> {
   catalog(context: AdapterContext, query?: string): Promise<ConnectorCatalogItem[]>;
+  /** Provider-validated identity; callers must bind subsequent execution with expectedAccountId. */
+  accountIdentity?(
+    connectionId: string,
+    context: AdapterContext,
+  ): Promise<ConnectorAccountIdentity>;
   listConnectedExternalIds(context: AdapterContext): Promise<string[]>;
   connectionReady(context: AdapterContext, externalId: string): Promise<boolean>;
   warmDirectory?(): Promise<void>;
@@ -203,6 +222,8 @@ export interface ManagedConnectorProvider
       description: string;
       /** The provider recommends sharing this action with customer agents. Owners still opt in. */
       sharedByDefault?: boolean;
+      /** True only when the provider establishes that this action cannot change external state. */
+      readOnly?: boolean;
     }>
   >;
   setup?(provider: string, context: AdapterContext): Promise<ConnectorSetup>;
@@ -252,16 +273,21 @@ export interface SemanticMemoryProvider {
   save(
     request: SemanticMemorySaveRequest,
     context: AdapterContext,
-  ): Promise<SemanticMemoryResponse>;
+  ): Promise<SemanticMemorySaveResponse>;
   purgeHistory(
     request: SemanticMemoryPurgeHistoryRequest,
     context: AdapterContext,
   ): Promise<SemanticMemoryResponse>;
+  /** Optional reviewed restoration. Never mirror a single removed fact into other destinations. */
+  restore?(
+    request: SemanticMemoryRestoreRequest,
+    context: AdapterContext,
+  ): Promise<SemanticMemorySaveResponse>;
   /** Optional durable forget. Providers without a forget verb omit this. */
   forget?(
     request: SemanticMemoryForgetRequest,
     context: AdapterContext,
-  ): Promise<SemanticMemoryResponse<{ id: string; expired: boolean; reason: string | null }>>;
+  ): Promise<SemanticMemoryForgetResponse>;
 }
 
 export interface AgentRuntime {
@@ -333,7 +359,7 @@ export interface RealtimeFanout {
 
 export interface NotificationProvider {
   describe(): AdapterDescriptor<{ push: boolean; email: boolean }>;
-  send(message: NotificationMessage, context: AdapterContext): Promise<void>;
+  send(message: NotificationMessage, context: AdapterContext): Promise<NotificationResult>;
 }
 
 /** Outbound account and security email. Product code owns content; adapters own delivery. */
@@ -466,6 +492,8 @@ export interface BrowserProvider {
 export interface CloudAgentProvider {
   describe(): AdapterDescriptor<CloudAgentCapabilities>;
   launch(request: CloudAgentLaunchRequest, context: AdapterContext): Promise<CloudAgentHandle>;
+  /** Read a previously dispatched launch by its key. Never create work; absence stays uncertain. */
+  recoverLaunch?(idempotencyKey: string, context: AdapterContext): Promise<CloudAgentSnapshot>;
   get(id: string, context: AdapterContext, runId?: string): Promise<CloudAgentSnapshot>;
   reply(
     id: string,

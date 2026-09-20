@@ -19,6 +19,8 @@ import type {
 import { boundedSandboxCommandTimeoutMs, resolveSupervisorToken } from "@rakazo/core";
 import { outgoingCorrelationHeaders } from "@rakazo/logging";
 import {
+  assertComputerKind,
+  assertProvisionKind,
   boundedComputerActions,
   clampRounded,
   computerObservation,
@@ -113,6 +115,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         takeover: true,
         persistentHome: true,
         multiScreen: true,
+        replaySafeDestroy: true,
       },
     };
   }
@@ -134,9 +137,10 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: { botId: string; homePath: string },
+    request: Parameters<SandboxProvider["provision"]>[0],
     context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, "docker");
     const res = await fetch(this.url("/computers"), {
       method: "POST",
       headers: { ...this.headers(context, request.botId), "content-type": "application/json" },
@@ -435,6 +439,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async stop(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "docker");
     const res = await fetch(this.url(`/computers/${computer.id}/stop`), {
       method: "POST",
       headers: this.headers(context, computer.botId),
@@ -449,6 +454,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async destroy(computer: ComputerRef, context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "docker");
     const res = await fetch(this.url(`/computers/${computer.id}`), {
       method: "DELETE",
       headers: this.headers(context, computer.botId),
@@ -504,8 +510,6 @@ function requestDeadline(timeoutMs: number, message: string) {
 
 function dockerCwd(cwd: string | undefined) {
   if (!cwd || cwd === "." || cwd === "/" || cwd === "/home/rakazo") return "/home/rakazo";
-  const relative = cwd.startsWith("/home/rakazo/")
-    ? cwd.slice("/home/rakazo/".length)
-    : normalizeWorkspacePath(cwd);
-  return path.posix.join("/home/rakazo", relative);
+  const relative = cwd.startsWith("/home/rakazo/") ? cwd.slice("/home/rakazo/".length) : cwd;
+  return path.posix.join("/home/rakazo", normalizeWorkspacePath(relative));
 }

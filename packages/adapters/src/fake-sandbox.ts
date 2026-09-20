@@ -16,6 +16,8 @@ import { canReleaseScreenLease, canTakeScreenLease } from "@rakazo/core";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
   applyPlaceholderAction,
+  assertComputerKind,
+  assertProvisionKind,
   boundedComputerActions,
   normalizeWorkspacePath,
   placeholderObservation,
@@ -31,6 +33,8 @@ export interface FakeBox {
 
 export class FakeSandboxProvider implements SandboxProvider {
   readonly boxes = new Map<string, FakeBox>();
+
+  constructor(private readonly kind: ComputerRef["kind"] = "fake") {}
 
   describe() {
     return {
@@ -49,9 +53,10 @@ export class FakeSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: { botId: string; homePath: string },
+    request: Parameters<SandboxProvider["provision"]>[0],
     _context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, this.kind);
     const id = `fake-${request.botId}`;
     const existing = this.boxes.get(id);
     if (existing) {
@@ -61,7 +66,7 @@ export class FakeSandboxProvider implements SandboxProvider {
     const ref: ComputerRef = {
       id,
       botId: request.botId,
-      kind: "fake",
+      kind: this.kind,
       providerRef: id,
       fresh: true,
     };
@@ -246,11 +251,13 @@ export class FakeSandboxProvider implements SandboxProvider {
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, this.kind);
     const box = this.boxes.get(computer.id);
     if (box) box.running = false;
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, this.kind);
     this.boxes.delete(computer.id);
   }
 

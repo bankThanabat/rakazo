@@ -5,6 +5,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { authClient } from "../lib/auth";
+import { safeSignInPath } from "../lib/customer-alert-link";
 import { clearSpaceSelection } from "../lib/rpc";
 
 type AuthMode = "in" | "up" | "forgot";
@@ -33,9 +34,9 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
   const title = sent ? (
     <Trans>Check your email</Trans>
   ) : mode === "in" ? (
-    <Trans>Sign in to Rakazo</Trans>
+    <Trans>Sign in to Deskazo</Trans>
   ) : mode === "up" ? (
-    <Trans>Create your Rakazo</Trans>
+    <Trans>Create your Deskazo</Trans>
   ) : (
     <Trans>Reset your password</Trans>
   );
@@ -104,13 +105,7 @@ export function AuthPage({ mode }: { mode: AuthMode }) {
         return;
       }
       clearSpaceSelection();
-      navigate(
-        mode === "up"
-          ? "/onboarding"
-          : searchParams.get("next") === "/integrations/setup"
-            ? "/integrations/setup"
-            : "/app",
-      );
+      navigate(mode === "up" ? "/onboarding" : safeSignInPath(searchParams.get("next")));
     } catch {
       setError(t`Could not reach the server`);
     } finally {

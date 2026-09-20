@@ -487,6 +487,8 @@ export type AgentSkillSource = z.infer<typeof AgentSkillSourceSchema>;
 
 export const AgentSkillSchema = z.object({
   id: Id,
+  revision: z.number().int().nonnegative(),
+  removedAt: z.string().nullable(),
   name: z.string(),
   description: z.string(),
   content: z.string(),
@@ -508,6 +510,7 @@ export type AgentSkillCatalogEntry = z.infer<typeof AgentSkillCatalogEntrySchema
 
 export const CreateAgentSkillInput = z
   .object({
+    reason: z.string().trim().min(1).max(1000).default("Created skill"),
     content: z.string().min(1).max(100_000).optional(),
     name: z.string().min(1).max(80).optional(),
     description: z.string().min(1).max(2000).optional(),
@@ -526,7 +529,9 @@ export const CreateAgentSkillInput = z
 
 export const UpdateAgentSkillInput = z
   .object({
+    reason: z.string().trim().min(1).max(1000).default("Edited skill"),
     skillId: Id,
+    expectedRevision: z.number().int().positive(),
     content: z.string().min(1).max(100_000).optional(),
     name: z.string().min(1).max(80).optional(),
     description: z.string().min(1).max(2000).optional(),

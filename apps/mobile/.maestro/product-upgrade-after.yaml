@@ -1,0 +1,15 @@
+appId: com.rakazo.app
+name: Keep the session and saved server after the display rename
+---
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 10000
+- extendedWaitUntil:
+    visible: "Document reviewer.*"
+    timeout: 30000
+- tapOn: "Document reviewer.*"
+- extendedWaitUntil:
+    visible: "Chat settings"
+    timeout: 10000
+- assertNotVisible: "Sign up for Deskazo"
+- takeScreenshot: after-upgrade

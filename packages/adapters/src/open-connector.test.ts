@@ -1,6 +1,7 @@
 import type { AdapterContext, ConnectorCall } from "@rakazo/adapter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenConnector } from "./open-connector.js";
+import { OpenConnectorAccountGuardRejected, OpenConnectorHttp } from "./open-connector-catalog.js";
 import {
   sampleAction as action,
   createOpenConnectorFixture as fixture,
@@ -50,6 +51,108 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
 }
 
 afterEach(() => vi.useRealTimers());
+
+it("requires explicit reconnect to replace a revoked runtime token", async () => {
+  const f = fixture();
+  const { state } = await connect(f.adapter);
+  const sibling = await connect(f.adapter);
+  const oldToken = [...f.tokens.keys()][0]!;
+  const siblingToken = [...f.tokens.keys()][1]!;
+  const accountId = f.accounts.get(state)!.id;
+  f.tokens.delete(oldToken);
+  expect(await collect(f.adapter.execute(call(), connected(state)))).toEqual([
+    expect.objectContaining({ type: "error" }),
+  ]);
+  await f.adapter.complete({ state }, owner);
+  expect([...f.tokens.keys()]).toEqual([siblingToken]);
+  expect(f.sent).toHaveLength(0);
+  await f.adapter.reconnect(
+    state,
+    { type: "api_key", values: { apiKey: "fake-renewed-token" } },
+    owner,
+  );
+  expect(await collect(f.adapter.execute(call(), connected(state)))).toEqual([
+    expect.objectContaining({ type: "result" }),
+  ]);
+  expect(f.sent[0]!.token).not.toBe(oldToken);
+  expect(f.tokens.get(f.sent[0]!.token)).toMatchObject({
+    allowedConnections: [accountId],
+    allowedActions: [action.id],
+    allowedProxies: [],
+  });
+  expect(f.tokens.has(siblingToken)).toBe(true);
+  expect(f.accounts.has(sibling.state)).toBe(true);
+});
+
+it.each([401, 500])(
+  "does not replace a runtime token after a %s policy update failure",
+  async (status) => {
+    const f = fixture();
+    const { state } = await connect(f.adapter);
+    const tokens = [...f.tokens.entries()];
+    const original = f.fetcher.getMockImplementation()!;
+    f.fetcher.mockImplementation(async (input, init) => {
+      if (String(input).includes("/api/runtime-tokens/") && init?.method === "PUT")
+        return Response.json({}, { status });
+      return original(input, init);
+    });
+    await expect(
+      f.adapter.reconnect(
+        state,
+        { type: "api_key", values: { apiKey: "fake-renewed-token" } },
+        owner,
+      ),
+    ).rejects.toThrow("could not complete");
+    expect([...f.tokens.entries()]).toEqual(tokens);
+  },
+);
+
+it("uses the requested ETag body when another refresh finishes before a 304", async () => {
+  const f = fixture();
+  f.providers[0]!.actions[0]!.readOnly = false;
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json(f.providers, { headers: { etag: "current-write" } }));
+  const http = new OpenConnectorHttp(
+    { endpoint: "https://connector.example.test", apiKey: "fake" },
+    fetcher,
+  );
+  await http.catalog(owner);
+  let finish!: (response: Response) => void;
+  fetcher.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const current = http.catalog(owner, true);
+  f.providers[0]!.actions[0]!.readOnly = true;
+  fetcher.mockResolvedValueOnce(Response.json(f.providers, { headers: { etag: "earlier-read" } }));
+  await http.catalog(owner, true);
+  expect(new Headers(fetcher.mock.calls[1]![1]?.headers).get("if-none-match")).toBe(
+    "current-write",
+  );
+  finish(new Response(null, { status: 304 }));
+  expect((await current)[0]!.actions[0]!.readOnly).toBe(false);
+});
+
+it("propagates read effects and rejects an action whose effect changed after resolution", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  f.providers[0]!.actions[0]!.readOnly = true;
+  const { state } = await connect(f.adapter);
+  const context = connected(state);
+  expect((await f.adapter.listActions("sample", context))[0]).toMatchObject({ readOnly: true });
+  const resolved = await f.adapter.resolveCall(call(), context);
+  expect(resolved!.tool.readOnly).toBe(true);
+  f.providers[0]!.actions[0]!.readOnly = false;
+  // No clock advance: a dispatch must not reuse the 30-second discovery cache.
+  expect(await collect(f.adapter.execute(resolved!.call, context))).toEqual([
+    { type: "error", message: "The action changed. Review the action again." },
+  ]);
+  expect(f.sent).toHaveLength(0);
+  expect((await f.adapter.resolveCall(call(), context))!.tool.readOnly).toBe(false);
+});
 
 describe("OpenConnector accounts", () => {
   it.each([false, true])("sends OAuth options only when declared: %s", async (declared) => {
@@ -339,6 +442,29 @@ describe("catalog-driven authentication", () => {
   });
 });
 
+it("replaces a revoked runtime token when a new OAuth authorization completes", async () => {
+  const f = fixture();
+  f.providers[0]!.auth = [{ type: "oauth2" }];
+  const auth = { type: "oauth2" as const, values: {} };
+  const first = await f.adapter.begin(
+    { provider: "sample", redirectUrl: "https://example.test", auth },
+    owner,
+  );
+  f.authorize([...f.requests.keys()][0]!);
+  await f.adapter.complete({ state: first.state }, owner);
+  const token = [...f.tokens.keys()][0]!;
+  f.tokens.delete(token);
+  await f.adapter.reconnect(first.state, auth, owner);
+  expect(f.tokens.size).toBe(0);
+  f.authorize([...f.requests.keys()].at(-1)!);
+  await f.adapter.complete({ state: first.state }, owner);
+  expect(f.tokens.size).toBe(1);
+  expect(f.tokens.has(token)).toBe(false);
+  expect(await collect(f.adapter.execute(call(), connected(first.state)))).toEqual([
+    expect.objectContaining({ type: "result" }),
+  ]);
+});
+
 it("cancels OAuth reconnect without deleting the existing team account", async () => {
   const f = fixture();
   f.providers[0]!.auth = [{ type: "oauth2" }];
@@ -390,7 +516,7 @@ it("rejects execution when the schema changed after authorization", async () => 
   };
   vi.advanceTimersByTime(31000);
   expect(await collect(f.adapter.execute(resolved!.call, context))).toEqual([
-    { type: "error", message: "The action schema changed. Review the action again." },
+    { type: "error", message: "The action changed. Review the action again." },
   ]);
   expect(f.sent).toHaveLength(0);
 });
@@ -527,3 +653,61 @@ it("recommends sharing only the Instagram reply actions and lists only executabl
     "instagram.create_comment",
   ]);
 });
+
+it("reads owned provider identity and rejects a credential swap before bound dispatch", async () => {
+  const f = fixture();
+  const { state } = await connect(f.adapter);
+  const context = connected(state);
+  const identity = await f.adapter.accountIdentity("connection-1", context);
+  expect(identity).toEqual({ provider: "sample", id: "sample-account" });
+  const account = [...f.accounts.values()][0]!;
+  account.providerAccountId = "replacement";
+  expect(
+    await collect(f.adapter.execute({ ...call(), expectedAccountId: identity.id }, context)),
+  ).toEqual([
+    {
+      type: "error",
+      message: "The linked provider account changed before execution",
+      dispatch: "not_started",
+    },
+  ]);
+  expect(f.sent).toHaveLength(0);
+  await expect(
+    f.adapter.accountIdentity("connection-1", connected(state, { ...owner, spaceId: "other" })),
+  ).rejects.toThrow();
+});
+
+it.each([
+  [409, { success: false, errorCode: "connection_changed" }, false],
+  [
+    409,
+    { success: false, errorCode: "idempotency_key_conflict", meta: { dispatch: "not_started" } },
+    false,
+  ],
+  [
+    500,
+    { success: false, errorCode: "connection_changed", meta: { dispatch: "not_started" } },
+    false,
+  ],
+  [
+    409,
+    { success: false, errorCode: "connection_changed", meta: { dispatch: "not_started" } },
+    true,
+  ],
+])(
+  "requires an exact authenticated predispatch rejection envelope: %s %j",
+  async (status, body, proven) => {
+    const http = new OpenConnectorHttp(
+      { endpoint: "https://connector.example.test", apiKey: "fake" },
+      async () => Response.json(body, { status }),
+    );
+    try {
+      await http.request("/v1/actions/sample.send/for-account/sample-account", owner, {
+        method: "POST",
+      });
+      throw new Error("Expected rejection");
+    } catch (error) {
+      expect(error instanceof OpenConnectorAccountGuardRejected).toBe(proven);
+    }
+  },
+);

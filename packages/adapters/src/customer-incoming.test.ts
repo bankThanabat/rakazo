@@ -95,7 +95,7 @@ it("routes LINE group, room and direct chats to distinct threads and skips sende
     type: "message",
     timestamp: 1767312000000,
     source,
-    message: { type: "text", text: id },
+    message: { id: `message-${id}`, type: "text", text: id },
   });
   const page = customerPage(
     binding,
@@ -115,4 +115,29 @@ it("routes LINE group, room and direct chats to distinct threads and skips sende
     ["group", "g1"],
     ["room", "r1"],
   ]);
+});
+
+it("maps LINE withdrawal targets independently of webhook event IDs and sender visibility", () => {
+  const binding = CustomerBindingSchema.parse(
+    lineIncoming.binding({ account: "bot", secretIds: { channelSecret: "secret" } }),
+  );
+  const payload = {
+    destination: "bot",
+    events: [
+      {
+        webhookEventId: "withdrawal-event",
+        type: "unsend",
+        timestamp: 1767312001000,
+        source: { type: "group", groupId: "group" },
+        unsend: { messageId: "original-message" },
+      },
+    ],
+  };
+  expect(customerPage(binding, payload, new Date(0))).toMatchObject({
+    messages: [],
+    withdrawals: [{ externalThreadId: "group", providerMessageId: "original-message" }],
+  });
+  expect(
+    customerPage(binding, { ...payload, destination: "other-bot" }, new Date(0)),
+  ).toMatchObject({ messages: [], withdrawals: [] });
 });

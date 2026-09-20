@@ -1,0 +1,459 @@
+diff --git a/src/providers/instagram/actions.ts b/src/providers/instagram/actions.ts
+index 5eb8106..64079c4 100644
+--- a/src/providers/instagram/actions.ts
++++ b/src/providers/instagram/actions.ts
+@@ -140,6 +140,26 @@ const insightMetricNames = [
+   "views",
+ ];
+ 
++const messageParticipantSchema = s.object(
++  {
++    id: instagramId(
++      "Customer Instagram-scoped ID or professional account ID for the business. Keep the raw ID; a username is not an identity.",
++    ),
++    username: s.optional(s.string("Username when Meta supplies it.")),
++  },
++  {
++    required: ["id"],
++    description: "Message participant identity. This does not identify a human operator or the sending app.",
++  },
++);
++const messageReferenceSchema = s.object(
++  {
++    id: instagramId("Instagram message ID."),
++    createdTime: s.optional(s.string("Raw message creation timestamp from Meta; may use an offset such as +0000.")),
++  },
++  { required: ["id"], description: "Message reference; its details may no longer be accessible." },
++);
++
+ const imagePublishInput = s.object(
+   {
+     kind: s.literal("image", { description: "Publish a single image." }),
+@@ -414,6 +434,74 @@ export const instagramActions: ActionDefinition[] = [
+       { required: ["commentId", "parentCommentId"], description: "Created Instagram reply result." },
+     ),
+   }),
++  action({
++    name: "list_conversations",
++    description:
++      "Read a page of Instagram conversations for the connected professional account. Follow cursors for more pages. Inactive Requests-folder conversations older than 30 days are omitted; completion does not prove full history. Meta limits Conversations API reads to 2 calls per second per account.",
++    requiredScopes: messagingScopes,
++    inputSchema: paginationInputSchema(20),
++    outputSchema: s.object(
++      {
++        conversations: s.array(
++          s.object(
++            {
++              id: instagramId("Instagram conversation ID."),
++              updatedTime: s.optional(
++                s.string("Raw last-update timestamp from Meta; may use an offset such as +0000."),
++              ),
++            },
++            { required: ["id"], description: "Conversation reference." },
++          ),
++        ),
++        paging: pagingSchema,
++      },
++      { required: ["conversations", "paging"], description: "Accessible conversation page." },
++    ),
++    followUpActions: ["instagram.list_conversation_messages"],
++  }),
++  action({
++    name: "list_conversation_messages",
++    description:
++      "Read a page of message IDs and dates from an accessible Instagram conversation. Fetch each message separately with get_message. Meta only exposes details for the 20 most recent messages per conversation, even when older IDs appear here. This is not a complete archive.",
++    requiredScopes: messagingScopes,
++    inputSchema: paginationInputSchema(
++      20,
++      { conversationId: instagramId("Conversation ID returned by list_conversations.") },
++      ["conversationId"],
++    ),
++    outputSchema: s.object(
++      { messages: s.array(messageReferenceSchema), paging: pagingSchema },
++      { required: ["messages", "paging"], description: "Message reference page." },
++    ),
++    followUpActions: ["instagram.get_message"],
++  }),
++  action({
++    name: "get_message",
++    description:
++      "Read one accessible Instagram message with raw sender and recipient IDs, text and date when available. Details beyond the latest 20 messages per conversation can return a deleted-message error. Sender identity proves account direction only, not human authorship; do not label unknown or automated messages as staff learning examples. Attachments and webhook echo flags are not included.",
++    requiredScopes: messagingScopes,
++    inputSchema: s.object(
++      { messageId: instagramId("Message ID returned by list_conversation_messages.") },
++      { required: ["messageId"], description: "Message detail input." },
++    ),
++    outputSchema: s.object(
++      {
++        message: s.object(
++          {
++            id: instagramId("Instagram message ID."),
++            createdTime: s.optional(
++              s.string("Raw message creation timestamp from Meta; may use an offset such as +0000."),
++            ),
++            text: s.optional(s.string("Message text when present. Media-only messages may have no text.")),
++            from: s.optional(messageParticipantSchema),
++            to: s.optional(s.array(messageParticipantSchema)),
++          },
++          { required: ["id"], description: "Message details without inferred author role or automation provenance." },
++        ),
++      },
++      { required: ["message"], description: "Accessible message result." },
++    ),
++  }),
+   action({
+     name: "send_message",
+     description:
+diff --git a/src/providers/instagram/message-history.test.ts b/src/providers/instagram/message-history.test.ts
+new file mode 100644
+index 0000000..15f8d6f
+--- /dev/null
++++ b/src/providers/instagram/message-history.test.ts
+@@ -0,0 +1,234 @@
++import type { OAuthProviderContext } from "../provider-runtime.ts";
++import type { Schema } from "@cfworker/json-schema";
++
++import { Validator } from "@cfworker/json-schema";
++import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
++import { validateActionInput } from "../../core/validation.ts";
++import { instagramActions } from "./actions.ts";
++import { instagramActionHandlers } from "./runtime.ts";
++
++beforeAll(() =>
++  vi.stubGlobal("fetch", () => {
++    throw new Error("Unexpected network access");
++  }),
++);
++afterAll(() => vi.unstubAllGlobals());
++const context = (fetcher: OAuthProviderContext["fetcher"]): OAuthProviderContext => ({
++  accessToken: "synthetic-token",
++  accountId: "professional-id",
++  fetcher,
++});
++const actions = ["list_conversations", "list_conversation_messages", "get_message"] as const;
++const inputs = {
++  list_conversations: {},
++  list_conversation_messages: { conversationId: "conversation" },
++  get_message: { messageId: "message" },
++};
++const paths = {
++  list_conversations: "/v25.0/professional-id/conversations",
++  list_conversation_messages: "/v25.0/conversation/messages",
++  get_message: "/v25.0/message",
++};
++const fields = {
++  list_conversations: "id,updated_time",
++  list_conversation_messages: "id,created_time",
++  get_message: "id,created_time,from,to,message",
++};
++
++describe("Instagram message history reads", () => {
++  it.each(actions)("%s returns valid declared output for Meta's raw timestamp form", async (name) => {
++    const action = instagramActions.find((item) => item.name === name)!;
++    const timestamp = "2026-09-19T00:00:00+0000";
++    // The upstream validator accepts this non-RFC3339 form even with date-time.
++    // Keep the catalog honest for clients whose format validation is stricter.
++    expect(JSON.stringify(action.outputSchema)).not.toContain('"format":"date-time"');
++    const payload =
++      name === "get_message"
++        ? {
++            id: "message",
++            created_time: timestamp,
++            from: { id: "professional-id" },
++            to: { data: [{ id: "customer-scoped-id" }] },
++            message: "Hello",
++          }
++        : { data: [{ id: "reference", created_time: timestamp, updated_time: timestamp }] };
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockResolvedValue(Response.json(payload));
++    const output = await instagramActionHandlers[name](inputs[name], context(fetcher));
++    expect(new Validator(action.outputSchema as Schema).validate(output)).toMatchObject({ valid: true });
++    expect(JSON.stringify(output)).toContain(timestamp);
++  });
++  it.each(actions)("%s has message permissions and rejects arbitrary request input", (name) => {
++    const action = instagramActions.find((item) => item.name === name)!;
++    expect(action.requiredScopes).toEqual(["instagram_business_basic", "instagram_business_manage_messages"]);
++    expect(validateActionInput(action, inputs[name]).valid).toBe(true);
++    expect(validateActionInput(action, { ...inputs[name], method: "POST" }).valid).toBe(false);
++    if (name !== "list_conversations") expect(validateActionInput(action, {}).valid).toBe(false);
++    if (name !== "get_message")
++      for (const extra of [{ limit: 21 }, { limit: 0 }, { limit: 1.5 }, { after: "a", before: "b" }])
++        expect(validateActionInput(action, { ...inputs[name], ...extra }).valid).toBe(false);
++  });
++
++  it.each(actions)("%s issues exactly one fixed GET, ignoring handler-level HTTP overrides", async (name) => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target, init) => {
++      const url = new URL(String(target));
++      expect(url.origin).toBe("https://graph.instagram.com");
++      expect(url.pathname).toBe(paths[name]);
++      expect(url.searchParams.get("fields")).toBe(fields[name]);
++      expect(url.searchParams.get("platform")).toBe(name === "list_conversations" ? "instagram" : null);
++      expect(url.searchParams.get("limit")).toBe(name === "get_message" ? null : "20");
++      expect(url.searchParams.has("access_token")).toBe(false);
++      expect(init?.method).toBe("GET");
++      expect(init?.body).toBeUndefined();
++      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-token");
++      return Response.json(name === "get_message" ? { id: "message" } : { data: [] });
++    });
++    await instagramActionHandlers[name](
++      {
++        ...inputs[name],
++        accountId: "other-account",
++        method: "POST",
++        fields: "attachments",
++        endpoint: "https://untrusted.example.test",
++        body: { text: "send" },
++      },
++      context(fetcher),
++    );
++    expect(fetcher).toHaveBeenCalledTimes(1);
++  });
++
++  it.each(["list_conversations", "list_conversation_messages"] as const)(
++    "%s retains empty and short page cursors without exposing URLs",
++    async (name) => {
++      const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target) => {
++        const url = new URL(String(target));
++        if (!url.searchParams.has("after"))
++          return Response.json({
++            data: [],
++            paging: { next: "https://untrusted.example.test/?access_token=private", cursors: { after: "page-2" } },
++          });
++        expect(url.searchParams.get("after")).toBe("page-2");
++        return Response.json({
++          data: [
++            { id: "reference", created_time: "2026-09-19T00:00:00+0000", updated_time: "2026-09-19T00:00:00+0000" },
++          ],
++        });
++      });
++      const first = await instagramActionHandlers[name](inputs[name], context(fetcher));
++      expect(first).toMatchObject({ paging: { after: "page-2", hasNextPage: true } });
++      expect(JSON.stringify(first)).not.toContain("private");
++      const second = await instagramActionHandlers[name]({ ...inputs[name], after: "page-2" }, context(fetcher));
++      expect(second).toEqual({
++        [name === "list_conversations" ? "conversations" : "messages"]: [
++          {
++            id: "reference",
++            [name === "list_conversations" ? "updatedTime" : "createdTime"]: "2026-09-19T00:00:00+0000",
++          },
++        ],
++        paging: { hasNextPage: false, hasPreviousPage: false },
++      });
++    },
++  );
++
++  it("preserves inbound and outbound identities and text without inventing human authorship", async () => {
++    for (const [sender, recipient] of [
++      ["customer-scoped-id", "professional-id"],
++      ["professional-id", "customer-scoped-id"],
++    ]) {
++      const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockResolvedValue(
++        Response.json({
++          id: "message",
++          created_time: "2026-09-19T00:00:00+0000",
++          message: "  สวัสดีค่ะ\nHello  ",
++          from: { id: sender, username: "same-name" },
++          to: { data: [{ id: recipient, username: "same-name" }] },
++          is_echo: true,
++          is_self: true,
++          author_role: "staff",
++          attachments: { data: [{ url: "https://private.example.test" }] },
++        }),
++      );
++      expect(await instagramActionHandlers.get_message(inputs.get_message, context(fetcher))).toEqual({
++        message: {
++          id: "message",
++          createdTime: "2026-09-19T00:00:00+0000",
++          text: "  สวัสดีค่ะ\nHello  ",
++          from: { id: sender, username: "same-name" },
++          to: [{ id: recipient, username: "same-name" }],
++        },
++      });
++    }
++  });
++
++  it("keeps missing text and unknown identities absent instead of inferring them from names", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockResolvedValue(
++      Response.json({
++        id: "message",
++        from: { id: 123, username: "business" },
++        to: { data: [{ username: "business" }] },
++      }),
++    );
++    expect(await instagramActionHandlers.get_message(inputs.get_message, context(fetcher))).toEqual({
++      message: { id: "message", to: [] },
++    });
++  });
++
++  it.each([400, 403, 404, 429])("keeps HTTP %i, including old-message errors, as a failure", async (status) => {
++    for (const name of actions) {
++      const fetcher = vi
++        .fn<OAuthProviderContext["fetcher"]>()
++        .mockResolvedValue(Response.json({ error: { message: "Unavailable or deleted" } }, { status }));
++      await expect(instagramActionHandlers[name](inputs[name], context(fetcher))).rejects.toMatchObject({ status });
++      expect(fetcher).toHaveBeenCalledTimes(1);
++    }
++  });
++
++  it.each([{}, { data: null }, { data: [{}] }, { data: [], paging: { next: "https://example.test/next" } }])(
++    "rejects malformed pages instead of claiming completion: %j",
++    async (payload) => {
++      for (const name of ["list_conversations", "list_conversation_messages"] as const) {
++        const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockResolvedValue(Response.json(payload));
++        await expect(instagramActionHandlers[name](inputs[name], context(fetcher))).rejects.toThrow();
++      }
++    },
++  );
++
++  it.each([{}, { id: "different" }, { id: "message", to: { data: "bad" } }])(
++    "rejects malformed or substituted message details: %j",
++    async (payload) => {
++      const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockResolvedValue(Response.json(payload));
++      await expect(instagramActionHandlers.get_message(inputs.get_message, context(fetcher))).rejects.toThrow();
++    },
++  );
++
++  it("encodes opaque conversation and message IDs without changing the host or path shape", async () => {
++    for (const name of ["list_conversation_messages", "get_message"] as const) {
++      const id = "opaque/messages?access_token=other";
++      const fetcher = vi.fn<OAuthProviderContext["fetcher"]>().mockImplementation(async (target) => {
++        const url = new URL(String(target));
++        expect(url.origin).toBe("https://graph.instagram.com");
++        expect(url.pathname).toBe(
++          `/v25.0/opaque%2Fmessages%3Faccess_token%3Dother${name === "get_message" ? "" : "/messages"}`,
++        );
++        expect(url.searchParams.has("access_token")).toBe(false);
++        return Response.json(name === "get_message" ? { id } : { data: [] });
++      });
++      await instagramActionHandlers[name](
++        { [name === "get_message" ? "messageId" : "conversationId"]: id },
++        context(fetcher),
++      );
++    }
++  });
++
++  it("rejects invalid page limits, missing IDs and conflicting cursors before I/O", async () => {
++    const fetcher = vi.fn<OAuthProviderContext["fetcher"]>();
++    for (const name of ["list_conversations", "list_conversation_messages"] as const)
++      for (const extra of [{ limit: 21 }, { limit: 0 }, { limit: "20" }, { after: "a", before: "b" }])
++        await expect(instagramActionHandlers[name]({ ...inputs[name], ...extra }, context(fetcher))).rejects.toThrow();
++    await expect(instagramActionHandlers.get_message({}, context(fetcher))).rejects.toThrow();
++    await expect(instagramActionHandlers.list_conversation_messages({}, context(fetcher))).rejects.toThrow();
++    await expect(
++      instagramActionHandlers.list_conversations({}, { ...context(fetcher), accountId: undefined }),
++    ).rejects.toThrow();
++    expect(fetcher).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/providers/instagram/runtime.ts b/src/providers/instagram/runtime.ts
+index 5b5ebd1..c083d33 100644
+--- a/src/providers/instagram/runtime.ts
++++ b/src/providers/instagram/runtime.ts
+@@ -103,6 +103,18 @@ function createInstagramActionHandlers(): ProviderActionHandlers<"instagram", In
+     },
+     create_comment: createComment,
+     reply_to_comment: replyToComment,
++    async list_conversations(input, context) {
++      return listMessagingEdge(input, context, requireInstagramAccountId(context), "conversations");
++    },
++    async list_conversation_messages(input, context) {
++      return listMessagingEdge(
++        input,
++        context,
++        requiredString(input.conversationId, "conversationId", providerInputError),
++        "messages",
++      );
++    },
++    get_message: getMessage,
+     send_message: sendMessage,
+   };
+ }
+@@ -213,6 +225,89 @@ async function listComments(
+   };
+ }
+ 
++/** One fixed GET per call; never follow provider paging URLs containing credentials. */
++async function listMessagingEdge(
++  input: Record<string, unknown>,
++  context: OAuthProviderContext,
++  parentId: string,
++  edge: "conversations" | "messages",
++): Promise<Record<string, unknown>> {
++  assertExclusiveCursors(input);
++  const limit = input.limit ?? 20;
++  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20)
++    throw providerInputError("limit must be an integer between 1 and 20");
++  const payload = requiredRecord(
++    await instagramRequestJson(
++      {
++        path: `/${encodePathSegment(parentId)}/${edge}`,
++        query: {
++          fields: edge === "conversations" ? "id,updated_time" : "id,created_time",
++          platform: edge === "conversations" ? "instagram" : undefined,
++          after: optionalString(input.after),
++          before: optionalString(input.before),
++          limit: String(limit),
++        },
++      },
++      context,
++    ),
++    "Instagram messaging page",
++    providerResponseError,
++  );
++  const paging = normalizePaging(payload.paging);
++  if ((paging.hasNextPage && !paging.after) || (paging.hasPreviousPage && !paging.before))
++    throw providerResponseError("Instagram messaging page omitted its cursor");
++  return {
++    [edge]: objectArray(payload.data, "Instagram messaging references", providerResponseError).map((item) =>
++      compactObject({
++        id: requiredString(item.id, "Instagram messaging reference ID", providerResponseError),
++        ...(edge === "conversations"
++          ? { updatedTime: optionalString(item.updated_time) }
++          : { createdTime: optionalString(item.created_time) }),
++      }),
++    ),
++    paging,
++  };
++}
++
++function messageParticipant(value: unknown): Record<string, unknown> | undefined {
++  const participant = optionalRecord(value);
++  const id = optionalString(participant?.id);
++  return id ? compactObject({ id, username: optionalString(participant?.username) }) : undefined;
++}
++
++async function getMessage(
++  input: Record<string, unknown>,
++  context: OAuthProviderContext,
++): Promise<Record<string, unknown>> {
++  const messageId = requiredString(input.messageId, "messageId", providerInputError);
++  const payload = requiredRecord(
++    await instagramRequestJson(
++      { path: `/${encodePathSegment(messageId)}`, query: { fields: "id,created_time,from,to,message" } },
++      context,
++    ),
++    "Instagram message",
++    providerResponseError,
++  );
++  const id = requiredString(payload.id, "Instagram message ID", providerResponseError);
++  if (id !== messageId) throw providerResponseError("Instagram returned a different message ID");
++  const recipients = optionalRecord(payload.to);
++  return {
++    message: compactObject({
++      id,
++      createdTime: optionalString(payload.created_time),
++      text: optionalRawString(payload.message),
++      from: messageParticipant(payload.from),
++      to:
++        recipients?.data === undefined
++          ? undefined
++          : objectArray(recipients.data, "Instagram message recipients", providerResponseError).flatMap((item) => {
++              const participant = messageParticipant(item);
++              return participant ? [participant] : [];
++            }),
++    }),
++  };
++}
++
+ async function getMediaInsights(
+   input: Record<string, unknown>,
+   context: OAuthProviderContext,

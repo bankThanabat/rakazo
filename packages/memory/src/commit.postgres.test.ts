@@ -1,5 +1,6 @@
 import type { AdapterContext, MemoryCommitRequest } from "@rakazo/adapter-kit";
-import { createDb, type PrismaClient } from "@rakazo/db";
+import type { PrismaClient } from "@rakazo/db";
+import { createDb } from "@rakazo/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MarkdownMemoryStore } from "./index.js";
 
@@ -27,6 +28,9 @@ describePostgres("memory commits (PostgreSQL)", () => {
       await prisma.$disconnect();
       await db.pool.end();
     };
+    await prisma.user.create({
+      data: { id: context.userId, email: "memory-commit@rakazo.test", name: "Memory Test User" },
+    });
     await prisma.organization.create({
       data: {
         id: context.spaceId,
@@ -49,12 +53,34 @@ describePostgres("memory commits (PostgreSQL)", () => {
         },
       },
     });
+    await prisma.member.create({
+      data: {
+        id: "memory-commit-member",
+        organizationId: context.spaceId,
+        userId: context.userId,
+        role: "owner",
+        createdAt: new Date(),
+      },
+    });
+    await prisma.spaceMember.upsert({
+      where: { spaceId_userId: { spaceId: context.spaceId, userId: context.userId } },
+      update: {},
+      create: {
+        id: "memory-commit-space-member",
+        organizationId: context.spaceId,
+        spaceId: context.spaceId,
+        userId: context.userId,
+        role: "owner",
+        createdAt: new Date(),
+      },
+    });
   });
 
   afterAll(async () => {
     if (!prisma) return;
     try {
       await prisma.organization.deleteMany({ where: { id: context.spaceId } });
+      await prisma.user.deleteMany({ where: { id: context.userId } });
     } finally {
       await close();
     }
@@ -65,8 +91,6 @@ describePostgres("memory commits (PostgreSQL)", () => {
       scope: "user",
       path,
       content,
-      sourceRunId: `run-${content}`,
-      sourceThreadId: `thread-${content}`,
     };
   }
 
@@ -131,12 +155,45 @@ describePostgres("memory commits (PostgreSQL)", () => {
           documentId: result.id,
           revision: result.revision,
           content: result.content,
-          sourceRunId: `run-${result.content}`,
-          sourceThreadId: `thread-${result.content}`,
+          sourceRunId: null,
+          sourceThreadId: null,
         });
       }
     },
   );
+
+  it("retries simultaneous first user saves without creating duplicate documents", async () => {
+    let reads = 0;
+    let release!: () => void;
+    const bothRead = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const concurrent = new MarkdownMemoryStore(
+      prisma.$extends({
+        query: {
+          memoryDocument: {
+            async findFirst({ args, query }) {
+              const value = await query(args);
+              reads += 1;
+              if (reads === 2) release();
+              if (reads <= 2) await bothRead;
+              return value;
+            },
+          },
+        },
+      }) as PrismaClient,
+    );
+    const path = "concurrent-first.md";
+    const saved = await Promise.all([
+      concurrent.commit(request(path, "one"), context),
+      concurrent.commit(request(path, "two"), context),
+    ]);
+    expect(saved.map((row) => row.revision).sort()).toEqual([1, 2]);
+    expect(await prisma.memoryDocument.count({ where: { spaceId: context.spaceId, path } })).toBe(
+      1,
+    );
+    expect((await document(path)).revisions).toHaveLength(2);
+  });
 
   it.each([false, true])(
     "rolls back a rejected history insert and permits a caller retry (existing: %s)",
@@ -158,9 +215,9 @@ describePostgres("memory commits (PostgreSQL)", () => {
                 return query({
                   ...args,
                   data: {
-                    ...args.data,
-                    document: undefined,
                     documentId: "missing-memory-document",
+                    revision: args.data.revision,
+                    content: args.data.content,
                   },
                 });
               },

@@ -1,0 +1,10 @@
+diff --git a/docker/Dockerfile b/docker/Dockerfile
+--- a/docker/Dockerfile
++++ b/docker/Dockerfile
+@@ -1,4 +1,5 @@
+-FROM node:24-alpine AS build
++FROM --platform=$BUILDPLATFORM node:24-alpine AS build
++ENV GOMEMLIMIT=2GiB
+ WORKDIR /app
+ COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
+ COPY web ./web

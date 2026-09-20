@@ -42,6 +42,7 @@ function fixture({
   const members = new Set<string>();
   const prisma = {
     authData: data,
+    accountDeletion: { count: vi.fn(async () => 0) },
     deploymentSettings: { findUnique: vi.fn(async () => policy) },
     spaceMember: {
       findFirst: vi.fn(async ({ where }: { where: { userId: string } }) =>

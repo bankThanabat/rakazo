@@ -3,10 +3,13 @@ import { approvalEffectKey } from "@rakazo/core/node/approval-effect-key";
 import { describe, expect, it } from "vitest";
 import {
   approvedCatalogReplay,
+  approvedDocumentReplayName,
   approvedReplayArgs,
   boundDirectApprovalRequest,
   catalogApprovalRequest,
   createApprovedEffectReplayQueue,
+  DOCUMENT_REVIEW_TOOLS,
+  documentApprovalReplayTool,
 } from "./approval-effect.js";
 import {
   APPROVED_EFFECT_REPLAY_ORDER,
@@ -20,6 +23,132 @@ import {
 } from "./lazy-tool-catalog.js";
 
 describe("executor approval replay", () => {
+  it.each([...DOCUMENT_REVIEW_TOOLS])(
+    "resumes %s without returning its document to the model",
+    (kind) => {
+      const request = { content: "Private document".repeat(100_000) };
+      const effects = [{ kind, request }];
+      const formatted: unknown[] = [];
+      const prompt = buildApprovalContinuation(effects, (value) => {
+        formatted.push(value);
+        return JSON.stringify(value);
+      });
+      expect(prompt).toContain(`${documentApprovalReplayTool.name}: {}`);
+      expect(prompt!.length).toBeLessThan(1000);
+      expect(formatted).toEqual([]);
+      const queue = createApprovedEffectReplayQueue(effects);
+      expect(approvedDocumentReplayName(queue, {}, new Set([kind]))).toBe(kind);
+      expect(queue.take(kind)).toBe(request);
+      expect(approvedDocumentReplayName(queue, {}, new Set([kind]))).toBeUndefined();
+    },
+  );
+
+  it("rejects document replay substitution, unavailable tools, and skipping an earlier approval", () => {
+    const queue = createApprovedEffectReplayQueue([
+      { kind: "skill_update", request: { content: "Reviewed" } },
+    ]);
+    expect(
+      approvedDocumentReplayName(queue, { content: "Unapproved" }, new Set(["skill_update"])),
+    ).toBeUndefined();
+    expect(approvedDocumentReplayName(queue, {}, new Set())).toBeUndefined();
+    expect(queue.nextToolName()).toBe("skill_update");
+    const ordered = createApprovedEffectReplayQueue([
+      { kind: "create_space", request: { name: "Reviewed space" } },
+      { kind: "skill_update", request: { content: "Reviewed" } },
+    ]);
+    expect(
+      approvedDocumentReplayName(ordered, {}, new Set(["create_space", "skill_update"])),
+    ).toBeUndefined();
+    expect(ordered.nextToolName()).toBe("create_space");
+  });
+
+  it("keeps repeated document approvals distinct and consumes them in order", () => {
+    const first = { content: "First reviewed version", expectedRevision: 1 };
+    const second = { content: "Second reviewed version", expectedRevision: 2 };
+    const effects = [
+      { kind: "skill_update", request: first },
+      { kind: "skill_update", request: second },
+    ];
+    const queue = createApprovedEffectReplayQueue(effects);
+    const exposed = new Set(["skill_update"]);
+    expect(
+      buildApprovalContinuation(effects, JSON.stringify)?.match(/apply_approved_document: \{\}/g),
+    ).toHaveLength(2);
+    expect(approvedDocumentReplayName(queue, {}, exposed)).toBe("skill_update");
+    expect(queue.take("skill_update")).toBe(first);
+    expect(approvedDocumentReplayName(queue, {}, exposed)).toBe("skill_update");
+    expect(queue.take("skill_update")).toBe(second);
+    expect(approvedDocumentReplayName(queue, {}, exposed)).toBeUndefined();
+    expect(queue.assertDrained).not.toThrow();
+  });
+
+  it("refuses a malformed stored semantic approval before formatting server-only fields", () => {
+    const formatted: unknown[] = [];
+    expect(() =>
+      buildApprovalContinuation(
+        [
+          {
+            kind: "memory_semantic_undo",
+            request: {
+              mutationId: "original",
+              entity: "namespace",
+              reason: "Owner request",
+              expectedContent: "Private server-owned fact",
+              botId: "bound-bot",
+            },
+          },
+        ],
+        (request) => {
+          formatted.push(request);
+          return JSON.stringify(request);
+        },
+      ),
+    ).toThrow();
+    expect(formatted).toEqual([]);
+  });
+
+  it.each([
+    { kind: "save_memory", input: { content: "Reviewed fact", reason: "Owner request" } },
+    {
+      kind: "forget_memory",
+      input: {
+        id: "fact",
+        entity: "namespace",
+        expectedContent: "Reviewed fact",
+        reason: "Owner request",
+      },
+    },
+    {
+      kind: "memory_semantic_undo",
+      input: { mutationId: "original", id: "fact", entity: "namespace", reason: "Owner request" },
+    },
+  ])(
+    "gives $kind schema-valid model arguments while retaining its complete approved request",
+    ({ kind, input }) => {
+      const request = {
+        ...input,
+        botId: "bound-bot",
+        scope: "isolated",
+        provider: "bound-provider",
+        configurationRevision: "bound-revision",
+        ...(kind === "memory_semantic_undo"
+          ? { expectedContent: "Server-owned receipt content" }
+          : {}),
+      };
+      const effects = [{ kind, request }];
+      const continuation = buildApprovalContinuation(effects, JSON.stringify);
+      const call = continuation!.split("\n").at(-1)!;
+      expect(call).toMatch(new RegExp(`^${kind}: `));
+      expect(JSON.parse(call.slice(kind.length + 2))).toEqual(input);
+      expect(continuation).not.toContain("bound-bot");
+      expect(continuation).not.toContain("Server-owned receipt content");
+      const queue = createApprovedEffectReplayQueue(effects);
+      expect(
+        approvedReplayArgs(queue.take(kind), { id: "model-replacement" }, "__rakazoCatalogTool"),
+      ).toEqual(request);
+    },
+  );
+
   it.each([
     ["MCP", "install-mcp", "notes.write"],
     ["API", "install-api", "createContact"],

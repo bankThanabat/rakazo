@@ -41,6 +41,8 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
   }
 
   async publish(input: Parameters<NonNullable<CustomerRuntime["publish"]>>[0]) {
+    input.signal.throwIfAborted();
+    const publicationId = z.string().uuid().parse(input.publicationId);
     if (input.knowledgeFilterId) await this.knowledgeFilters(input.knowledgeFilterId, input.signal);
     // Use the deployed component's schema. Never submit source code supplied by a caller.
     const catalog = z
@@ -48,14 +50,14 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
       .parse(await this.call(this.config, "all", input.signal));
     const componentType = `ext:rakazo:${componentName}@extra`;
     const installed = catalog.rakazo?.[componentType];
-    if (!installed) throw new Error("Install the Rakazo customer component in Langflow");
+    if (!installed) throw new Error("Install the Deskazo customer component in Langflow");
     const component = z
       .object({ template: z.record(z.string(), z.unknown()) })
       .passthrough()
       .parse(installed);
     const field = z.object({ value: z.unknown().optional() }).passthrough();
     const protocol = field.parse(component.template.protocol_version);
-    if (protocol.value !== "1") throw new Error("Unsupported Rakazo customer component version");
+    if (protocol.value !== "1") throw new Error("Unsupported Deskazo customer component version");
     for (const name of [
       "instructions",
       "transcript",
@@ -70,10 +72,15 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
       ...component.template,
       instructions: { ...field.parse(component.template.instructions), value: input.instructions },
     };
+    input.signal.throwIfAborted();
+    await input.beforeDispatch?.();
+    input.signal.throwIfAborted();
     const result = z.object({ id: z.string().uuid() }).parse(
       await this.call(this.config, "flows/", input.signal, {
-        name: `Customer ${input.staffId} ${randomUUID()}`,
-        description: `Rakazo customer protocol 1; instructions ${instructionsHash(input.instructions)}`,
+        id: publicationId,
+        name: `Customer ${input.staffId} ${publicationId}`,
+        description: `Deskazo customer protocol 1; instructions ${instructionsHash(input.instructions)}`,
+        access_type: "PRIVATE",
         is_component: false,
         data: {
           nodes: [
@@ -88,7 +95,68 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
         },
       }),
     );
+    if (result.id !== publicationId)
+      throw new Error("Customer runtime returned a different publication identity");
     return `langflow:1:${result.id}:${instructionsHash(input.instructions)}`;
+  }
+
+  async identity(signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    try {
+      const user = z
+        .object({ id: z.string().uuid() })
+        .parse(await this.call(this.config, "users/whoami", signal));
+      return `langflow-user:${user.id}`;
+    } catch {
+      throw new Error("Customer runtime identity is unavailable");
+    }
+  }
+
+  private publicationRequest(id: string, method: "GET" | "DELETE", signal: AbortSignal) {
+    return this.request(`${this.config.baseUrl.replace(/\/$/, "")}/flows/${id}`, {
+      method,
+      redirect: "error",
+      signal,
+      headers: this.config.apiKey ? { "x-api-key": this.config.apiKey } : {},
+    });
+  }
+
+  async inspectPublication(
+    input: Parameters<NonNullable<CustomerRuntime["inspectPublication"]>>[0],
+  ): Promise<boolean> {
+    input.signal.throwIfAborted();
+    const id = z.string().uuid().parse(input.publicationId);
+    const response = await this.publicationRequest(id, "GET", input.signal);
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status === 404) return false;
+      throw new Error("Customer reply service is unavailable");
+    }
+    const body = await readBoundedText(response, 1_000_000);
+    if (body.truncated) throw new Error("Customer runtime response exceeded the size limit");
+    try {
+      z.object({
+        id: z.literal(id),
+        name: z.literal(`Customer ${input.staffId} ${id}`),
+        description: z.string().regex(/^Deskazo customer protocol 1; instructions [a-f0-9]{64}$/),
+      }).parse(JSON.parse(body.text));
+    } catch {
+      throw new Error("Customer publication ownership could not be verified");
+    }
+    return true;
+  }
+
+  async removePublication(
+    input: Parameters<NonNullable<CustomerRuntime["removePublication"]>>[0],
+  ): Promise<"removed" | "absent"> {
+    if (!(await this.inspectPublication(input))) return "absent";
+    await input.beforeRemove?.();
+    input.signal.throwIfAborted();
+    const removed = await this.publicationRequest(input.publicationId, "DELETE", input.signal);
+    await removed.body?.cancel().catch(() => undefined);
+    if (![200, 204, 404].includes(removed.status))
+      throw new Error("Customer reply service is unavailable");
+    return "removed";
   }
 
   private async knowledgeFilters(id: string, signal: AbortSignal) {
@@ -130,6 +198,7 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
   }
 
   async reply(input: Parameters<CustomerRuntime["reply"]>[0]): Promise<string> {
+    input.signal.throwIfAborted();
     const match = /^langflow:1:([a-f0-9-]{36}):([a-f0-9]{64})$/.exec(input.flowId);
     if (!match || match[2] !== instructionsHash(input.instructions))
       throw new Error("Republish customer behavior for the Langflow runtime");
@@ -144,8 +213,12 @@ export class LangflowCustomerRuntime implements CustomerRuntime {
       tweaks: {
         [nodeId]: {
           // Reassert the committed revision's instructions even if an operator edits a flow.
-          instructions: input.instructions,
-          transcript: JSON.stringify(input.messages),
+          instructions: [input.instructions, input.customerContext].filter(Boolean).join("\n\n"),
+          // LFX unescapes literal backslash-n in text inputs. Unicode escapes keep
+          // both real newlines and literal backslashes intact through that step.
+          transcript: JSON.stringify(input.messages).replace(/\\\\|\\n/g, (sequence) =>
+            sequence === "\\\\" ? "\\u005c" : "\\u000a",
+          ),
           execution_endpoint: input.executionContext.endpoint,
           execution_token: input.executionContext.token,
           model_base: input.model.baseUrl,

@@ -271,13 +271,58 @@ For provider configuration and health checks, see the [provider setup guide](./s
 
 ## Backup
 
+For installations with the managed customer stack, use the
+[coordinated customer data backup](self-host/customer-v1.md#coordinated-customer-data-backup)
+to capture its runtime and search state alongside the core data described here.
+
+Use the same checkout, Compose files, environment file and project name that created
+this deployment. The shared command requires Python 3.11+, Docker Compose and a Unix
+host, including macOS or WSL. The standard Debian-based PostgreSQL image provides the
+archive tools. Run it with access to Docker and the deployment's private `.env`.
+
 ```bash
-./scripts/backup.sh
+python3 scripts/deployment-backup.py backup \
+  --project rakazo --compose infra/compose/docker-compose.prod.yml \
+  --env-file .env --output backups/example-snapshot
 ```
 
-This dumps Postgres (`pg_dump`) and archives `data/` into `backups/<stamp>/`. A missing
-`data/` produces an empty archive; database or archive errors fail the backup. Discard the
-output directory of any failed run.
+For development or published-image layouts, substitute their Compose file. Repeat
+`--compose` for every overlay, in deployment order. Choose a new output directory
+outside application data for each run. Never run backup alongside an upgrade, another
+Docker deployment or a host process writing the database or application files. Keep
+external database clients disconnected for the whole operation. The command rejects
+other connected database clients and unrelated containers with writable data mounts,
+but cannot prevent a host process or a new external client from writing later.
+
+Backup briefly stops this project's application containers and managed computers that
+mount its application data. Postgres stays running. The command saves a custom-format
+database dump, `DATA_DIR`, the original `.env`, Compose configuration and container
+image identities. It checks the dump, archive paths and file hashes before publishing
+the snapshot directory. It then resumes only previously running containers and waits
+for their declared health checks. A restart failure reports that the snapshot is valid
+but service recovery needs attention. Services without health checks are checked for
+running state, not application readiness.
+
+Snapshots contain credentials and private data. Directories use mode `0700`; files use
+`0600`. Keep an encrypted copy off-host in trusted access-controlled storage. The
+manifest hashes detect accidental corruption; they do not authenticate the snapshot.
+The archive preserves symlinks without following them. Targets outside `DATA_DIR` are
+not included and need review before starting a restored deployment. Hosted sandbox
+disks, external provider databases, container images, host files and TLS certificates
+need separate recovery plans. A changed database or file archive fails the operation;
+there is no allowance for tar's live-file warnings.
+
+Each Docker command has a bounded timeout, normally five minutes. Large deployments
+must prove their restore time and storage capacity before relying on these snapshots.
+An ordinary failure resumes stopped services and removes the partial snapshot. Host
+loss or a forced kill can leave services stopped and a private `.snapshot-*` directory.
+After confirming no snapshot process is active, inspect service status, remove the
+incomplete directory and restart the services that were previously running. Never
+restore a partial directory. Do not edit the environment or Compose files during a run.
+
+The older `scripts/backup.sh` and `scripts/restore.sh` retain their development-only
+format for existing backups. They do not provide these quiescence or configuration
+recovery guarantees. Use the shared command for new deployment snapshots.
 
 ## Public single-VM deployment
 
@@ -369,37 +414,155 @@ when taking upstream security updates; changing only the visible major tag does 
 content while a digest is present.
 
 For the single-VM production layout, install `infra/compose/backup-prod.sh` as
-`/usr/local/sbin/rakazo-backup` and enable the supplied `rakazo-backup.timer`. It creates a verified
-Postgres custom-format dump plus an application-data archive under `/var/backups/rakazo`, with mode
-`0600` and seven-day rotation. These local snapshots help with operator mistakes but are not a
-substitute for an encrypted off-host backup or provider snapshot.
+`/usr/local/sbin/rakazo-backup` and enable the supplied `rakazo-backup.timer`. The wrapper
+calls `scripts/deployment-backup.py` from the selected checkout, so that checkout must
+contain the new command and Python 3.11+ must be installed. Schedule a maintenance
+window: every run briefly stops application services. Successful snapshots live under
+`/var/backups/rakazo`; timestamp directories older than six days rotate only after a
+new snapshot succeeds. Legacy snapshots remain in their original format and are not
+accepted by the new restore command.
 
-The scheduled backup uses `/srv/rakazo` by default. For another deployment directory, set
-`RAKAZO_DEPLOY_DIR=/absolute/path/to/checkout` in a root-owned `/etc/rakazo/backup.env`
-(mode `0600`). The service reads this optional file on each run; the script uses the selected
-checkout's `.env` and production Compose file. If the stack was started with a custom `-p`,
-set the same `COMPOSE_PROJECT_NAME` in that file. For a manual run, export these variables instead.
-When updating an existing backup installation, reinstall both the script and service unit,
-then run `systemctl daemon-reload`.
+The scheduled backup uses `/srv/rakazo` by default. For another deployment directory,
+set `RAKAZO_DEPLOY_DIR=/absolute/path/to/checkout` in a root-owned
+`/etc/rakazo/backup.env` with mode `0600`. Set `COMPOSE_PROJECT_NAME` there if the stack
+uses a custom project name. The unit permits writes under `/srv/rakazo` for the shared
+snapshot lock. For a custom checkout, add a systemd override so the command can create
+its lock beside `.env`:
+
+```ini
+[Service]
+ReadWritePaths=/absolute/path/to/checkout
+```
+
+Reinstall the script and service unit when updating an existing installation, then
+run `systemctl daemon-reload`. The wrapper supports the production Compose file;
+invoke the shared command directly when the deployment uses overlays.
+
+To check the installed service and timer without changing host systemd units, use
+the disposable Linux verifier below. It builds a test-only image, starts a
+privileged container with a private cgroup namespace and access to the local
+Docker socket, and creates uniquely named Compose projects with synthetic data.
+It requires Linux containers and a cached `postgres:16` image. It mounts no host
+checkout, credentials or backup directory and removes its containers and volumes
+on exit. The test image remains cached.
+
+```bash
+docker build -f infra/systemd/verification.Dockerfile -t rakazo-systemd-check:local infra/systemd
+python3 scripts/verify-deployment-backup.py --systemd-image rakazo-systemd-check:local
+```
+
+The verifier runs the supplied backup service at its default path, checks that a
+custom path without a writable override fails while preserving old backups, then
+runs a calendar-triggered backup with the override. It accelerates the timer for
+the test and checks the production schedule separately. It restores that snapshot
+into fresh volumes and verifies database values, private files, ownership and
+links. Its `docker.service` checks the existing external daemon, so this does not
+test Docker startup after a host reboot or persistent timer catch-up. The same
+check runs in the release workflow for pull requests and manual workflow runs.
 
 ## Restore
 
-For backups created by `scripts/backup.sh`, use an empty `rakazo` database in the development
-Compose stack, with application services stopped. The SQL import runs in one transaction and
-stops on the first error, including conflicts with existing tables. Files are restored and
-application services started only after the import succeeds. This script does not consume the
-production snapshot's custom-format `rakazo.dump` or `appdata.tgz`.
+Restore only an operator-created snapshot from trusted storage. A PostgreSQL dump can
+execute SQL as the database owner, and restored application files retain their original
+contents and links. Checksums and archive path checks are not a trust boundary.
+
+Recover the same release checkout and exact container images recorded in the snapshot
+before upgrading. The command does not pull images. Copy `environment.env` back to the
+private `.env` with mode `0600`, and use the matching Compose files and overlays. The
+target's environment and complete resolved service definitions must match the snapshot,
+including commands, mounts, networks and provider credentials. Bind mounts therefore
+need the original host paths. Change host settings only after recovery and review.
+Use a fresh project with empty PostgreSQL and application-data volumes. Create all its
+containers without starting application services, then start only Postgres:
 
 ```bash
-./scripts/restore.sh backups/<stamp>
+docker compose -p recovery --env-file .env -f infra/compose/docker-compose.prod.yml \
+  create --pull never
+docker compose -p recovery --env-file .env -f infra/compose/docker-compose.prod.yml \
+  up -d --wait --pull never postgres
+python3 scripts/deployment-backup.py restore \
+  --project recovery --compose infra/compose/docker-compose.prod.yml \
+  --env-file .env --source backups/example-snapshot
 ```
 
+The command rejects changed images or configuration, corrupt files and nonempty
+targets before restoring. It preserves numeric file owners and permissions. SQL
+restore runs in a single transaction. Application services remain stopped after
+success or failure so restored pending work cannot contact providers automatically.
+Review scheduled and pending work, provider destinations and symlink targets before
+starting the restored services. First start an isolated recovery deployment with
+external provider access disabled and verify account access, files and connected
+credentials before returning it to service.
+
+The database and file restore are not one transaction. If SQL restoration fails after
+file extraction, files remain in the stopped target and retry is rejected. Keep that
+target for inspection and use another fresh project with empty volumes for the next
+attempt. Do not delete or clear the source deployment to make room for a retry.
+
+Verify a copied snapshot without Docker using
+`python3 scripts/deployment-backup.py verify backups/example-snapshot`.
+Run `python3 scripts/verify-deployment-backup.py` to exercise recovery using two
+uniquely named disposable projects, a cached `postgres:16` image and synthetic data.
+It checks database rows, private files, ownership, modes, links, rejection guards and
+SQL rollback. It does not prove product login, provider reconnection or upgrade
+compatibility. The script cleans up only its own containers and volumes.
+
+For application-level recovery, build the current application and run:
+
+```bash
+docker build -f infra/compose/Dockerfile -t rakazo/v1-recovery-check:local .
+python3 scripts/verify-product-recovery.py
+```
+
+This check uses the cached application and PostgreSQL images in disposable stacks
+with no published ports or external network access. It creates a synthetic account,
+encrypted credential, bot and conversation, takes a snapshot, and injects a migration
+that commits a data change before failing. Recovery into fresh volumes checks the
+original session, password login, credential decryption, conversation, instructions
+and private file. It does not send provider requests or prove compatibility between
+published releases. Use `--image` to select another locally cached application image.
+
+To check a specific earlier application against a candidate, supply both cached
+immutable image IDs:
+
+```bash
+python3 scripts/verify-product-recovery.py \
+  --previous-image sha256:<earlier-image-id> \
+  --image sha256:<candidate-image-id>
+```
+
+This mode seeds account and conversation data using the earlier image, stops its
+writers, switches both API and worker to the candidate, and applies new migrations.
+It checks that the original session, password, encrypted credential, instructions,
+conversation and private file still work. It then snapshots the upgraded state
+and runs the existing injected-failure and fresh-volume recovery checks. That
+snapshot proves recovery of the upgraded state; it does not prove a downgrade.
+
+Both images run their installed Node, Prisma and application entry points directly
+in this mode. This avoids a registry bootstrap required by some older images, but
+does not verify their normal package-manager startup. The original encryption and
+authentication configuration stays fixed. The fixture limits API to 1.5 GiB, worker
+to 768 MiB and PostgreSQL to 256 MiB, with no additional swap. This check covers
+one selected image pair and synthetic records, not every release, large databases,
+external provider effects or the updater's deployment flow. Run `--updater-image`
+checks separately.
+
+For old development backups only, `./scripts/restore.sh backups/<stamp>` consumes
+`rakazo.sql` and `homes.tgz`. It does not consume legacy production `rakazo.dump`
+archives or the new deployment snapshot format. Keep the corresponding historical
+recovery procedure when retaining those backups.
+
 ## Upgrade
+
+Take and verify a deployment snapshot before changing the checkout or image tag.
+Retain its exact application images and matching configuration. Stop the API and
+worker together before a migration that changes their shared schema.
 
 A Compose deployment on a published release tag upgrades by moving that tag:
 
 ```bash
 docker compose --env-file .env -f infra/compose/docker-compose.prod.yml pull api worker web
+docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web
 docker compose --env-file .env -f infra/compose/docker-compose.prod.yml \
   up -d --wait --pull never api worker web
 ```
@@ -410,22 +573,75 @@ the checkout instead:
 ```bash
 git pull
 GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml \
-  up -d --wait --pull never --build api worker web
+  build api worker web
+docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web
+docker compose --env-file .env -f infra/compose/docker-compose.prod.yml \
+  up -d --wait --pull never api worker web
 ```
 
 `up --wait` does not report success until the new API is healthy and the worker and web containers
 are running. The API's start command runs `prisma migrate deploy` before it serves, so migration
-failure keeps health red. A failed CLI recreate does not auto-roll back; recover with the previous
-`RAKAZO_IMAGE_TAG` (or rebuild `local`) and `up -d --wait --pull never`.
+failure keeps health red. A failed CLI recreate does not auto-roll back. If no migration or
+data change ran, recover with the previous `RAKAZO_IMAGE_TAG` and `up -d --wait --pull never`.
+Changing images does not reverse migrations or clear Prisma's failed-migration state.
+After a failed migration, keep the affected stack stopped and follow [Restore](#restore)
+using the pre-update snapshot, matching images and fresh volumes. Do not resume a worker
+against a partly migrated database. Reconcile external provider outcomes since the snapshot
+before enabling consequential work; restoring local data cannot undo provider actions.
 
 The updater sidecar has its own image and tag so an update never recreates the process performing
 it. Move it deliberately by setting `RAKAZO_UPDATER_IMAGE_TAG` to the full `sha-<commit>` tag, then
 running `docker compose … pull updater && docker compose … up -d --wait --pull never updater`.
-Sidecar `/apply` and `/rollback` recover a failed recreate by redeploying the previously cached
-image when possible; if that also fails, they report a possible mixed-version runtime.
+Sidecar `/apply` and `/rollback` attempt a cached-image recovery only when database
+migration history is verified unchanged and the prior image's migration names and
+SQL checksums match the completed database history. An unfinished migration,
+changed history, a different database identity, or an unreadable probe keeps the
+application services stopped for manual recovery. A completed migration followed
+by a startup failure also prevents automatic fallback. An explicit `/rollback`
+checks the selected image before stopping services, then checks again after
+shutdown. It refuses a rollback across different migration histories. Before any
+update starts the target image, its migration SQL must contain every applied
+migration unchanged. New pending migrations are allowed on forward updates.
+
+The checks run a read-only Node/pg probe in the selected cached API image with its
+configured database credentials. They do not run application startup or migrations.
+Only hashes of non-secret database identity and migration metadata are recorded;
+credentials and credential hashes are excluded. Keep every external database writer
+stopped throughout the update. Matching migration history does not prove compatibility
+of application data changes made outside versioned migrations.
+The sidecar prepares images before stopping all configured update services, including
+unchanged services. A failed stop prevents startup of the new version. After a failed
+recreate, it stops the new services before attempting the prior image; if that stop
+fails, image recovery is skipped and manual recovery is required. These stops prevent
+old workers from running during API migrations. Include every application database
+writer in the update service list and stop external writers separately. Compose
+service renames or removals require a planned manual cutover.
+
+`python3 scripts/verify-upgrade-ordering.py --image rakazo/v1-recovery-check:local`
+checks the actual update plan against an unchanged worker in an isolated Docker stack.
+It uses the current core sources with the cached image's runtime. It checks startup
+ordering, not schema compatibility or recovery after an irreversible migration.
+
+To exercise the built updater against synthetic failed migrations, completed
+migrations followed by startup failure, and startup failure without migrations:
+
+```bash
+docker build -f infra/updater/Dockerfile -t rakazo/v1-updater-check:local .
+python3 scripts/verify-product-recovery.py --updater-image rakazo/v1-updater-check:local
+python3 scripts/verify-product-recovery.py --updater-image rakazo/v1-updater-check:local --failure completed-migration
+python3 scripts/verify-product-recovery.py --updater-image rakazo/v1-updater-check:local --failure startup-only
+```
+
+Build the application image as described under [Restore](#restore) first. These
+checks use unique disposable projects and fake credentials. The updater has the
+Docker socket, as in its production deployment. Release discovery and registry
+download are replaced with verified cached fixture images; migration probes,
+shutdown, startup, image recovery and snapshot restoration use their real commands.
+They do not validate compatibility between arbitrary published releases.
 
 Source checkouts (not Compose) still upgrade the old way: pull, rebuild with
-`GIT_SHA=$(git rev-parse HEAD)`, run `pnpm --filter @rakazo/db migrate`, then restart API and worker.
+`GIT_SHA=$(git rev-parse HEAD)`, stop the API and worker, run `pnpm --filter @rakazo/db migrate`,
+then restart API and worker.
 Product contracts stay compatible across cloud and self-hosted.
 
 ### Space privacy-boundary migration

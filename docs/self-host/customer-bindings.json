@@ -23,9 +23,17 @@
         "threadId": [["source", "groupId"], ["source", "roomId"], ["source", "userId"]],
         "customerId": ["source", "userId"],
         "body": ["message", "text"],
-        "timestamp": ["timestamp"]
+        "timestamp": ["timestamp"],
+        "providerMessageId": ["message", "id"]
       },
-      "nonText": "handoff"
+      "nonText": "handoff",
+      "withdrawal": {
+        "event": {
+          "path": ["type"],
+          "equals": "unsend"
+        },
+        "messageId": ["unsend", "messageId"]
+      }
     },
     "send": {
       "action": "line.send_push_text",

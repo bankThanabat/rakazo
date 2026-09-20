@@ -1,6 +1,7 @@
 import type { TransactionalEmail, TransactionalEmailProvider } from "@rakazo/adapter-kit";
 import { emailAllowed, isMessagingEmail, parseAllowlist, signupPolicyFromEnv } from "@rakazo/core";
-import { bootstrapUserSpace, type PrismaClient } from "@rakazo/db";
+import type { PrismaClient } from "@rakazo/db";
+import { bootstrapUserSpace, requestAccountDeletion } from "@rakazo/db";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { APIError, createAuthMiddleware } from "better-auth/api";
@@ -15,7 +16,7 @@ export interface AuthEnv {
   extraOrigins?: string[];
   email?: TransactionalEmailProvider;
   onEmailError?: (error: unknown) => void;
-  beforeDeleteUser?: (userId: string) => Promise<void>;
+  onDeletionRequested?: (userId: string) => Promise<void>;
 }
 
 export async function resolveSignupPolicy(
@@ -37,7 +38,7 @@ export async function resolveSignupPolicy(
 
 export function createAuth(prisma: PrismaClient, env: AuthEnv) {
   return betterAuth({
-    appName: "Rakazo",
+    appName: "Deskazo",
     secret: env.secret,
     baseURL: env.baseURL,
     trustedOrigins: buildTrustedOrigins(env),
@@ -76,36 +77,6 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
     user: {
       deleteUser: {
         enabled: true,
-        beforeDelete: async (user) => {
-          await env.beforeDeleteUser?.(user.id);
-          const memberships = await prisma.member.findMany({
-            where: { userId: user.id },
-            select: {
-              organizationId: true,
-              organization: { select: { members: { select: { userId: true } } } },
-            },
-          });
-          const personalOrganizationIds = memberships
-            .filter(({ organization }) =>
-              organization.members.every((member) => member.userId === user.id),
-            )
-            .map(({ organizationId }) => organizationId);
-
-          await prisma.$transaction([
-            prisma.deploymentSettings.updateMany({
-              where: { ownerUserId: user.id },
-              data: { ownerUserId: null },
-            }),
-            // Messaging identities are deliberately FK-free, so clear them
-            // here or the unique address would point at a deleted bot forever.
-            prisma.messagingIdentity.deleteMany({
-              where: { userId: user.id },
-            }),
-            prisma.organization.deleteMany({
-              where: { id: { in: personalOrganizationIds } },
-            }),
-          ]);
-        },
       },
     },
     plugins: [
@@ -151,11 +122,24 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
                 : {}),
               internalAdapter: {
                 ...ctx.context.internalAdapter,
+                // Better Auth verifies the password/fresh session before invoking this.
+                // Keep user credentials until the durable cleanup worker finishes.
+                ...(["/delete-user", "/delete-user/callback"].includes(ctx.path)
+                  ? {
+                      deleteUser: async (userId: string) => {
+                        await requestAccountDeletion(prisma, userId);
+                        // Queue failure cannot undo an accepted request. Reconciliation retries it.
+                        await env.onDeletionRequested?.(userId).catch(() => undefined);
+                      },
+                    }
+                  : {}),
                 // Authorize at lookup: bearer conversion happens after before
                 // hooks, and auth mutations also read sessions through here.
                 findSession: async (token: string) => {
                   const session = await ctx.context.internalAdapter.findSession(token);
                   if (!session || isMessagingEmail(session.user.email)) return null;
+                  if (await prisma.accountDeletion.count({ where: { userId: session.user.id } }))
+                    return null;
                   if (session.user.emailVerified) return session;
                   policy ??= await resolveSignupPolicy(prisma, env);
                   return policy.allowlist.length === 0 ? session : null;
@@ -172,6 +156,8 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
           before: async (session, ctx) => {
             // The auth adapter can still be inside the signup transaction.
             const user = await ctx?.context.internalAdapter.findUserById(session.userId);
+            if (await prisma.accountDeletion.count({ where: { userId: session.userId } }))
+              throw new APIError("FORBIDDEN", { message: "Account deletion requested" });
             const policy = await resolveSignupPolicy(prisma, env);
             if (
               !user ||
@@ -215,9 +201,9 @@ export function createAuth(prisma: PrismaClient, env: AuthEnv) {
 export function verificationEmail(email: string, url: string): TransactionalEmail {
   return {
     to: email,
-    subject: "Verify your Rakazo email",
-    text: `Verify your email, then return to Rakazo to sign in:\n\n${url}\n\nThis link expires in one hour. If you did not register, ignore this email.`,
-    html: `<p><a href="${escapeHtml(url)}">Verify email</a>, then return to Rakazo to sign in.</p><p>This link expires in one hour. If you did not register, ignore this email.</p>`,
+    subject: "Verify your Deskazo email",
+    text: `Verify your email, then return to Deskazo to sign in:\n\n${url}\n\nThis link expires in one hour. If you did not register, ignore this email.`,
+    html: `<p><a href="${escapeHtml(url)}">Verify email</a>, then return to Deskazo to sign in.</p><p>This link expires in one hour. If you did not register, ignore this email.</p>`,
   };
 }
 
@@ -230,16 +216,16 @@ export function passwordResetEmail(
   const safeUrl = escapeHtml(resetUrl);
   return {
     to: user.email,
-    subject: "Reset your Rakazo password",
+    subject: "Reset your Deskazo password",
     text: [
       `Hi ${name},`,
       "",
-      "Reset your Rakazo password using this link:",
+      "Reset your Deskazo password using this link:",
       resetUrl,
       "",
       "This link expires in one hour. If you did not request this, you can ignore this email.",
     ].join("\n"),
-    html: `<p>Hi ${safeName},</p><p>Reset your Rakazo password:</p><p><a href="${safeUrl}">Reset password</a></p><p>This link expires in one hour. If you did not request this, you can ignore this email.</p>`,
+    html: `<p>Hi ${safeName},</p><p>Reset your Deskazo password:</p><p><a href="${safeUrl}">Reset password</a></p><p>This link expires in one hour. If you did not request this, you can ignore this email.</p>`,
   };
 }
 

@@ -123,7 +123,7 @@ async def customer_reply(
             max_tokens=8192,
             streaming=False,
         )
-        # Uses Langflow's LangChain agent engine; no Rakazo staff agent or persisted memory.
+        # Uses Langflow's LangChain agent engine; no Deskazo staff agent or persisted memory.
         agent = create_agent(
             model=model,
             tools=tools,
@@ -147,9 +147,9 @@ async def customer_reply(
 
 
 class RakazoCustomerAgent(Component):
-    display_name = "Rakazo customer agent"
+    display_name = "Deskazo customer agent"
     description = (
-        "Run an approved customer turn with scoped Rakazo tools and model access."
+        "Run an approved customer turn with scoped Deskazo tools and model access."
     )
     name = "RakazoCustomerAgent"
     inputs: ClassVar[list] = [

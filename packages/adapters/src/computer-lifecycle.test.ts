@@ -33,6 +33,8 @@ const context = {
   signal: new AbortController().signal,
 } satisfies AdapterContext;
 
+vi.mock("./computer-provisions.js", () => import("./computer-provisions.test-support.js"));
+
 describe("computer provisioning", () => {
   it("stops a provider when archive invalidates its boot claim", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-provision-race-"));
@@ -850,8 +852,14 @@ describe("computer provisioning", () => {
         } else {
           await expect(result).rejects.toBe(failure);
         }
-        expect(sandbox.releaseScreen).toHaveBeenCalledExactlyOnceWith(ref, context);
-        expect(sandbox.destroy).toHaveBeenCalledExactlyOnceWith(ref, context);
+        expect(sandbox.releaseScreen).toHaveBeenCalledExactlyOnceWith(ref, {
+          ...context,
+          signal: expect.any(AbortSignal),
+        });
+        expect(sandbox.destroy).toHaveBeenCalledExactlyOnceWith(ref, {
+          ...context,
+          signal: expect.any(AbortSignal),
+        });
         expect(sandbox.stop).not.toHaveBeenCalled();
         expect(prisma.computer.updateMany).toHaveBeenLastCalledWith({
           where: {
@@ -1070,8 +1078,14 @@ describe("computer provisioning", () => {
         ),
       ).rejects.toThrow("provider preparation failed");
       expect(prepare).toHaveBeenCalledWith(ref, context);
-      expect(releaseScreen).toHaveBeenCalledWith(ref, context);
-      expect(cleanup === "destroy" ? destroy : stop).toHaveBeenCalledWith(ref, context);
+      expect(releaseScreen).toHaveBeenCalledWith(ref, {
+        ...context,
+        signal: expect.any(AbortSignal),
+      });
+      expect(cleanup === "destroy" ? destroy : stop).toHaveBeenCalledWith(ref, {
+        ...context,
+        signal: expect.any(AbortSignal),
+      });
       expect(cleanup === "destroy" ? stop : destroy).not.toHaveBeenCalled();
     } finally {
       await rm(dataDir, { recursive: true, force: true });
@@ -1135,8 +1149,11 @@ describe("computer provisioning", () => {
         ),
       ).rejects.toThrow("Computer is busy");
       expect(sandbox.execute).toHaveBeenCalled();
-      expect(releaseScreen).toHaveBeenCalledWith(ref, context);
-      expect(stop).toHaveBeenCalledWith(ref, context);
+      expect(releaseScreen).toHaveBeenCalledWith(ref, {
+        ...context,
+        signal: expect.any(AbortSignal),
+      });
+      expect(stop).toHaveBeenCalledWith(ref, { ...context, signal: expect.any(AbortSignal) });
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

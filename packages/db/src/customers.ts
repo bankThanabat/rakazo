@@ -1,5 +1,6 @@
 import type { Actor, CustomerConversation, CustomerSnapshot } from "@rakazo/contracts";
 import { CustomerConversationSchema, CustomerSnapshotSchema } from "@rakazo/contracts";
+import { CUSTOMER_PREVIEW_PROVIDER } from "@rakazo/core";
 import type {
   CustomerChannel as ChannelRow,
   CustomerConversation as ConversationRow,
@@ -10,6 +11,7 @@ import { IsolationError } from "./scope.js";
 
 export const customerChannelAccessWhere = (actor: Pick<Actor, "userId" | "spaceId">) => ({
   spaceId: actor.spaceId,
+  provider: { not: CUSTOMER_PREVIEW_PROVIDER },
   OR: [{ userId: actor.userId }, { shared: true }],
 });
 const customerScope = (actor: Pick<Actor, "userId" | "spaceId">) => ({
@@ -45,6 +47,7 @@ export function customerConversationDto(
     draft: row.draftForSeq === row.nextSeq ? row.draftText : null,
     preview: row.messages.at(-1)?.body ?? "",
     updatedAt: row.updatedAt.toISOString(),
+    acknowledgedAt: row.acknowledgedAt?.toISOString() ?? null,
   });
 }
 
@@ -126,6 +129,8 @@ export function createCustomerRepos(prisma: PrismaClient) {
         where: { id, ...customerScope(actor) },
         include: {
           channel: true,
+          acknowledgements: { orderBy: { createdAt: "desc" }, take: 20 },
+          alertDeliveries: { orderBy: { createdAt: "desc" }, take: 30 },
           messages: {
             where: before ? { seq: { lt: before } } : {},
             orderBy: { seq: "desc" },
@@ -136,18 +141,73 @@ export function createCustomerRepos(prisma: PrismaClient) {
       });
       if (!row) throw new IsolationError();
       row.messages.reverse();
+      const acknowledgementActors = new Map(
+        (
+          await prisma.user.findMany({
+            where: { id: { in: row.acknowledgements.map((ack) => ack.userId) } },
+            select: { id: true, name: true },
+          })
+        ).map((user) => [user.id, user.name]),
+      );
+      const currentDeliveries =
+        row.needsHuman && row.state === "open" && !row.acknowledgedAt
+          ? row.alertDeliveries.filter((delivery) => delivery.attentionId === row.attentionId)
+          : [];
       return CustomerSnapshotSchema.parse({
+        notificationIssue: currentDeliveries.some(
+          (delivery) =>
+            delivery.status === "uncertain" ||
+            (delivery.status === "sending" &&
+              delivery.leaseUntil &&
+              delivery.leaseUntil <= new Date()),
+        )
+          ? "uncertain"
+          : currentDeliveries.some((delivery) => delivery.status === "failed")
+            ? "failed"
+            : null,
+        guidance: (
+          await prisma.customerGuidance.findMany({
+            where: { conversationId: id },
+            orderBy: { createdAt: "desc" },
+            take: 20,
+          })
+        ).map((g) => ({ ...g, createdAt: g.createdAt.toISOString() })),
         conversation: customerConversationDto(row),
-        messages: row.messages.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+        messages: row.messages
+          .filter((m) => m.status !== "withdrawn")
+          .map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
         before: row.messages.length === 200 ? row.messages[0]!.seq : null,
-        actions: row.messages.flatMap((m) =>
-          m.toolCalls.map((call) => ({
-            name: call.name || "Action",
-            status: call.status,
-            outcome: call.result === null ? null : JSON.stringify(call.result).slice(0, 4000),
-            createdAt: call.createdAt.toISOString(),
+        actions: [
+          ...row.alertDeliveries.map((delivery) => ({
+            name: "staff_notification",
+            status: delivery.status,
+            outcome: JSON.stringify({
+              stage: ["initial", "reminder", "owner"][delivery.stage],
+              provider: delivery.provider,
+              attempts: delivery.attempts,
+              retryScheduled: delivery.retryable,
+            }),
+            createdAt: delivery.updatedAt.toISOString(),
           })),
-        ),
+          ...row.acknowledgements.map((ack) => ({
+            name: "staff_acknowledged",
+            status: "completed",
+            outcome: JSON.stringify({
+              acknowledgedBy: acknowledgementActors.get(ack.userId) ?? "Former member",
+              conversationVersion: ack.generation,
+              customerSequence: ack.customerSeq,
+            }),
+            createdAt: ack.createdAt.toISOString(),
+          })),
+          ...row.messages.flatMap((m) =>
+            m.toolCalls.map((call) => ({
+              name: call.name || "Action",
+              status: call.status,
+              outcome: call.result === null ? null : JSON.stringify(call.result).slice(0, 4000),
+              createdAt: call.createdAt.toISOString(),
+            })),
+          ),
+        ].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
       });
     },
   };

@@ -1,22 +1,54 @@
 import type { MessageBlock } from "@rakazo/contracts";
-import { redactSecrets } from "@rakazo/core";
+import { redactSecrets, toolRequiresExplicitApproval } from "@rakazo/core";
+import { DOCUMENT_REVIEW_TOOLS } from "./approval-effect.js";
 
 const MAX_APPROVAL_SUMMARY_LENGTH = 500;
 const MAX_APPROVAL_DETAIL_LENGTH = 4_000;
+// A semantic fact can contain 10,000 characters. JSON escaping can expand each
+// character to six characters; leave room for the bound destination and reason too.
+const MAX_SEMANTIC_APPROVAL_DETAIL_LENGTH = 100_000;
+// Document reviews can include two 100,000-character versions plus the learning
+// proposal. Allow worst-case JSON escaping while retaining a bounded stored card.
+const MAX_DOCUMENT_APPROVAL_DETAIL_LENGTH = 1_500_000;
+const SEMANTIC_REVIEW_TOOLS = new Set(["memory_semantic_undo", "forget_memory", "save_memory"]);
+const MEMORY_REVIEW_TOOLS = new Set([...SEMANTIC_REVIEW_TOOLS, "memory_undo", "memory_restore"]);
 
 export function buildApprovalAskBlock(
   effectId: string,
   toolName: string,
   args: Record<string, unknown>,
   secrets: string[],
-  options?: { reviewReason?: string },
+  options?: { reviewReason?: string; allowAlways?: boolean },
 ): MessageBlock {
   const summary = describeApprovalAction(toolName, args);
   const detail = formatApprovalDetail(toolName, args, options?.reviewReason);
   const safeDetail = detail ? redactSecrets(detail, secrets) : undefined;
+  const maxDetailLength = DOCUMENT_REVIEW_TOOLS.has(toolName)
+    ? MAX_DOCUMENT_APPROVAL_DETAIL_LENGTH
+    : SEMANTIC_REVIEW_TOOLS.has(toolName)
+      ? MAX_SEMANTIC_APPROVAL_DETAIL_LENGTH
+      : MAX_APPROVAL_DETAIL_LENGTH;
+  // Consequential payloads must be reviewable in full.
+  const cannotReview =
+    (toolName.startsWith("customer_purchase_") ||
+      toolName.startsWith("customer_alert_line_") ||
+      toolName === "customer_assessment" ||
+      toolName === "customer_learning_decide" ||
+      MEMORY_REVIEW_TOOLS.has(toolName) ||
+      toolName.startsWith("skill_")) &&
+    (safeDetail !== detail ||
+      Math.max(detail?.length ?? 0, safeDetail?.length ?? 0) > maxDetailLength);
   return {
     kind: "ask",
     approvalEffectId: effectId,
+    ...(!cannotReview && toolName === "customer_learning_decide" && detail
+      ? {
+          approvalRequest: {
+            tool: toolName,
+            offset: detail.length - JSON.stringify(args, null, 2).length,
+          },
+        }
+      : {}),
     text: truncate(
       redactSecrets(
         toolName === "create_space" ? `${summary}?` : `Review before ${summary}`,
@@ -24,23 +56,41 @@ export function buildApprovalAskBlock(
       ),
       MAX_APPROVAL_SUMMARY_LENGTH,
     ),
-    detail: safeDetail ? truncate(safeDetail, MAX_APPROVAL_DETAIL_LENGTH) : undefined,
+    detail: cannotReview
+      ? toolName === "customer_learning_decide"
+        ? "Learning change details cannot be shown in full."
+        : toolName.startsWith("skill_")
+          ? "Skill change details cannot be shown in full. Edit the skill directly in settings."
+          : MEMORY_REVIEW_TOOLS.has(toolName)
+            ? "Memory change details cannot be shown in full."
+            : toolName.startsWith("customer_alert_line_")
+              ? "Alert destination details cannot be shown in full."
+              : toolName === "customer_assessment"
+                ? "Assessment settings cannot be shown in full."
+                : "Purchase details cannot be shown in full. Use the merchant checkout."
+      : safeDetail
+        ? truncate(safeDetail, maxDetailLength)
+        : undefined,
     status: "pending",
-    actions:
-      toolName === "create_space"
+    actions: cannotReview
+      ? [{ id: "deny", label: "Deny" }]
+      : toolName === "create_space"
         ? [
             { id: "allow", label: "Create space", outcome: "created" },
             { id: "deny", label: "Cancel", outcome: "cancelled" },
           ]
         : [
             { id: "allow", label: "Allow once" },
-            { id: "always", label: "Always allow this tool" },
+            ...((options?.allowAlways ?? !toolRequiresExplicitApproval(toolName))
+              ? [{ id: "always", label: "Always allow this tool" }]
+              : []),
             { id: "deny", label: "Deny" },
           ],
   };
 }
 
 function describeApprovalAction(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "customer_initialize") return "preparing customer replies";
   if (toolName === "destination.write") {
     const collection = args.collection ? String(args.collection) : "records";
     const title = args.title ? ` "${String(args.title)}"` : "";
@@ -66,6 +116,20 @@ function formatApprovalDetail(
   const lines: string[] = [];
   if (reviewReason?.trim()) {
     lines.push(reviewReason.trim().replace(/\u2014|\u2013/g, "-"));
+  }
+  if (toolName === "customer_initialize") {
+    lines.push(
+      "Prepare basic customer instructions with this staff agent's selected model. Existing setup is kept. Enabling customer replies is a separate step.",
+    );
+    return lines.join("\n");
+  }
+  if (
+    toolName.startsWith("customer_") ||
+    MEMORY_REVIEW_TOOLS.has(toolName) ||
+    toolName.startsWith("skill_")
+  ) {
+    lines.push(JSON.stringify(args, null, 2));
+    return lines.join("\n");
   }
   if (toolName === "create_space") {
     lines.push(

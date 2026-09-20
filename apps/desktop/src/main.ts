@@ -22,6 +22,7 @@ import {
 } from "./auto-update.js";
 import { openBrowserAuth } from "./browser-auth.js";
 import { DOCKER_INSTALL_LINKS, isDesktopSetupLink, runDocker } from "./docker-cli.js";
+import { configureDesktopIdentity } from "./identity.js";
 import { requestLocalSettings } from "./local-settings.js";
 import {
   LocalStackController,
@@ -64,6 +65,7 @@ import {
   warmWindowTtlMs,
 } from "./window-options.js";
 
+configureDesktopIdentity(app);
 const PERFORMANCE_USER_DATA = process.env.RAKAZO_PERFORMANCE_USER_DATA;
 /** Test hook: where the app-managed stack answers. Mode `new` still requires loopback. */
 const LOCAL_WEB_URL = process.env.RAKAZO_LOCAL_WEB_URL?.trim() || DEFAULT_LOCAL_WEB_URL;
@@ -710,7 +712,7 @@ function installApplicationMenu() {
   };
   const changeServer: Electron.MenuItemConstructorOptions = {
     id: "change-rakazo-server",
-    label: "Change Rakazo Server…",
+    label: "Change Deskazo Server…",
     accelerator: "CmdOrCtrl+Shift+K",
     click: () => showSetupWindow(),
   };
@@ -726,19 +728,19 @@ function installApplicationMenu() {
     process.platform === "darwin"
       ? [
           {
-            label: app.name,
+            label: "Deskazo",
             submenu: [
-              { role: "about" },
+              { role: "about", label: "About Deskazo" },
               { type: "separator" },
               localSettings,
               changeServer,
               stopStack,
               { type: "separator" },
-              { role: "hide" },
+              { role: "hide", label: "Hide Deskazo" },
               { role: "hideOthers" },
               { role: "unhide" },
               { type: "separator" },
-              { role: "quit" },
+              { role: "quit", label: "Quit Deskazo" },
             ],
           },
           { role: "editMenu" },
@@ -788,7 +790,7 @@ async function probeServer(rawUrl: string, signal?: AbortSignal): Promise<Deskto
         ok: false,
         status: response.status,
         url,
-        error: "That address redirects elsewhere. Enter the final Rakazo server address.",
+        error: "That address redirects elsewhere. Enter the final Deskazo server address.",
       };
     }
     if (!response.ok) {
@@ -805,7 +807,7 @@ async function probeServer(rawUrl: string, signal?: AbortSignal): Promise<Deskto
         ok: false,
         status: response.status,
         url,
-        error: "That address did not respond like a Rakazo server.",
+        error: "That address did not respond like a Deskazo server.",
       };
     }
     return {
@@ -1211,7 +1213,7 @@ app.whenReady().then(async () => {
         if (managedUrl === null || !(await localStack.matchesDesiredStack())) {
           return {
             ok: false,
-            error: "The app-managed Rakazo services are not ready. Retry setup.",
+            error: "The app-managed Deskazo services are not ready. Retry setup.",
           };
         }
         openSetup = { mode: "new", serverUrl: managedUrl };

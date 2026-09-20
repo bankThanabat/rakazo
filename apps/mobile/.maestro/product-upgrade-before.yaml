@@ -1,0 +1,27 @@
+appId: com.rakazo.app
+name: Save an authenticated session before the display rename
+---
+- launchApp:
+    clearState: true
+    permissions:
+      notifications: deny
+- tapOn: "Sign in"
+- tapOn: "Use a custom server"
+- tapOn: "http.*"
+- eraseText
+- inputText: ${RAKAZO_E2E_SERVER}
+- tapOn: "Save"
+- tapOn: "Email"
+- inputText: ${RAKAZO_E2E_EMAIL}
+- tapOn: "Password"
+- inputText: ${RAKAZO_E2E_PASSWORD}
+- hideKeyboard
+- tapOn: "Sign in"
+- tapOn:
+    text: "Not Now"
+    optional: true
+- extendedWaitUntil:
+    visible: "Document reviewer.*"
+    timeout: 30000
+- takeScreenshot: before-upgrade
+- stopApp

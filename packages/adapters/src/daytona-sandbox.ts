@@ -24,7 +24,13 @@ import type {
 } from "@rakazo/adapter-kit";
 import { boundedSandboxCommandTimeoutMs } from "@rakazo/core";
 import { screenSessionKey } from "./computer-screens.js";
-import { normalizeWorkspacePath, shellQuote, workspacePath } from "./computer-support.js";
+import {
+  assertComputerKind,
+  assertProvisionKind,
+  normalizeWorkspacePath,
+  shellQuote,
+  workspacePath,
+} from "./computer-support.js";
 import {
   PORTABLE_TRANSFER_BATCH_BYTES,
   shouldSkipPortableWorkspaceFile,
@@ -110,14 +116,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async provision(
-    request: {
-      botId: string;
-      homePath: string;
-      providerRef?: string;
-      providerKind?: ComputerRef["kind"];
-    },
+    request: Parameters<SandboxProvider["provision"]>[0],
     _context: AdapterContext,
   ): Promise<ComputerRef> {
+    assertProvisionKind(request, "daytona");
     if (request.providerRef && request.providerKind === "daytona") {
       try {
         const sandbox = await this.connect(request.providerRef);
@@ -313,6 +315,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "daytona");
     const id = computer.providerRef || computer.id;
     const sandbox = await this.findForTeardown(id);
     if (!sandbox) {
@@ -331,6 +334,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
+    assertComputerKind(computer, "daytona");
     const id = computer.providerRef || computer.id;
     const sandbox = await this.findForTeardown(id);
     if (!sandbox) {

@@ -7,6 +7,7 @@ import type {
 import { IntegrationProviderConfigSchema, IntegrationProviderIdSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import { ComposioConnector } from "./composio-connector.js";
+import { withInstagramReceipts } from "./instagram-comment-writes.js";
 import { IntegrationGatewayClient } from "./integration-gateway-client.js";
 import { OpenConnector } from "./open-connector.js";
 import { PipedreamConnector } from "./pipedream-connector.js";
@@ -15,6 +16,10 @@ import type { EncryptedSecretStore } from "./secrets.js";
 /** Resolve persisted credentials on every operation so API and workers observe changes.
  * Cache adapters by ciphertext to preserve sessions without retaining old credentials. */
 export class IntegrationProviderSettings {
+  private readonly receiptProviders = new WeakMap<
+    ManagedConnectorProvider,
+    ManagedConnectorProvider
+  >();
   private readonly cache = new Map<
     string,
     { ciphertext: string; adapter: ManagedConnectorProvider }
@@ -59,10 +64,10 @@ export class IntegrationProviderSettings {
     const row = await this.prisma.integrationProviderConfig.findUnique({ where: { id } });
     if (!row) {
       this.cache.delete(id);
-      return this.fallbacks[id];
+      return this.withReceipts(id, this.fallbacks[id]);
     }
     const cached = this.cache.get(id);
-    if (cached?.ciphertext === row.ciphertext) return cached.adapter;
+    if (cached?.ciphertext === row.ciphertext) return this.withReceipts(id, cached.adapter);
     const config = IntegrationProviderConfigSchema.parse(
       JSON.parse(this.secrets.load(row.ciphertext, `integration-provider:${id}`)),
     );
@@ -70,7 +75,17 @@ export class IntegrationProviderSettings {
       throw new Error("Integration provider configuration does not match");
     const adapter = this.create(config);
     this.cache.set(id, { ciphertext: row.ciphertext, adapter });
-    return adapter;
+    return this.withReceipts(id, adapter);
+  }
+
+  private withReceipts(id: IntegrationProviderId, provider: ManagedConnectorProvider | undefined) {
+    if (id !== "open-connector" || !provider) return provider;
+    let tracked = this.receiptProviders.get(provider);
+    if (!tracked) {
+      tracked = withInstagramReceipts(this.prisma, provider);
+      this.receiptProviders.set(provider, tracked);
+    }
+    return tracked;
   }
 
   async save(config: IntegrationProviderConfig, context: AdapterContext): Promise<void> {

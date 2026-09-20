@@ -143,6 +143,36 @@ describe("host-aware sandbox", () => {
     expect(sandboxKindForBot("fake", "this-mac")).toBe("fake");
   });
 
+  it.each([false, true])(
+    "keeps an existing computer on its provider after host preference changes (host=%s)",
+    async (enabled) => {
+      const isolated = new FakeSandboxProvider();
+      const host = new DesktopSandboxProvider({ root: hostRoot });
+      let useHost = enabled;
+      const sandbox = new HostAwareSandbox(isolated, host, async () => useHost);
+      const request = { botId: `sticky-${enabled}`, homePath: hostRoot };
+      const first = await sandbox.provision(request, ctx);
+      useHost = !enabled;
+      const replacementProvider = enabled ? isolated : host;
+      const provision = vi.spyOn(replacementProvider, "provision");
+      const resumed = await sandbox.provision(
+        { ...request, providerRef: first.providerRef, providerKind: first.kind },
+        ctx,
+      );
+      expect(resumed).toMatchObject({
+        providerRef: first.providerRef,
+        kind: first.kind,
+        fresh: false,
+      });
+      expect(provision).not.toHaveBeenCalled();
+      await sandbox.destroy(first, ctx);
+      const replacement = await sandbox.provision(request, ctx);
+      expect(provision).toHaveBeenCalledOnce();
+      expect(replacement.kind).not.toBe(first.kind);
+      await sandbox.destroy(replacement, ctx);
+    },
+  );
+
   it("forwards pageBrowser to the routed provider", async () => {
     const isolated: SandboxProvider = new FakeSandboxProvider();
     const calls: unknown[] = [];

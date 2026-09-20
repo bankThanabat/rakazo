@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { ConnectorActionAccessSchema } from "./connector-actions.js";
 import { ConnectorAuthInputSchema, IncomingSecretSchema } from "./connector-auth.js";
+import { ConnectorReceiptQuerySchema } from "./connector-receipts.js";
 import { WebhookVerificationSchema } from "./customer.js";
 import { isPlainHttpUrl } from "./http-url.js";
 
@@ -45,6 +46,7 @@ const call = z.object({
   tool: id,
   args: z.record(z.string(), z.json()),
   executionId: id,
+  expectedAccountId: z.string().min(1).max(500).optional(),
   connectionId: id.optional(),
   route: z
     .object({
@@ -86,6 +88,18 @@ export const GatewayCommandSchema = z.discriminatedUnion("op", [
     actionAccess: ConnectorActionAccessSchema.optional(),
     call,
     connections: z.array(GatewayConnectionSchema).max(100),
+  }),
+  z.object({
+    op: z.literal("receipt"),
+    query: ConnectorReceiptQuerySchema,
+    actionAccess: ConnectorActionAccessSchema.optional(),
+    connections: z.array(GatewayConnectionSchema).max(100),
+  }),
+  z.object({
+    op: z.literal("accountIdentity"),
+    connectionId: id,
+    connections: z.array(GatewayConnectionSchema).max(100),
+    actionAccess: ConnectorActionAccessSchema.optional(),
   }),
   z.object({
     op: z.literal("incoming"),

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import re
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -228,18 +229,38 @@ class CustomerAgentTest(unittest.IsolatedAsyncioTestCase):
                     allow_custom_components=False,
                     type_to_current_hash=component_cache.type_to_current_hash,
                 )
-            tweaked = process_tweaks(copy.deepcopy(data), {node_id: self.inputs})
-            flow_id = str(uuid4())
-            graph = Graph.from_payload(tweaked, flow_id=flow_id)
-            outputs, session = await run_graph_internal(
-                graph, flow_id, outputs=[node_id], session_id=str(uuid4())
-            )
-            result = outputs[0].model_dump()
-            self.assertEqual(result["outputs"][0]["component_id"], node_id)
-            self.assertEqual(
-                result["outputs"][0]["outputs"]["message"]["message"], "Open until six."
-            )
-            self.assertNotEqual(session, flow_id)
+            for history in [
+                [{"role": "user", "content": "When do you close?"}],
+                [
+                    {"role": "user", "content": "สวัสดีค่ะ"},
+                    {"role": "assistant", "content": "ยินดีค่ะ\nLiteral \\n and \\\\n"},
+                    {"role": "user", "content": "What about tomorrow?"},
+                ],
+            ]:
+                inputs = {
+                    **self.inputs,
+                    # Match the adapter's JSON transport through LFX text unescaping.
+                    "transcript": re.sub(
+                        r"\\\\|\\n",
+                        lambda match: r"\u005c" if match[0] == "\\\\" else r"\u000a",
+                        json.dumps(history),
+                    ),
+                    "instructions": self.inputs["instructions"]
+                    + "\nPrivate guidance: ask one question at a time.",
+                }
+                tweaked = process_tweaks(copy.deepcopy(data), {node_id: inputs})
+                flow_id = str(uuid4())
+                graph = Graph.from_payload(tweaked, flow_id=flow_id)
+                outputs, session = await run_graph_internal(
+                    graph, flow_id, outputs=[node_id], session_id=str(uuid4())
+                )
+                result = outputs[0].model_dump()
+                self.assertEqual(result["outputs"][0]["component_id"], node_id)
+                self.assertEqual(
+                    result["outputs"][0]["outputs"]["message"]["message"], "Open until six."
+                )
+                self.assertNotEqual(session, flow_id)
+                self.assertEqual(self.model_calls[-2]["messages"][1:], history)
         finally:
             settings.allow_custom_components = previous
             settings.components_path = prior_paths

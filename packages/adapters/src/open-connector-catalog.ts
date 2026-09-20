@@ -31,6 +31,7 @@ export const OpenConnectorAction = z.object({
   id: z.string().min(1),
   service: z.string().min(1),
   description: z.string(),
+  readOnly: z.boolean().optional(),
   requiredScopes: z.array(z.string()).optional(),
   inputSchema: z.record(z.string(), z.unknown()).optional(),
   outputSchema: z.record(z.string(), z.unknown()).optional(),
@@ -92,6 +93,7 @@ export function authMethods(provider: OpenConnectorProvider): ConnectorAuthMetho
 }
 
 export class OpenConnectorNotFound extends Error {}
+export class OpenConnectorAccountGuardRejected extends Error {}
 
 export class OpenConnectorHttp {
   private cached?: { providers: OpenConnectorProvider[]; etag: string | null; until: number };
@@ -109,6 +111,25 @@ export class OpenConnectorHttp {
     const response = await this.fetch(path, context, init, token);
     if (response.status === 404 && init.method === "DELETE") return {};
     if (response.status === 404) throw new OpenConnectorNotFound("Connection is unavailable");
+    if (
+      response.status === 409 &&
+      init.method === "POST" &&
+      /^\/v1\/actions\/[^/]+\/for-account\/[^/]+$/.test(path)
+    ) {
+      const value = await this.read(response, context);
+      if (
+        z
+          .object({
+            success: z.literal(false),
+            errorCode: z.literal("connection_changed"),
+            meta: z.object({ dispatch: z.literal("not_started") }),
+          })
+          .safeParse(value).success
+      )
+        throw new OpenConnectorAccountGuardRejected(
+          "The linked provider account changed before execution",
+        );
+    }
     if (!response.ok)
       throw new Error(
         "OpenConnector could not complete the request. Check the connection and try again.",
@@ -143,7 +164,10 @@ export class OpenConnectorHttp {
       throw new Error("OpenConnector returned an invalid response");
     }
   }
-  async catalog(context: AdapterContext) {
+  async catalog(context: AdapterContext, refresh = false) {
+    // Execution must not rely on the discovery cache after a connector update.
+    // Conditional GET still lets an unchanged server reuse the cached body.
+    if (refresh) return this.load(context);
     if (this.cached && this.cached.until > Date.now()) return this.cached.providers;
     if (!this.loading)
       this.loading = this.load(context).finally(() => {
@@ -152,15 +176,16 @@ export class OpenConnectorHttp {
     return this.loading;
   }
   private async load(context: AdapterContext) {
+    const cached = this.cached;
     const response = await this.fetch(
       "/api/providers",
       context,
-      { headers: this.cached?.etag ? { "if-none-match": this.cached.etag } : {} },
+      { headers: cached?.etag ? { "if-none-match": cached.etag } : {} },
       this.config.apiKey,
     );
-    if (response.status === 304 && this.cached) {
-      this.cached.until = Date.now() + 30000;
-      return this.cached.providers;
+    if (response.status === 304 && cached) {
+      cached.until = Date.now() + 30000;
+      return cached.providers;
     }
     if (!response.ok) throw new Error("Could not load the OpenConnector catalog");
     const providers = z.array(OpenConnectorProvider).parse(await this.read(response, context));
@@ -170,13 +195,15 @@ export class OpenConnectorHttp {
   cachedProvider(service: string) {
     return this.cached?.providers.find((provider) => provider.service === service);
   }
-  async provider(service: string, context: AdapterContext) {
-    const provider = (await this.catalog(context)).find((item) => item.service === service);
+  async provider(service: string, context: AdapterContext, refresh = false) {
+    const provider = (await this.catalog(context, refresh)).find(
+      (item) => item.service === service,
+    );
     if (!provider) throw new Error("This app is not in the OpenConnector catalog");
     return provider;
   }
-  async action(id: string, service: string, context: AdapterContext) {
-    const provider = await this.provider(service, context);
+  async action(id: string, service: string, context: AdapterContext, refresh = false) {
+    const provider = await this.provider(service, context, refresh);
     const summary = provider.actions.find(
       (action) => action.id === id && action.service === service,
     );

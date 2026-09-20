@@ -359,19 +359,25 @@ export async function destroyBot(
     ...routines.map((routine) => deps.jobs.cancel(routineJobKey(routine.id))),
   ]);
   await releaseTeamComputerScreen(deps, bot, dedicated?.id, context);
+  let cleanupSucceeded = true;
   if (dedicated?.providerRef) {
-    await deps.sandbox.destroy(toComputerRef(dedicated), context).catch(() => undefined);
+    await deps.sandbox.destroy(toComputerRef(dedicated), context).catch(() => {
+      cleanupSucceeded = false;
+    });
   }
   // Keep the bot deletion transaction from committing if raw transcript cleanup fails.
   await removePiBotSessions(deps.dataDir, bot.userId, bot.id);
   const deletion = await withTransactionRetry(() =>
     deps.prisma.$transaction(async (tx) => {
+      if (bot.userId) await tx.$queryRaw`SELECT id FROM "user" WHERE id = ${bot.userId} FOR SHARE`;
       const locked = await tx.$queryRaw<Array<{ id: string; webhookSecretId: string | null }>>`
         SELECT id, "webhookSecretId"
         FROM bots
         WHERE id = ${bot.id} AND "spaceId" = ${bot.spaceId}
         FOR UPDATE
       `;
+      if (!locked.length)
+        return { artifactKeys: [], cancelledGroupRuns: [], createdTombstone: false };
       const webhookSecretId = locked[0]?.webhookSecretId ?? bot.webhookSecretId ?? null;
       const botArtifacts = await tx.artifact.findMany({
         where: { botId: bot.id, groupId: null, spaceId: bot.spaceId },
@@ -406,6 +412,14 @@ export async function destroyBot(
           spaceId: bot.spaceId,
           name: bot.name,
           deletedByUserId: context.userId,
+          userId: bot.userId ?? context.userId,
+          artifactKeys: [
+            ...botArtifacts.map((artifact) => artifact.storageKey),
+            ...groupCleanup.artifactKeys,
+          ],
+          homeKey: dedicated?.homeKey,
+          computerKind: dedicated?.kind,
+          providerRef: dedicated?.providerRef,
           memoriesPreserved: !options.deleteMemories,
         },
       });
@@ -417,6 +431,7 @@ export async function destroyBot(
       }
       if (dedicated) await tx.computer.delete({ where: { id: dedicated.id } });
       return {
+        createdTombstone: true,
         artifactKeys: [
           ...botArtifacts.map((artifact) => artifact.storageKey),
           ...groupCleanup.artifactKeys,
@@ -452,11 +467,25 @@ export async function destroyBot(
     await rm(resolveAgentHomePath(deps.home, dedicated.homeKey, deps.dataDir ?? "./data"), {
       recursive: true,
       force: true,
-    }).catch(() => undefined);
+    }).catch(() => {
+      cleanupSucceeded = false;
+    });
   }
-  const artifactStore = deps.artifacts;
-  if (artifactStore) {
-    await removeStoredArtifacts(artifactStore, deletion.artifactKeys, context);
+  const artifactsRemoved = await removeStoredArtifacts(
+    deps.artifacts,
+    deletion.artifactKeys,
+    context,
+  );
+  if (deletion.createdTombstone && cleanupSucceeded && artifactsRemoved) {
+    await deps.prisma.botDeletion.updateMany({
+      where: { id: bot.id },
+      data: {
+        artifactKeys: [],
+        homeKey: null,
+        computerKind: null,
+        providerRef: null,
+      },
+    });
   }
 }
 
@@ -550,13 +579,14 @@ async function removeStoredArtifacts(
   storageKeys: string[],
   context: AdapterContext,
 ) {
-  if (!artifacts) return;
+  if (!artifacts) return storageKeys.length === 0;
   const results = await Promise.allSettled(
     [...new Set(storageKeys)].map((storageKey) => artifacts.remove(storageKey, context)),
   );
   for (const result of results) {
     if (result.status === "rejected") getLogger().error("group artifact cleanup", result.reason);
   }
+  return results.every((result) => result.status === "fulfilled");
 }
 
 function archivedMemoryDirectory(name: string, botId: string) {

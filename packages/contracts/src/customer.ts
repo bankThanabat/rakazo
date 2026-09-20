@@ -3,6 +3,36 @@ import { BotSecretName } from "./bot-secrets.js";
 import { isPlainHttpUrl } from "./http-url.js";
 import { Id } from "./ids.js";
 
+const ClockTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+export const CustomerQuietHoursSchema = z
+  .object({
+    start: ClockTime,
+    end: ClockTime,
+    timezone: z
+      .string()
+      .min(1)
+      .max(100)
+      .refine((timezone) => {
+        try {
+          new Intl.DateTimeFormat("en", { timeZone: timezone }).format(0);
+          return true;
+        } catch {
+          return false;
+        }
+      }, "Use a valid timezone"),
+  })
+  .refine(
+    (hours) => hours.start !== hours.end,
+    "Quiet hours must have different start and end times",
+  );
+export type CustomerQuietHours = z.infer<typeof CustomerQuietHoursSchema>;
+export const CustomerNotificationSettingsInput = z
+  .object({
+    help: z.boolean().optional(),
+    quietHours: CustomerQuietHoursSchema.nullable().optional(),
+  })
+  .strict();
+
 export const CustomerConversationSchema = z.object({
   id: Id,
   channelId: Id,
@@ -15,6 +45,7 @@ export const CustomerConversationSchema = z.object({
   state: z.enum(["open", "resolved"]).default("open"),
   assigneeId: Id.nullable().default(null),
   handoffReason: z.string().nullable().default(null),
+  acknowledgedAt: z.string().nullable().optional(),
   unread: z.boolean().default(false),
   draft: z.string().nullable().default(null),
   canReply: z.boolean().default(false),
@@ -24,6 +55,7 @@ export const CustomerConversationSchema = z.object({
 export type CustomerConversation = z.infer<typeof CustomerConversationSchema>;
 export const CustomerMessageSchema = z.object({
   id: Id,
+  senderId: z.string().nullable().default(null),
   seq: z.number().int(),
   role: z.enum(["customer", "bot", "staff", "system"]),
   body: z.string(),
@@ -35,6 +67,10 @@ export const CustomerMessageSchema = z.object({
 });
 export type CustomerMessage = z.infer<typeof CustomerMessageSchema>;
 export const CustomerSnapshotSchema = z.object({
+  notificationIssue: z.enum(["failed", "uncertain"]).nullable().default(null),
+  guidance: z
+    .array(z.object({ id: Id, content: z.string(), inFlight: z.boolean(), createdAt: z.string() }))
+    .default([]),
   conversation: CustomerConversationSchema,
   messages: z.array(CustomerMessageSchema),
   before: z.number().int().nullable().default(null),
@@ -57,12 +93,17 @@ export const CustomerReplyInput = z.object({
   nonce: z.string().min(1).max(120),
 });
 export const CustomerOwnerInput = z.object({ id: Id, owner: z.enum(["bot", "staff"]) });
-export const CustomerCaseInput = z.object({
-  id: Id,
-  state: z.enum(["open", "resolved"]).optional(),
-  assigneeId: Id.nullable().optional(),
-  read: z.boolean().optional(),
-});
+export const CustomerCaseInput = z
+  .object({
+    id: Id,
+    state: z.enum(["open", "resolved"]).optional(),
+    assigneeId: Id.nullable().optional(),
+    read: z.boolean().optional(),
+    acknowledge: z.literal(true).optional(),
+  })
+  .refine((input) => !(input.acknowledge && input.state === "resolved"), {
+    message: "Acknowledge or resolve the case, not both",
+  });
 export const CustomerListInput = z
   .object({
     query: z.string().max(200).default(""),
@@ -98,6 +139,12 @@ export const CustomerDraftInput = z.object({
   body: z.string().trim().min(1).max(16000),
   expectedSeq: z.number().int().min(0),
 });
+export const CustomerPreviewInput = z
+  .object({
+    message: z.string().trim().min(1).max(4000),
+  })
+  .strict();
+
 export const CustomerKnowledgeInput = z.object({
   id: Id.optional(),
   query: z.string().trim().min(1).max(4000),
@@ -144,8 +191,15 @@ export const CustomerBindingSchema = z.object({
     timestampFormat: z.enum(["iso", "seconds", "milliseconds"]).default("iso"),
     incoming: z.object({ path: Path, equals: z.union([z.string(), z.number(), z.boolean()]) }),
     nonText: z.enum(["ignore", "handoff"]).default("ignore"),
+    withdrawal: z
+      .object({
+        event: z.object({ path: Path, equals: z.union([z.string(), z.number(), z.boolean()]) }),
+        messageId: Field,
+      })
+      .optional(),
     fields: z.object({
       id: Field,
+      providerMessageId: Field.optional(),
       threadId: Field,
       customerId: Field,
       body: Field,
@@ -179,6 +233,15 @@ export const CustomerActionGrantSchema = z.object({
         action: z.string().min(1).max(200),
         input: z.record(z.string(), z.json()),
         effect: z.enum(["read", "write"]),
+        // A stable provider record from the preceding customer ownership read.
+        operationKey: z
+          .string()
+          .regex(/^\$steps\.[a-zA-Z][a-zA-Z0-9_]*\.[a-zA-Z0-9_.]+$/)
+          .optional(),
+        receipt: z
+          .record(z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/), Path.min(1))
+          .refine((fields) => Object.keys(fields).length > 0 && Object.keys(fields).length <= 16)
+          .optional(),
         // A customer ownership check is required before any write. Promotion/limit
         // checks can compare other results to literals or previous step results.
         check: z.object({ path: Path, equals: z.json() }).optional(),
@@ -188,6 +251,29 @@ export const CustomerActionGrantSchema = z.object({
     .max(12),
 });
 export type CustomerActionGrant = z.infer<typeof CustomerActionGrantSchema>;
+export const CustomerIdentityInput = z
+  .object({
+    conversationId: Id,
+    customerId: z.string().min(1).max(500),
+    connectionId: Id,
+  })
+  .strict();
+export const CustomerIdentitySetInput = CustomerIdentityInput.extend({
+  expectedRevision: z.number().int().nonnegative(),
+  reason: z.string().trim().min(1).max(1000),
+  identity: z
+    .object({
+      value: z.union([
+        z.string().trim().min(1).max(500),
+        z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+      ]),
+      action: z.string().min(1).max(200),
+      input: z.record(z.string(), z.json()),
+      path: Path.min(1),
+    })
+    .strict()
+    .nullable(),
+}).strict();
 export const CustomerServiceConnection = z.object({
   credential: BotSecretName,
   baseUrl: z
@@ -199,6 +285,11 @@ export const CustomerServiceConnection = z.object({
     ),
 });
 export type CustomerServiceConnection = z.infer<typeof CustomerServiceConnection>;
+export const CustomerAssessmentConfig = CustomerServiceConnection.extend({
+  provider: z.literal("jev"),
+  model: z.string().trim().min(1).max(100).default("jev-latest"),
+  criteria: z.string().trim().max(2000).default(""),
+});
 
 export const CustomerBehaviorInput = CustomerInstructionsInput.extend({
   runtime: CustomerServiceConnection,
@@ -212,4 +303,29 @@ export const CustomerConnectInput = z.object({
   connectionId: Id,
   binding: CustomerBindingSchema,
   cursor: z.union([z.string(), z.number()]).optional(),
+});
+
+export const CustomerOperationListInput = z
+  .object({
+    status: z.enum(["unresolved", "completed", "all"]).default("unresolved"),
+    cursor: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+const CustomerOperationReviewInput = z
+  .object({
+    id: z.string().regex(/^[a-f0-9]{64}$/),
+    expectedAttempt: z.number().int().nonnegative().default(0),
+    reason: z.string().trim().min(1).max(1000),
+    providerReference: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export const CustomerOperationRetryInput = CustomerOperationReviewInput.extend({
+  failureStatus: z.string().trim().min(1).max(200),
+});
+export const CustomerOperationResolveInput = CustomerOperationReviewInput.extend({
+  receipt: z.record(
+    z.string(),
+    z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()]),
+  ),
 });

@@ -114,9 +114,10 @@ describe("E2B computer backend", () => {
       cause: Object.assign(new Error("transport unavailable"), { code }),
     });
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => desktop),
       connect: vi.fn().mockRejectedValueOnce(failure).mockResolvedValue({ sandboxId: "existing" }),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
 
@@ -137,6 +138,7 @@ describe("E2B computer backend", () => {
 
   it("creates a replacement when the provider confirms the sandbox no longer exists", async () => {
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn().mockResolvedValue({ sandboxId: "replacement" }),
       connect: vi.fn().mockRejectedValue(
         Object.assign(new Error("Sandbox not found"), {
@@ -183,6 +185,7 @@ describe("E2B computer backend", () => {
           apiUrl: `http://127.0.0.1:${address.port}`,
         });
         const sdk: E2BSandboxSdk = {
+          kill: vi.fn((_id, options) => desktop.kill(options)),
           create: vi.fn().mockResolvedValue(desktop),
           connect: vi.fn(),
           pause: vi.fn(),
@@ -224,9 +227,10 @@ describe("E2B computer backend", () => {
       commands: { run },
     } as unknown as Sandbox;
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = {
@@ -253,9 +257,10 @@ describe("E2B computer backend", () => {
       commands: { run },
     } as unknown as Sandbox;
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = {
@@ -287,9 +292,10 @@ describe("E2B computer backend", () => {
       open: vi.fn(async () => undefined),
     } as unknown as Sandbox;
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = await provider.provision(
@@ -327,7 +333,8 @@ describe("E2B computer backend", () => {
     const provider = new E2BSandboxProvider("test-key", {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision(
       { botId: "bot-1", homePath: "/unused", providerKind: "e2b" },
@@ -432,25 +439,30 @@ describe("E2B computer backend", () => {
       scroll: vi.fn(async () => undefined),
       wait: vi.fn(async () => undefined),
       setTimeout: vi.fn(async () => undefined),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
       kill: vi.fn(async () => undefined),
     } as unknown as Sandbox;
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
-    const computer = await provider.provision(
-      {
-        botId: "bot-1",
-        homePath: "/unused",
-        providerRef: "foreign-provider-machine",
-        providerKind: "docker",
-      },
-      context,
-    );
+    await expect(
+      provider.provision(
+        {
+          botId: "bot-1",
+          homePath: "/unused",
+          providerRef: "foreign-provider-machine",
+          providerKind: "docker",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Computer provider does not match");
     expect(sdk.connect).not.toHaveBeenCalled();
+    expect(sdk.create).not.toHaveBeenCalled();
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     await provider.prepare(computer, context);
     await provider.importWorkspace(
       computer,
@@ -532,7 +544,10 @@ describe("E2B computer backend", () => {
     await screen.close();
     expect(streamStop).not.toHaveBeenCalled();
     await provider.stop(computer, context);
-    expect(desktop.pause).toHaveBeenCalled();
+    expect(sdk.pause).toHaveBeenCalledWith(
+      computer.providerRef,
+      expect.objectContaining({ signal: context.signal, requestTimeoutMs: 30_000 }),
+    );
   });
 
   it("gives Team bots distinct E2B screens and shared files", async () => {
@@ -713,9 +728,10 @@ describe("sandbox-gone detection", () => {
     } as unknown as Sandbox;
     const revived = { sandboxId: "box-1", setTimeout: vi.fn(async () => undefined) };
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => dead),
       connect: vi.fn(async () => revived as unknown as Sandbox),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const ref = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
@@ -740,9 +756,10 @@ describe("sandbox-gone detection", () => {
     } as unknown as Sandbox;
     const revived = { sandboxId: "box-1", setTimeout: vi.fn(async () => undefined) };
     const sdk: E2BSandboxSdk = {
+      kill: vi.fn(async () => true),
       create: vi.fn(async () => dead),
       connect: vi.fn(async () => revived as unknown as Sandbox),
-      pause: vi.fn(async () => undefined),
+      pause: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const ref = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);

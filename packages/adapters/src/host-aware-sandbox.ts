@@ -87,15 +87,11 @@ export class HostAwareSandbox implements SandboxProvider {
     },
     context: AdapterContext,
   ) {
-    const provider = (await this.hostEnabled()) ? this.host : this.isolated;
-    const providerKind = provider.describe().id;
-    return provider.provision(
-      {
-        ...request,
-        providerRef: request.providerKind === providerKind ? request.providerRef : undefined,
-      },
-      context,
-    );
+    // Keep reconnection on its recorded provider until lifecycle teardown clears the reference.
+    const useHost = request.providerRef
+      ? request.providerKind === "desktop"
+      : await this.hostEnabled();
+    return (useHost ? this.host : this.isolated).provision(request, context);
   }
 
   prepare(computer: ComputerRef, context: AdapterContext) {

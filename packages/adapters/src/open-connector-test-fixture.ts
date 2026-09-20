@@ -37,6 +37,7 @@ interface TestSecret {
 /** Reusable offline HTTP/persistence fixture for the adapter and authenticated RPC journeys. */
 export function createOpenConnectorFixture(
   onAction?: (action: string, input: unknown, alias: string) => unknown,
+  rateLimitDb?: Pick<PrismaClient, "$queryRaw" | "$executeRaw">,
 ) {
   const providers: OpenConnectorProvider[] = [
     {
@@ -51,7 +52,14 @@ export function createOpenConnectorFixture(
   const oauthConfigs = new Set<string>();
   const accounts = new Map<
     string,
-    { id: string; service: string; connectionName: string; configured: boolean; scopes?: string[] }
+    {
+      id: string;
+      service: string;
+      connectionName: string;
+      configured: boolean;
+      scopes?: string[];
+      providerAccountId?: string;
+    }
   >();
   const tokens = new Map<
     string,
@@ -70,7 +78,10 @@ export function createOpenConnectorFixture(
     if (url.pathname.startsWith("/v1/actions/")) {
       const token = bearer && tokens.get(bearer);
       const alias = headers.get("x-oo-connector-alias") ?? "default";
-      const actionId = decodeURIComponent(url.pathname.slice("/v1/actions/".length));
+      const [actionPath, expectedAccount] = url.pathname
+        .slice("/v1/actions/".length)
+        .split("/for-account/");
+      const actionId = decodeURIComponent(actionPath!);
       const provider = providers.find((row) =>
         row.actions.some((action) => action.id === actionId),
       );
@@ -87,6 +98,17 @@ export function createOpenConnectorFixture(
       ) {
         return Response.json({ error: "connection_not_allowed" }, { status: 403 });
       }
+      const storedAccount = accounts.get(alias);
+      if (
+        expectedAccount !== undefined &&
+        (!storedAccount ||
+          decodeURIComponent(expectedAccount) !==
+            (storedAccount.providerAccountId ?? `${storedAccount.service}-account`))
+      )
+        return Response.json(
+          { success: false, errorCode: "connection_changed", meta: { dispatch: "not_started" } },
+          { status: 409 },
+        );
       sent.push({ alias, input: body.input, token: bearer! });
       return Response.json({
         success: true,
@@ -169,6 +191,7 @@ export function createOpenConnectorFixture(
               service: account.service,
               alias: account.connectionName,
               status: "active",
+              providerAccountId: account.providerAccountId ?? `${account.service}-account`,
               scopes: account.scopes ?? [],
             },
           })
@@ -253,9 +276,17 @@ export function createOpenConnectorFixture(
       [...attempts.values()].filter((row) => row.endpoint === where.endpoint),
     ),
   };
-  const prisma = { secret, openConnectorAttempt } as unknown as Pick<
+  const rateQuery = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => [
+    { key: "synthetic-permit" },
+  ]);
+  const prisma = {
+    secret,
+    openConnectorAttempt,
+    $queryRaw: rateLimitDb ? rateLimitDb.$queryRaw.bind(rateLimitDb) : rateQuery,
+    $executeRaw: rateLimitDb ? rateLimitDb.$executeRaw.bind(rateLimitDb) : vi.fn(async () => 0),
+  } as unknown as Pick<
     PrismaClient,
-    "secret" | "openConnectorAttempt"
+    "secret" | "openConnectorAttempt" | "$queryRaw" | "$executeRaw"
   >;
   const secrets = new EncryptedSecretStore("fake-secret-storage-key");
   const adapter = new OpenConnector(openConnectorTestConfig, {
@@ -281,6 +312,7 @@ export function createOpenConnectorFixture(
   }
   return {
     adapter,
+    rateQuery,
     fetcher,
     accounts,
     sent,

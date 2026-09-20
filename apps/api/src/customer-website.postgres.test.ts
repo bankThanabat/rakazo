@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createDb, provisionMessagingIdentity } from "@rakazo/db";
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -44,10 +44,37 @@ describe.skipIf(process.env.VERIFY_DATABASE !== "1" || !process.env.DATABASE_URL
       });
       const app = new Hono();
       const enqueue = vi.fn(async () => undefined);
+      const purchases = {
+        visitorPurchaseReviews: vi.fn(async (_hash: string) => []),
+        decideVisitorPurchaseReview: vi.fn(async (_hash: string, _input: unknown) => ({
+          id: randomUUID(),
+          purchaseId: "purchase",
+          revision: 1,
+          paymentMethod: "bacs",
+          paymentMethodLabel: "Bank transfer",
+          expiresAt: new Date(Date.now() + 60000).toISOString(),
+          decision: "confirmed" as const,
+          quote: {
+            billing: {},
+            shipping: {},
+            summary: {
+              items: [],
+              currency: "THB",
+              minorUnit: 2,
+              total: "0",
+              needsShipping: false,
+              needsPayment: false,
+              coupons: [],
+              shippingRates: [],
+            },
+          },
+        })),
+      };
       mountCustomerWebsite(app, {
         prisma: db.prisma,
         jobs: { enqueue },
         webOrigin: "https://support.example.test",
+        purchases,
       });
       const request = (path: string, options: RequestInit = {}) =>
         app.request(`/api/customer-web/${channel.id}/${path}`, {
@@ -57,8 +84,56 @@ describe.skipIf(process.env.VERIFY_DATABASE !== "1" || !process.env.DATABASE_URL
       const response = await request("session", { method: "POST", body: "{}" });
       expect(response.status).toBe(200);
       const session = (await response.json()) as { token: string; conversationId: string };
-      return { app, request, session, channel, enqueue };
+      return { app, request, session, channel, enqueue, purchases };
     }
+    it("passes only the authenticated visitor identity to purchase reviews and rejects expired or foreign credentials", async () => {
+      const f = await fixture();
+      const headers = { authorization: `Bearer ${f.session.token}` };
+      const digest = createHash("sha256").update(f.session.token).digest("hex");
+      expect((await f.request("purchases", { headers })).status).toBe(200);
+      expect(f.purchases.visitorPurchaseReviews).toHaveBeenCalledWith(digest);
+      const input = { purchaseId: "purchase", reviewId: randomUUID(), decision: "confirmed" };
+      expect(
+        (
+          await f.request("purchases/decision", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(200);
+      expect(f.purchases.decideVisitorPurchaseReview).toHaveBeenCalledWith(digest, input);
+      expect(
+        (await f.request("purchases/decision", { method: "POST", body: JSON.stringify(input) }))
+          .status,
+      ).toBe(401);
+      const foreign = await fixture();
+      expect(
+        (
+          await foreign.request("purchases/decision", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(401);
+      expect(foreign.purchases.decideVisitorPurchaseReview).not.toHaveBeenCalled();
+      await db.prisma.customerVisitorSession.update({
+        where: { tokenHash: digest },
+        data: { expiresAt: new Date(0) },
+      });
+      expect((await f.request("purchases", { headers })).status).toBe(401);
+      expect(
+        (
+          await f.request("purchases/decision", {
+            method: "POST",
+            headers,
+            body: JSON.stringify(input),
+          })
+        ).status,
+      ).toBe(401);
+      expect(f.purchases.decideVisitorPurchaseReview).toHaveBeenCalledOnce();
+    });
     it("separates visitors, hides internal execution state, and deduplicates sends", async () => {
       const f = await fixture();
       const other = (await (await f.request("session", { method: "POST", body: "{}" })).json()) as {

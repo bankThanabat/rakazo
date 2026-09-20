@@ -1,6 +1,17 @@
 # Overlay the locked OpenRAG source compose.
 services:
+  opensearch:
+    build:
+      context: ${OPENRAG_SOURCE_DIR:?Prepare the locked OpenRAG source}
+    environment:
+      path.repo: /usr/share/opensearch/snapshots
+    volumes:
+      - customer-search-snapshots:/usr/share/opensearch/snapshots
   openrag-backend:
+    image: rakazo-openrag-backend:${OPENRAG_SOURCE_ID:?Prepare the locked OpenRAG source}
+    pull_policy: never
+    build:
+      context: ${OPENRAG_SOURCE_DIR:?Prepare the locked OpenRAG source}
     environment:
       OPENRAG_RBAC_ENFORCE: "true"
       OPENRAG_BACKEND_ROUTER_ENABLE: "true"
@@ -10,7 +21,12 @@ services:
       default: {}
       support:
         aliases: [rakazo-support-rag, rakazo-support-rag.localhost]
+  openrag-frontend:
+    build:
+      context: ${OPENRAG_SOURCE_DIR:?Prepare the locked OpenRAG source}
   langflow:
+    build:
+      context: ${OPENRAG_SOURCE_DIR:?Prepare the locked OpenRAG source}
     environment:
       LANGFLOW_ALLOW_CUSTOM_COMPONENTS: "false"
       LANGFLOW_DEACTIVATE_TRACING: "true"
@@ -26,3 +42,5 @@ networks:
   support:
     external: true
     name: rakazo-support
+volumes:
+  customer-search-snapshots:

@@ -166,9 +166,9 @@ export default function SignIn() {
                 {resetSent
                   ? t("Check your email")
                   : mode === "in"
-                    ? t("Sign in to Rakazo")
+                    ? t("Sign in to Deskazo")
                     : mode === "up"
-                      ? t("Sign up for Rakazo")
+                      ? t("Sign up for Deskazo")
                       : t("Reset your password")}
               </Text>
               {resetSent ? (
@@ -457,7 +457,7 @@ function ServerSheet({
           <Text
             style={{ color: tokens.mutedForeground, marginTop: 28, fontSize: 15, lineHeight: 22 }}
           >
-            {t("Enter your Rakazo server address.")}
+            {t("Enter your Deskazo server address.")}
           </Text>
           <TextInput
             autoCapitalize="none"

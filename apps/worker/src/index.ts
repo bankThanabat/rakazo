@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { JobPublisher, JobWorkerHost } from "@rakazo/adapter-kit";
 import { ComposioConnector, createKnowledge, IntegrationProviderSettings } from "@rakazo/adapters";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
@@ -6,6 +7,7 @@ loadRootEnv();
 
 import {
   ChatSdkMessagingSurface,
+  createAccountDeletionService,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
@@ -24,6 +26,7 @@ import {
   GraphileJobWorkerHost,
   InMemoryJobQueue,
   InstalledConnectorProvider,
+  IntegrationGateway,
   isComposioEnabled,
   isMessagingSurfaceEnabled,
   isPipedreamEnabled,
@@ -149,8 +152,6 @@ async function main() {
     mcp,
   ]);
   const connector = stack.destination;
-  await connector.start();
-  integrationSettings.warmDirectories();
   const memoryProviders = new SpaceMemoryProviderResolver(prisma, secrets);
   const home = new LocalAgentHomeStore(dataDir);
   const artifacts = new LocalArtifactStore(dataDir);
@@ -164,6 +165,19 @@ async function main() {
   // One provider instance so emulator launches and polls share the same Map.
   const cloudAgent = createCloudAgentConnection();
   const knowledge = createKnowledge({ prisma, artifacts, secrets, jobs });
+  const accountDeletions = createAccountDeletionService({
+    reconcileCustomerPublications: (userId) => customers.reconcilePublications(userId),
+    cloudAgent,
+    connectors: stack.connector,
+    prisma,
+    sandbox,
+    home,
+    jobs,
+    artifacts,
+    dataDir,
+    knowledge,
+    integrations: new IntegrationGateway({ prisma, secrets, integrations: integrationSettings }),
+  });
   const customers = createCustomerConversations({
     knowledge,
     webOrigin: process.env.WEB_ORIGIN,
@@ -214,6 +228,7 @@ async function main() {
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    accountDeletions,
     knowledge,
     customers,
     executor,
@@ -230,25 +245,6 @@ async function main() {
     messaging,
     cloudAgent,
   });
-  // graphile-worker run() connects through the shared pool. createPool already
-  // retries connect() on 53300 a finite number of times. Keep retrying start
-  // until Postgres has capacity: exhausting then returning from main().catch
-  // left a live process that held connections but never ran jobs or registered
-  // signal handlers, even after capacity returned. Do not exit(1) here; that
-  // crash-loops into the same saturated Postgres. GraphileJobWorkerHost also
-  // observes runner.promise after start and restarts with the same backoff if
-  // the runner dies later on 53300 (unhandledRejection still swallows that
-  // code so we do not Docker crash-loop on transient completeJob failures).
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await jobHost.start(jobHandlers);
-      break;
-    } catch (error) {
-      if (!isTooManyDatabaseConnections(error)) throw error;
-      logger.error("worker job host start waiting on database capacity", error);
-      await new Promise((resolve) => setTimeout(resolve, databaseCapacityBackoffMs(attempt)));
-    }
-  }
   const reconciler = createJobReconciler({
     prisma,
     jobs,
@@ -258,25 +254,31 @@ async function main() {
     reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
     reconcileCustomers: customers.reconcile,
     reconcileKnowledge: knowledge.reconcile,
+    reconcileAccountDeletions: accountDeletions.reconcile,
   });
-  reconciler.start();
-
-  let stopping = false;
-  const stop = async () => {
-    if (stopping) return;
-    stopping = true;
-    try {
-      await reconciler.stop();
-      await jobHost.stop();
-      await jobs.close();
-      await realtime.close();
-      await connector.stop();
-      await mcp.close();
-      await prisma.$disconnect().catch(() => undefined);
-      await pool.end().catch(() => undefined);
-    } finally {
-      await logger.flush({ timeoutMs: 2_000 });
-    }
+  const startup = new AbortController();
+  let starting: Promise<void> = Promise.resolve();
+  let stopping: Promise<void> | undefined;
+  const stop = () => {
+    if (stopping) return stopping;
+    startup.abort();
+    stopping = (async () => {
+      try {
+        await reconciler.stop();
+        // Also mark an in-flight host start as stopping before waiting for it.
+        await jobHost.stop();
+        await starting.catch(() => undefined);
+        await jobs.close();
+        await realtime.close();
+        await connector.stop();
+        await mcp.close();
+        await prisma.$disconnect().catch(() => undefined);
+        await pool.end().catch(() => undefined);
+      } finally {
+        await logger.flush({ timeoutMs: 2_000 });
+      }
+    })();
+    return stopping;
   };
   process.once("SIGTERM", () => void stop());
   process.once("SIGINT", () => void stop());
@@ -296,6 +298,37 @@ async function main() {
     void stop().finally(() => process.exit(1));
   });
 
+  // Register shutdown first: database capacity retries may outlast startup.
+  // Keep retrying 53300 while running rather than crash-looping into a saturated
+  // database. Shutdown cancels the delay and waits for any in-flight start.
+  starting = (async () => {
+    await connector.start();
+    if (startup.signal.aborted) return;
+    integrationSettings.warmDirectories();
+    for (let attempt = 0; !startup.signal.aborted; attempt += 1) {
+      try {
+        await jobHost.start(jobHandlers);
+        return;
+      } catch (error) {
+        if (startup.signal.aborted) return;
+        if (!isTooManyDatabaseConnections(error)) throw error;
+        logger.error("worker job host start waiting on database capacity", error);
+        await delay(databaseCapacityBackoffMs(attempt), undefined, {
+          signal: startup.signal,
+        }).catch((error) => {
+          if (!startup.signal.aborted) throw error;
+        });
+      }
+    }
+  })();
+  try {
+    await starting;
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+  if (startup.signal.aborted) return;
+  reconciler.start();
   logger.info("worker ready");
 }
 

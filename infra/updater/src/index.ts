@@ -9,6 +9,8 @@ import {
   type ComposeUpdateStep,
   chooseUpdateStrategy,
   commitImageTag,
+  composeApiProbeArgv,
+  composeStopArgv,
   composeUpArgv,
   composeUpdatePlan,
   DEFAULT_UPDATE_REMOTE,
@@ -37,6 +39,8 @@ import { type Logger, SERVICE_NAMES } from "@rakazo/logging";
 import { createRootLogger } from "@rakazo/logging/axiom";
 import { requestLogging } from "@rakazo/logging/hono";
 import { type Context, Hono } from "hono";
+import type { MigrationState } from "./migration-state.js";
+import { canRestoreImage, MIGRATION_STATE_PROBE, parseMigrationState } from "./migration-state.js";
 import {
   readTagState,
   resolveUpdaterConfig,
@@ -51,6 +55,7 @@ const STEP_TIMEOUT_MS: Record<string, number> = {
   checkout: 60_000,
   merge: 60_000,
   pull: 600_000,
+  build: 1_800_000,
   recreate: 1_800_000,
   recover: 1_800_000,
 };
@@ -129,7 +134,7 @@ export function commandEnvironment(
  * argument and reaches Compose not at all, so there is no string a caller can craft that becomes
  * part of a command line, a build argument, or a service definition.
  */
-const runCommand: UpdaterCommandRunner = (
+export const runCommand: UpdaterCommandRunner = (
   command: string,
   args: string[],
   options: { cwd: string; timeoutMs: number; env?: Record<string, string> },
@@ -157,7 +162,11 @@ const runCommand: UpdaterCommandRunner = (
         const reason = timedOut
           ? `Timed out after ${options.timeoutMs}ms (${"signal" in error && error.signal ? String(error.signal) : "killed"}).`
           : error.message;
-        resolve({ ok: false, exitCode, output: output ? `${output}\n${reason}` : reason });
+        resolve({
+          ok: false,
+          exitCode,
+          output: output ? `${output}\n${reason}` : reason,
+        });
       },
     );
   });
@@ -435,7 +444,10 @@ export function createUpdaterApp(
     const listed = await run(
       "git",
       ["ls-remote", "--heads", "--", request.repoUrl, request.branch],
-      { cwd: config.deployDir, timeoutMs: STEP_TIMEOUT_MS.fetch ?? DEFAULT_TIMEOUT_MS },
+      {
+        cwd: config.deployDir,
+        timeoutMs: STEP_TIMEOUT_MS.fetch ?? DEFAULT_TIMEOUT_MS,
+      },
     );
     if (!listed.ok) {
       throw new UpdateRefused(`Could not read ${request.branch} from ${request.repoUrl}.`);
@@ -519,6 +531,7 @@ export function createUpdaterApp(
     return rememberRun(
       await execute({
         request,
+        rollback: false,
         strategy: decision.strategy,
         fromTag: tags.currentTag,
         originalPreviousTag: tags.previousTag,
@@ -547,12 +560,14 @@ export function createUpdaterApp(
     if ("error" in decision) throw new UpdateRefused(decision.error);
     const checkout = await readCheckout();
     // Never re-pull a rollback tag: registry tags can move. Reuse the exact image cached when it ran.
-    const steps = composeUpdatePlan({ strategy: "pull", target: composeTarget }).filter(
-      (step) => step.id !== "pull",
-    );
+    const steps = composeUpdatePlan({
+      strategy: "pull",
+      target: composeTarget,
+    }).filter((step) => step.id !== "pull");
     return rememberRun(
       await execute({
         request: { repoUrl: "", branch: "" },
+        rollback: true,
         strategy: "pull",
         fromTag: tags.currentTag,
         originalPreviousTag: tags.previousTag,
@@ -578,6 +593,7 @@ export function createUpdaterApp(
    */
   async function execute(input: {
     request: { repoUrl: string; branch: string };
+    rollback: boolean;
     strategy: "pull" | "build";
     fromTag: string;
     originalPreviousTag: string | null;
@@ -612,6 +628,20 @@ export function createUpdaterApp(
     // A failed Git command can still change files. Restore once before Compose recovery, or in
     // finally for failures that never reached Compose.
     let checkoutNeedsRestore = false;
+    let beforeMigrations: MigrationState | null = null;
+    async function inspectMigrations(id: string, imageTag: string) {
+      const probe = composeApiProbeArgv(composeTarget, MIGRATION_STATE_PROBE);
+      if (
+        !(await runStep(
+          record,
+          { id, label: "Verify database migrations", ...probe },
+          { [IMAGE_TAG_ENV]: imageTag },
+          false,
+        ))
+      )
+        return null;
+      return parseMigrationState(record.steps.at(-1)?.output ?? "");
+    }
     async function restoreCheckout() {
       if (!checkoutNeedsRestore) return true;
       checkoutNeedsRestore = false;
@@ -629,6 +659,17 @@ export function createUpdaterApp(
       );
     }
     try {
+      // Reject an incompatible explicit rollback before changing pins or stopping the running app.
+      if (input.rollback) {
+        const state =
+          input.toTag === null ? null : await inspectMigrations("rollback-migrations", input.toTag);
+        if (!state?.complete || !state.matchesImage) {
+          record.error =
+            "The previous image does not have a verified match for the database migrations.";
+          record.restartAdvice = `${record.error} Nothing was stopped. Restore a matching pre-update snapshot or use a compatible release.`;
+          return record;
+        }
+      }
       const gitSteps = input.steps.filter((step) => step.command === "git");
       const composeSteps = input.steps.filter((step) => step.command !== "git");
 
@@ -669,8 +710,42 @@ export function createUpdaterApp(
       if (record.toCommit !== null) composeEnv.GIT_SHA = record.toCommit;
 
       for (const step of composeSteps) {
+        if (step.id === "recreate") {
+          beforeMigrations = await inspectMigrations("migrations-before", toTag);
+          if (
+            !beforeMigrations?.complete ||
+            !beforeMigrations.matchesHistory ||
+            (input.rollback && !beforeMigrations.matchesImage)
+          ) {
+            const checkoutRestored = await restoreCheckout();
+            const envRestored = await writeEnvAssignments(revertAssignments).then(
+              () => true,
+              () => false,
+            );
+            record.error = "Database migrations could not be verified before startup.";
+            record.restart = "manual";
+            record.restartAdvice = `${record.error} Services remain stopped; inspect the migration state before restarting.${checkoutRestored ? "" : " The prior checkout could not be restored."}${envRestored ? "" : " The prior environment pin could not be restored."}`;
+            return record;
+          }
+        }
         if (!(await runStep(record, step, composeEnv))) {
           const primaryError = record.error ?? `${step.label} failed.`;
+          // A failed recreate can leave some new services running. Stop them before any old
+          // image starts, using the new checkout's configuration while it is still available.
+          const stop = composeStopArgv(composeTarget);
+          const servicesStopped =
+            step.id !== "recreate" ||
+            (await runStep(
+              record,
+              {
+                id: "stop-failed-update",
+                label: "Stop the failed update",
+                command: stop.command,
+                args: stop.args,
+              },
+              composeEnv,
+              false,
+            ));
           // The failed revision may have changed Compose or files it references. The old image
           // must be recreated from the old checkout, using the same configured Compose target.
           const checkoutRestored = await restoreCheckout();
@@ -680,8 +755,18 @@ export function createUpdaterApp(
           );
           if (step.id === "recreate") {
             const previous = composeUpArgv(composeTarget);
+            const afterMigrations =
+              servicesStopped && checkoutRestored
+                ? await inspectMigrations("migrations-after", input.fromTag)
+                : null;
+            const migrationsUnchanged =
+              beforeMigrations !== null &&
+              afterMigrations !== null &&
+              canRestoreImage(beforeMigrations, afterMigrations);
             const recovered =
+              servicesStopped &&
               checkoutRestored &&
+              migrationsUnchanged &&
               (await runStep(
                 record,
                 {
@@ -694,9 +779,15 @@ export function createUpdaterApp(
                 false,
               ));
             record.restart = recovered ? "not-required" : "manual";
-            record.restartAdvice = recovered
-              ? `${primaryError} The updater restored the previously running ${input.fromTag} image${envRestored ? " and its environment pin" : ", but could not restore the environment pin"}. Read the failed step output before retrying.`
-              : `${primaryError} Automatic recovery to ${input.fromTag} ${checkoutRestored ? "also failed" : "was skipped because the previous checkout could not be restored"}${envRestored ? "" : ", and the environment pin could not be restored"}. The runtime may contain a mix of versions; use the recorded commands to recover it manually.`;
+            record.restartAdvice =
+              servicesStopped && checkoutRestored && !migrationsUnchanged
+                ? `${primaryError} Automatic image recovery was skipped because migration history changed, is incomplete, or could not be verified against the prior image. Services remain stopped. Restore a matching pre-update snapshot or repair the migration before restarting.${envRestored ? "" : " The prior environment pin could not be restored."}`
+                : recovered
+                  ? `${primaryError} The updater restored the previously running ${input.fromTag} image${envRestored ? " and its environment pin" : ", but could not restore the environment pin"}. Read the failed step output before retrying.`
+                  : `${primaryError} Automatic recovery to ${input.fromTag} ${!servicesStopped ? "was skipped because the failed update could not be stopped" : checkoutRestored ? "also failed" : "was skipped because the previous checkout could not be restored"}${envRestored ? "" : ", and the environment pin could not be restored"}. The runtime may contain a mix of versions; use the recorded commands to recover it manually.`;
+          } else if (step.id === "stop") {
+            record.restart = "manual";
+            record.restartAdvice = `${primaryError} No new service was started. Some services may be stopped; restore the prior deployment before retrying${envRestored ? "." : ", and restore its environment pin."}`;
           } else {
             record.restartAdvice = `${primaryError} No service was recreated${envRestored ? ", and the prior environment pin was restored" : ", but the prior environment pin could not be restored"}. Read the failed step output before retrying.`;
           }

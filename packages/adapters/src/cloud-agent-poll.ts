@@ -51,7 +51,10 @@ export async function pollCloudAgent(
         select: { id: true },
       }),
       deps.prisma.spaceMember.findUnique({
-        where: { spaceId_userId: { spaceId: agent.spaceId, userId: agent.userId } },
+        where: {
+          spaceId_userId: { spaceId: agent.spaceId, userId: agent.userId },
+          member: { user: { deletion: null } },
+        },
         select: { id: true },
       }),
       deps.prisma.bot.findFirst({
@@ -64,6 +67,24 @@ export async function pollCloudAgent(
         deps,
         agent,
         { status: "cancelled", cancelRequested: false, launchRequest: {} },
+        abandoned,
+      );
+      return;
+    }
+    if (!agent.remoteId && (abandoned || agent.cancelRequested)) {
+      // A lost response is not permission to create work during revocation.
+      // Unsupported or temporarily invisible recovery keeps the cleanup identity.
+      if (!provider.recoverLaunch) throw new Error("Cloud agent recovery unavailable");
+      const snapshot = await provider.recoverLaunch(agent.id, context);
+      await finishPoll(
+        deps,
+        agent,
+        {
+          ...snapshotData(snapshot),
+          remoteId: snapshot.id,
+          launchRequest: {},
+          cancelRequested: true,
+        },
         abandoned,
       );
       return;
@@ -246,7 +267,10 @@ async function finishPoll(
       : null;
     const [member, bot] = await Promise.all([
       tx.spaceMember.findUnique({
-        where: { spaceId_userId: { spaceId: agent.spaceId, userId: agent.userId } },
+        where: {
+          spaceId_userId: { spaceId: agent.spaceId, userId: agent.userId },
+          member: { user: { deletion: null } },
+        },
         select: { id: true },
       }),
       tx.bot.findFirst({
@@ -336,4 +360,43 @@ async function finishPoll(
     });
   }
   if (committed.nextPollAt) await enqueueCloudAgent(deps, agent.id, committed.nextPollAt);
+}
+
+/** Drain owned cloud work before erasing account identity or provider recovery data. */
+export async function cleanupAccountCloudAgents(deps: CloudAgentDeps, userId: string) {
+  const rows = await deps.prisma.cloudAgent.findMany({
+    where: { userId },
+    orderBy: { id: "asc" },
+    take: 100,
+  });
+  for (const row of rows) {
+    if (row.leaseExpiresAt && row.leaseExpiresAt > new Date()) continue;
+    const disposable = (agent: CloudAgent) =>
+      (!agent.remoteId && !agent.launchDispatched) ||
+      (agent.status !== "running" && !agent.followup && !agent.followupDispatching);
+    let current = row;
+    if (!disposable(current)) {
+      if (
+        deps.cloudAgent?.key !== row.providerKey ||
+        !cloudAgentsEnabled(deps.cloudAgent, row.spaceId)
+      )
+        throw new Error("Cloud agent cleanup provider unavailable");
+      await pollCloudAgent(deps, { agentId: row.id });
+      const observed = await deps.prisma.cloudAgent.findUnique({ where: { id: row.id } });
+      if (!observed) continue;
+      current = observed;
+      if (current.errorCount > 0) throw new Error("Cloud agent cleanup requires recovery");
+    }
+    if (disposable(current)) {
+      await deps.prisma.cloudAgent.deleteMany({
+        where: {
+          id: current.id,
+          userId,
+          version: current.version,
+          OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }],
+        },
+      });
+    }
+  }
+  return (await deps.prisma.cloudAgent.count({ where: { userId } })) === 0;
 }

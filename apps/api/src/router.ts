@@ -34,6 +34,7 @@ import {
   acquireComputerExecutionLease,
   applyTeachingDesktopInput,
   archiveBot,
+  BUILTIN_AGENT_SKILLS,
   buildMcpCredentialBlob,
   buildModelConnectPlaintext,
   ComputerBusyError,
@@ -69,6 +70,7 @@ import {
   prepareGraphqlInstall,
   probeOpenAiCompatibleModels,
   provisionComputer,
+  purgeSemanticHistory,
   queueComputerUpdate,
   releaseComputerExecutionLease,
   replaceComputer,
@@ -106,10 +108,10 @@ import {
   ACTIVE_RUN_STATUSES,
   AttachmentValidationError,
   containsSecret,
-  expandSkillReferencesInPrompt,
   hasMixedOneShotSchedule,
   isOneShotRoutineCrons,
   nextCronDateAcrossStrict,
+  previewLearningImport,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
@@ -124,7 +126,11 @@ import {
   createCustomerRepos,
   createExternalConversationRepos,
   createGroupRepos,
+  createLearning,
+  createMemoryAudit,
+  createPrivateHistory,
   createRepos,
+  createSemanticMemoryAudit,
   createSpaceForMember,
   createThreadMessageInTransaction,
   deleteEmptySpaceForMember,
@@ -136,12 +142,15 @@ import {
   formatMessagingLinkCode,
   InvalidSpaceNameError,
   IsolationError,
+  inFlightCustomerPurchases,
   issueMessagingLinkCode,
   lockOwnedGroup,
+  lockProviderConnectionScope,
   newestModelCredentialOrder,
   newestVoiceCredentialOrder,
   Prisma,
   parseComputerMode,
+  readMemoryDocuments,
   releaseSpaceDeletionClaim,
   renewSpaceDeletionClaim,
   SPACE_DELETION_CLAIM_TIMEOUT_MS,
@@ -182,6 +191,7 @@ import {
 import { listSpaceRuns } from "./runs.js";
 import { addScreenProxyCapability } from "./screen-proxy.js";
 import { querySpaceSearch } from "./search.js";
+import { createSemanticMemoryReversal } from "./semantic-memory-reversal.js";
 import { withSerializableRetry } from "./serializable-retry.js";
 import type { UpdaterProxyConfig } from "./server-update.js";
 import {
@@ -324,15 +334,14 @@ function concreteKeepAccountIds(
   return { keepIds, canRevokeUnreferenced };
 }
 
-async function lockProviderConnectionScope(
-  tx: Prisma.TransactionClient,
-  owner: Pick<Actor, "spaceId" | "userId">,
-  connectorId: string,
-  provider: string,
-): Promise<void> {
-  // Avoid NUL separators in the lock key; text params may truncate at a zero byte and break begin.
-  const scope = `space:${owner.spaceId}|user:${owner.userId}|connector:${connectorId}|provider:${provider}`;
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('connection-provider'), hashtext(${scope}))`;
+function memoryAuditContext(actor: Actor): AdapterContext {
+  return {
+    spaceId: actor.spaceId,
+    userId: actor.userId,
+    operationId: "memory.audit",
+    traceId: "memory.audit",
+    signal: new AbortController().signal,
+  };
 }
 
 function computerContext(actor: Actor, botId: string, operationId: string): AdapterContext {
@@ -500,7 +509,11 @@ export function createRouter(deps: RouterDeps) {
     prisma: deps.prisma,
     provider: (id) => deps.connectors.managed(id),
   });
-  const os = implement(appContract).$context<{ actor: Actor | null; signal?: AbortSignal }>();
+  const os = implement(appContract).$context<{
+    actor: Actor | null;
+    sessionId?: string;
+    signal?: AbortSignal;
+  }>();
   const repos = createRepos(deps.prisma);
 
   const onboardingDeps = { prisma: deps.prisma, events: deps.events, connectors: deps.connectors };
@@ -519,6 +532,10 @@ export function createRouter(deps: RouterDeps) {
     dataDir: deps.dataDir,
   });
   const agentSkills = createAgentSkillsService(deps.prisma);
+  const privateHistory = createPrivateHistory(
+    deps.prisma,
+    BUILTIN_AGENT_SKILLS.map((skill) => skill.name),
+  );
 
   const authed = os.use(async ({ context, next }) => {
     if (!context.actor) throw new ORPCError("UNAUTHORIZED");
@@ -1452,15 +1469,47 @@ export function createRouter(deps: RouterDeps) {
       }),
       subscribe: authed.threads.subscribe.handler(async function* ({ context, input }) {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
+        const sessionId = context.sessionId;
+        if (!sessionId) throw new ORPCError("UNAUTHORIZED");
+        const assertAccess = async () => {
+          const owner = { spaceId: context.actor.spaceId, userId: context.actor.userId };
+          const accessible = await deps.prisma.thread.findFirst({
+            where: {
+              id: target.threadId,
+              ...owner,
+              ...(target.kind === "bot"
+                ? { bot: { id: target.botId, ...owner, archivedAt: null } }
+                : { group: { id: target.groupId, ...owner, archivedAt: null } }),
+              space: {
+                memberships: {
+                  some: {
+                    userId: context.actor.userId,
+                    member: {
+                      user: {
+                        deletion: null,
+                        sessions: { some: { id: sessionId, expiresAt: { gt: new Date() } } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            select: { id: true },
+          });
+          if (!accessible) throw new ORPCError("FORBIDDEN");
+        };
         const peerRunCache = new Map<string, Promise<boolean>>();
         for await (const event of deps.events.follow(
           target.threadId,
           input.cursor,
           context.signal,
+          assertAccess,
         )) {
           if (await isPeerRun(deps.prisma, event.runId, peerRunCache)) {
             if (!shouldForwardPeerThreadEvent(event)) continue;
           }
+          // Recheck after event loading and peer filtering, including buffered batches.
+          await assertAccess();
           yield event;
         }
       }),
@@ -1486,12 +1535,13 @@ export function createRouter(deps: RouterDeps) {
         const target = await resolveThreadTarget(deps.prisma, context.actor, input);
         const contextBotId = target.kind === "bot" ? target.botId : target.memberBotIds[0];
         if (!contextBotId) throw new IsolationError();
-        const { cancelledRunIds, historyCompactionGeneration } = await deps.events.clearThread({
-          spaceId: context.actor.spaceId,
-          threadId: target.threadId,
-          botId: contextBotId,
-          ...(target.kind === "group" ? { groupId: target.groupId } : {}),
-        });
+        const { cancelledRunIds, historyCompactionGeneration: clearedGeneration } =
+          await deps.events.clearThread({
+            spaceId: context.actor.spaceId,
+            threadId: target.threadId,
+            botId: contextBotId,
+            ...(target.kind === "group" ? { groupId: target.groupId } : {}),
+          });
         const [configuredMemory] = await Promise.all([
           target.kind === "bot"
             ? deps.memoryProviders.resolve(context.actor.spaceId).catch((error) => {
@@ -1506,21 +1556,21 @@ export function createRouter(deps: RouterDeps) {
           ),
         ]);
         // Durable memories remain in their Space-private containers. Clear only removes
-        // conversation-derived summaries from the previous generation; including the new
-        // generation also covers a compaction job that began just after the clear committed.
+        // conversation-derived summaries from the previous generation. New-generation
+        // summaries belong to messages received after the clear and must remain available.
         if (configuredMemory && target.kind === "bot") {
           // Best effort: the conversation rows are already deleted, so failing the clear here
-          // would help nothing — a failed purge only leaves stale summaries recallable.
+          // would help nothing; a failed purge can leave stale summaries at the provider.
           try {
-            const purged = await configuredMemory.provider.purgeHistory(
-              {
-                botId: target.botId,
-                generations: [
-                  Math.max(0, historyCompactionGeneration - 1),
-                  historyCompactionGeneration,
-                ],
-              },
+            const purged = await purgeSemanticHistory(
+              deps.prisma,
+              configuredMemory,
               computerContext(context.actor, target.botId, `thread-clear:${target.threadId}`),
+              {
+                threadId: target.threadId,
+                generation: clearedGeneration + 1,
+                generations: [clearedGeneration],
+              },
             );
             if (!purged.ok) {
               getLogger().error("semantic memory purge after thread clear failed", purged.error);
@@ -2180,6 +2230,22 @@ export function createRouter(deps: RouterDeps) {
         return { path: input.path, content };
       }),
       screenUrl: authed.computer.screenUrl.handler(async ({ context, input }) => {
+        const sessionId = context.sessionId;
+        if (!sessionId) throw new ORPCError("UNAUTHORIZED");
+        const membership = await deps.prisma.spaceMember.findFirst({
+          where: {
+            spaceId: context.actor.spaceId,
+            userId: context.actor.userId,
+            member: {
+              user: {
+                deletion: null,
+                sessions: { some: { id: sessionId, expiresAt: { gt: new Date() } } },
+              },
+            },
+          },
+          select: { id: true },
+        });
+        if (!membership) throw new ORPCError("FORBIDDEN");
         let bot = await repos.getBot(context.actor, input.botId);
         if (await expireStaleComputerControl(deps, bot.computer)) {
           bot = await repos.getBot(context.actor, input.botId);
@@ -2231,6 +2297,10 @@ export function createRouter(deps: RouterDeps) {
         );
         return {
           url: addScreenProxyCapability(viewUrl, deps.env.screenProxySecret, deps.env.webOrigin, {
+            spaceId: context.actor.spaceId,
+            userId: context.actor.userId,
+            sessionId,
+            membershipId: membership.id,
             botId: bot.id,
             computerId: computer.id,
             botGeneration: bot.screenGeneration,
@@ -2259,16 +2329,49 @@ export function createRouter(deps: RouterDeps) {
         return { ok: true as const };
       }),
     },
+    semanticMemory: {
+      preview: authed.semanticMemory.preview.handler(({ context, input }) =>
+        createSemanticMemoryReversal(deps.prisma, deps.memoryProviders).preview(
+          memoryAuditContext(context.actor),
+          input,
+        ),
+      ),
+      apply: authed.semanticMemory.apply.handler(({ context, input }) =>
+        createSemanticMemoryReversal(deps.prisma, deps.memoryProviders).apply(
+          memoryAuditContext(context.actor),
+          input,
+        ),
+      ),
+      history: authed.semanticMemory.history.handler(({ context, input }) =>
+        createSemanticMemoryAudit(deps.prisma).list(
+          { ...memoryAuditContext(context.actor), botId: input.botId },
+          input,
+        ),
+      ),
+      detail: authed.semanticMemory.detail.handler(({ context, input }) =>
+        createSemanticMemoryAudit(deps.prisma).detail(
+          { ...memoryAuditContext(context.actor), botId: input.botId },
+          input.mutationId,
+        ),
+      ),
+    },
+    privateHistory: {
+      history: authed.privateHistory.history.handler(({ context, input }) =>
+        privateHistory.history(context.actor, input),
+      ),
+      version: authed.privateHistory.version.handler(({ context, input }) =>
+        privateHistory.version(context.actor, input),
+      ),
+      preview: authed.privateHistory.preview.handler(({ context, input }) =>
+        privateHistory.preview(context.actor, input),
+      ),
+      apply: authed.privateHistory.apply.handler(({ context, input }) =>
+        privateHistory.apply(memoryAuditContext(context.actor), input),
+      ),
+    },
     memory: {
       list: authed.memory.list.handler(async ({ context, input }) => {
-        const docs = await deps.prisma.memoryDocument.findMany({
-          where: {
-            spaceId: context.actor.spaceId,
-            userId: context.actor.userId,
-            ...(input.botId ? { botId: input.botId } : {}),
-            ...(input.scope ? { scope: input.scope } : {}),
-          },
-        });
+        const docs = await readMemoryDocuments(deps.prisma, context.actor, input);
         return docs.map((doc) => ({
           id: doc.id,
           scope: doc.scope as "bot" | "user",
@@ -2279,48 +2382,26 @@ export function createRouter(deps: RouterDeps) {
           updatedAt: doc.updatedAt.toISOString(),
         }));
       }),
-      update: authed.memory.update.handler(async ({ context, input }) => {
-        const doc = await deps.prisma.memoryDocument.findFirst({
-          where: {
-            id: input.documentId,
-            spaceId: context.actor.spaceId,
-            userId: context.actor.userId,
-          },
-        });
-        if (!doc) throw new IsolationError();
-        const updated = await deps.memory.commit(
-          {
-            scope: doc.scope as "bot" | "user",
-            botId: doc.botId ?? undefined,
-            path: doc.path,
-            content: input.content,
-          },
-          {
-            operationId: "mem",
-            traceId: "mem",
-            spaceId: context.actor.spaceId,
-            userId: context.actor.userId,
-            signal: new AbortController().signal,
-          },
-        );
-        return {
-          id: updated.id,
-          scope: doc.scope as "bot" | "user",
-          botId: doc.botId,
-          path: updated.path,
-          content: updated.content,
-          revision: updated.revision,
-          updatedAt: new Date().toISOString(),
-        };
-      }),
+      update: authed.memory.update.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).update(memoryAuditContext(context.actor), input),
+      ),
+      history: authed.memory.history.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).history(context.actor, input),
+      ),
+      read: authed.memory.read.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).read(context.actor, input),
+      ),
+      previewUndo: authed.memory.previewUndo.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).previewUndo(context.actor, input),
+      ),
+      undo: authed.memory.undo.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).undo(memoryAuditContext(context.actor), input),
+      ),
+      restore: authed.memory.restore.handler(async ({ context, input }) =>
+        createMemoryAudit(deps.prisma).restore(memoryAuditContext(context.actor), input),
+      ),
       exportMarkdown: authed.memory.exportMarkdown.handler(async ({ context, input }) => {
-        const docs = await deps.prisma.memoryDocument.findMany({
-          where: {
-            spaceId: context.actor.spaceId,
-            userId: context.actor.userId,
-            ...(input.botId ? { botId: input.botId } : {}),
-          },
-        });
+        const docs = await readMemoryDocuments(deps.prisma, context.actor, input);
         return docs.map((d) => `# ${d.path}\n\n${d.content}`).join("\n\n");
       }),
       providerConfig: authed.memory.providerConfig.handler(async ({ context }) => {
@@ -2533,8 +2614,7 @@ export function createRouter(deps: RouterDeps) {
           });
           if (existing) return { runId: existing.id };
         }
-        const skillRecords = await agentSkills.listWithContent(context.actor);
-        const prompt = expandSkillReferencesInPrompt(routine.prompt, skillRecords);
+        const prompt = routine.prompt;
         let run: { id: string };
         try {
           // Task + run must commit together so a nonce collision cannot leave an orphan queued Task.
@@ -2700,7 +2780,25 @@ export function createRouter(deps: RouterDeps) {
         agentSkills.update(context.actor, input),
       ),
       remove: authed.agentSkills.remove.handler(async ({ context, input }) =>
-        agentSkills.remove(context.actor, input.skillId),
+        agentSkills.remove(context.actor, input),
+      ),
+      listHistory: authed.agentSkills.listHistory.handler(({ context, input }) =>
+        agentSkills.listHistory(context.actor, input),
+      ),
+      history: authed.agentSkills.history.handler(({ context, input }) =>
+        agentSkills.history(context.actor, input),
+      ),
+      readVersion: authed.agentSkills.readVersion.handler(({ context, input }) =>
+        agentSkills.readVersion(context.actor, input),
+      ),
+      previewUndo: authed.agentSkills.previewUndo.handler(({ context, input }) =>
+        agentSkills.previewUndo(context.actor, input),
+      ),
+      undo: authed.agentSkills.undo.handler(({ context, input }) =>
+        agentSkills.undo(context.actor, input),
+      ),
+      restore: authed.agentSkills.restore.handler(({ context, input }) =>
+        agentSkills.restore(context.actor, input),
       ),
     },
     capabilities: {
@@ -4137,6 +4235,19 @@ export function createRouter(deps: RouterDeps) {
                 AND status IN ('connected', 'pending', 'error')
               FOR UPDATE`;
 
+            if (
+              await tx.customerPurchase.count({
+                where: {
+                  ...inFlightCustomerPurchases(),
+                  connectionId: row.id,
+                },
+              })
+            )
+              throw new ORPCError("CONFLICT", {
+                message:
+                  "A purchase may still be running. Check its outcome and retry disconnecting after five minutes.",
+              });
+
             const updated = await tx.connection.updateMany({
               where: {
                 id: row.id,
@@ -4593,6 +4704,17 @@ export function createRouter(deps: RouterDeps) {
       },
     },
     customers: {
+      steer: authed.customers.steer.handler(async ({ context, input }) => {
+        const result = await createCustomerInbox(deps.prisma).steer(context.actor, input);
+        await deps.jobs
+          .enqueue({
+            name: "customer.process",
+            payload: { conversationId: input.id },
+            replaceKey: `customer.process:${input.id}`,
+          })
+          .catch(() => undefined);
+        return result;
+      }),
       investigate: authed.customers.investigate.handler(async ({ context, input }) => {
         const { text, ...assistant } = await createCustomerRepos(deps.prisma).prepareInvestigation(
           context.actor,
@@ -4631,6 +4753,54 @@ export function createRouter(deps: RouterDeps) {
       snapshot: authed.customers.snapshot.handler(({ context, input }) =>
         createCustomerRepos(deps.prisma).snapshot(context.actor, input.id, input.before),
       ),
+    },
+    learning: {
+      configure: authed.learning.configure.handler(({ context, input }) =>
+        createLearning(deps.prisma).configure(context.actor, input),
+      ),
+      taskList: authed.learning.taskList.handler(({ context, input }) =>
+        createLearning(deps.prisma).taskList(context.actor, input),
+      ),
+      task: authed.learning.task.handler(({ context, input }) =>
+        createLearning(deps.prisma).task(context.actor, input),
+      ),
+      tasks: authed.learning.tasks.handler(({ context, input }) =>
+        createLearning(deps.prisma).tasks(context.actor, input.botId),
+      ),
+      decideTask: authed.learning.decideTask.handler(({ context, input }) =>
+        createLearning(deps.prisma).decideTask(context.actor, input),
+      ),
+      archive: authed.learning.archive.handler(({ context, input }) =>
+        createLearning(deps.prisma).archive(context.actor, input),
+      ),
+      taskEvidence: authed.learning.taskEvidence.handler(({ context, input }) =>
+        createLearning(deps.prisma).taskEvidence(context.actor, input),
+      ),
+      evidence: authed.learning.evidence.handler(({ context, input }) =>
+        createLearning(deps.prisma).evidence(context.actor, input),
+      ),
+      withdrawSource: authed.learning.withdrawSource.handler(({ context, input }) =>
+        createLearning(deps.prisma).withdraw(context.actor, input),
+      ),
+      previewUndo: authed.learning.previewUndo.handler(({ context, input }) =>
+        createLearning(deps.prisma).previewUndo(context.actor, input),
+      ),
+      undo: authed.learning.undo.handler(({ context, input }) =>
+        createLearning(deps.prisma).undo(context.actor, input),
+      ),
+      state: authed.learning.state.handler(({ context, input }) =>
+        createLearning(deps.prisma).state(context.actor, input.botId),
+      ),
+      save: authed.learning.save.handler(({ context, input }) =>
+        createLearning(deps.prisma).save(context.actor, input),
+      ),
+      restore: authed.learning.restore.handler(({ context, input }) =>
+        createLearning(deps.prisma).restore(context.actor, input),
+      ),
+      previewImport: authed.learning.previewImport.handler(async ({ context, input }) => {
+        await createLearning(deps.prisma).state(context.actor, input.botId);
+        return previewLearningImport(input);
+      }),
     },
     externalConversations: {
       updatePolicy: authed.externalConversations.updatePolicy.handler(

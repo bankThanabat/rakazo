@@ -9,8 +9,10 @@ import type {
 } from "@rakazo/adapter-kit";
 import type { ConnectorAuthInput } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
+import { deleteExpiredConnectorPermits } from "@rakazo/db";
 import { z } from "zod";
 import { assertConnectorActionAllowed, connectorActionAllowed } from "./connector-action-access.js";
+import { waitForConnectorPermit } from "./connector-rate-limit.js";
 import { redactConnectorPayload } from "./connector-safety.js";
 import {
   CATALOG_EXECUTE,
@@ -23,9 +25,15 @@ import {
   searchCatalog,
 } from "./lazy-tool-catalog.js";
 import { needsAuthorization, OpenConnectorAccounts } from "./open-connector-accounts.js";
-import { authMethods, OpenConnectorHttp } from "./open-connector-catalog.js";
+import {
+  authMethods,
+  OpenConnectorAccountGuardRejected,
+  OpenConnectorHttp,
+} from "./open-connector-catalog.js";
+import { openConnectorReadOnly } from "./open-connector-effects.js";
 import { OpenConnectorIcons } from "./open-connector-icons.js";
 import type { EncryptedSecretStore } from "./secrets.js";
+import { withAbort } from "./web-ssrf.js";
 
 /** Recommended for customer agents. An account shares them only after its owner accepts defaults. */
 const SHARED_BY_DEFAULT = new Set([
@@ -34,19 +42,29 @@ const SHARED_BY_DEFAULT = new Set([
   "instagram.create_comment",
 ]);
 
+const INSTAGRAM_HISTORY_READS = new Set([
+  "instagram.list_conversations",
+  "instagram.list_conversation_messages",
+  "instagram.get_message",
+]);
+export const isInstagramHistoryRead = (action: string | undefined) =>
+  action !== undefined && INSTAGRAM_HISTORY_READS.has(action);
+
 /** Catalog-driven accounts and actions; provider translation belongs to OpenConnector. */
 export class OpenConnector implements ManagedConnectorProvider {
   private readonly http: OpenConnectorHttp;
   private readonly accounts: OpenConnectorAccounts;
   private readonly icons: OpenConnectorIcons;
+  private readonly rateLimitDb: Pick<PrismaClient, "$queryRaw" | "$executeRaw">;
   constructor(
     private readonly config: { endpoint: string; apiKey: string; identitySecret: string },
     deps: {
-      prisma: Pick<PrismaClient, "secret" | "openConnectorAttempt">;
+      prisma: Pick<PrismaClient, "secret" | "openConnectorAttempt" | "$queryRaw" | "$executeRaw">;
       secrets: EncryptedSecretStore;
       fetch?: typeof fetch;
     },
   ) {
+    this.rateLimitDb = deps.prisma;
     this.http = new OpenConnectorHttp(config, deps.fetch);
     this.icons = new OpenConnectorIcons(deps.fetch);
     this.accounts = new OpenConnectorAccounts(this.http, {
@@ -55,8 +73,42 @@ export class OpenConnector implements ManagedConnectorProvider {
       endpoint: config.endpoint,
     });
   }
-  maintain() {
-    return this.accounts.maintain();
+  async maintain() {
+    await deleteExpiredConnectorPermits(this.rateLimitDb);
+    await this.accounts.maintain();
+  }
+  async accountIdentity(connectionId: string, context: AdapterContext) {
+    const connection = this.connections(context).find((row) => row.id === connectionId);
+    if (!connection?.providerRef) throw new Error("Connection is unavailable");
+    const grant = await this.accounts.load(connection.providerRef, context);
+    if (
+      !grant?.accountId ||
+      grant.requestId ||
+      !grant.token ||
+      grant.service !== connection.externalId
+    )
+      throw new Error("Connection is unavailable");
+    const account = z
+      .object({
+        id: z.string(),
+        service: z.string(),
+        alias: z.string(),
+        status: z.literal("active"),
+        providerAccountId: z.string().min(1).max(500),
+      })
+      .parse(
+        await this.http.request(
+          `/v1/connections/by-id/${encodeURIComponent(grant.accountId)}`,
+          context,
+        ),
+      );
+    if (
+      account.id !== grant.accountId ||
+      account.service !== connection.externalId ||
+      account.alias !== (grant.alias ?? connection.providerRef)
+    )
+      throw new Error("The linked provider account changed");
+    return { provider: account.service, id: account.providerAccountId };
   }
   describe() {
     return {
@@ -157,7 +209,7 @@ export class OpenConnector implements ManagedConnectorProvider {
             name: `oc_${createHash("sha256").update(`${connection.id}:${action.id}`).digest("hex").slice(0, 32)}`,
             description: `${action.description} Account: ${connection.displayName}`,
             inputSchema: {},
-            readOnly: false,
+            readOnly: openConnectorReadOnly(action),
             route: {
               connectorId: "open-connector",
               toolName: action.id,
@@ -184,6 +236,7 @@ export class OpenConnector implements ManagedConnectorProvider {
         name: action.id,
         description: action.description,
         sharedByDefault: SHARED_BY_DEFAULT.has(action.id),
+        readOnly: openConnectorReadOnly(action),
       }));
   }
   private async resolved(call: ConnectorCall, context: AdapterContext) {
@@ -194,17 +247,25 @@ export class OpenConnector implements ManagedConnectorProvider {
     if (!connection || call.route?.connectorId !== "open-connector")
       throw new Error("OpenConnector connection is not authorized");
     assertConnectorActionAllowed(context, call.route);
-    const action = await this.http.action(call.route.toolName, connection.externalId, context);
+    const action = await this.http.action(
+      call.route.toolName,
+      connection.externalId,
+      context,
+      true,
+    );
     const inputSchema = action.inputSchema!;
-    const resourceRevision = createHash("sha256").update(JSON.stringify(inputSchema)).digest("hex");
+    const readOnly = openConnectorReadOnly(action);
+    const resourceRevision = createHash("sha256")
+      .update(JSON.stringify({ inputSchema, readOnly }))
+      .digest("hex");
     if (call.route.resourceRevision && call.route.resourceRevision !== resourceRevision)
-      throw new Error("The action schema changed. Review the action again.");
+      throw new Error("The action changed. Review the action again.");
     const route = { ...call.route, resourceRevision };
     const tool: ConnectorTool = {
       name: call.tool,
       description: action.description,
       inputSchema,
-      readOnly: false,
+      readOnly,
       route,
     };
     return {
@@ -259,7 +320,7 @@ export class OpenConnector implements ManagedConnectorProvider {
               description: action.description,
               inputSchema: action.inputSchema,
               outputSchema: action.outputSchema,
-              readOnly: false,
+              readOnly: openConnectorReadOnly(action),
             },
           };
           return;
@@ -283,11 +344,35 @@ export class OpenConnector implements ManagedConnectorProvider {
         grant,
         await this.http.provider(resolved.connection.externalId, context),
         context,
-        false,
+        { persist: false },
       );
+      if (isInstagramHistoryRead(resolved.call.route!.toolName)) {
+        if (!resolved.tool.readOnly) throw new Error("History action is no longer read-only");
+        const identity = await this.accountIdentity(resolved.connection.id, context);
+        if (
+          identity.provider !== "instagram" ||
+          (resolved.call.expectedAccountId !== undefined &&
+            resolved.call.expectedAccountId !== identity.id)
+        )
+          throw new OpenConnectorAccountGuardRejected("The linked provider account changed");
+        const key = createHash("sha256")
+          .update(JSON.stringify(["instagram", identity.id, "conversation-reads"]))
+          .digest("hex");
+        // Conservative spacing, shared by all aliases, bots, Spaces and workers in this DB.
+        await waitForConnectorPermit(
+          this.rateLimitDb,
+          key,
+          600,
+          context.signal,
+          context.assertConnectorReadAccess,
+        );
+        // The provider account can change while waiting. The server rechecks this ID at dispatch.
+        resolved.call.expectedAccountId = identity.id;
+      }
+      context.signal.throwIfAborted();
       const response = z.object({ success: z.literal(true), data: z.unknown() }).parse(
         await this.http.request(
-          `/v1/actions/${encodeURIComponent(resolved.call.route!.toolName)}`,
+          `/v1/actions/${encodeURIComponent(resolved.call.route!.toolName)}${resolved.call.expectedAccountId ? `/for-account/${encodeURIComponent(resolved.call.expectedAccountId)}` : ""}`,
           context,
           {
             method: "POST",
@@ -300,6 +385,8 @@ export class OpenConnector implements ManagedConnectorProvider {
           current.token,
         ),
       );
+      if (context.assertConnectorReadAccess)
+        await withAbort(context.assertConnectorReadAccess(), context.signal);
       yield {
         type: "result",
         data: redactConnectorPayload(response.data, [this.config.apiKey, current.token!]),
@@ -307,6 +394,9 @@ export class OpenConnector implements ManagedConnectorProvider {
     } catch (error) {
       yield {
         type: "error",
+        ...(error instanceof OpenConnectorAccountGuardRejected
+          ? { dispatch: "not_started" as const }
+          : {}),
         message: error instanceof Error ? error.message : "OpenConnector action failed",
       };
     }

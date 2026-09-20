@@ -12,6 +12,7 @@ vi.mock("../lib/rpc", () => ({
 vi.mock("../lib/artifact-open", () => ({ downloadArtifactBytes: vi.fn() }));
 // This test covers skills; the Documents tab has its own browser test.
 vi.mock("./KnowledgeDocuments", () => ({ KnowledgeDocuments: () => null }));
+vi.mock("./LearningDocuments", () => ({ LearningDocuments: () => null }));
 vi.mock("@lingui/react/macro", () => {
   const t = (parts: TemplateStringsArray) => parts.join("");
   return { useLingui: () => ({ t }), Trans: ({ children }: { children: ReactNode }) => children };

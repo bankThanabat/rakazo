@@ -132,7 +132,10 @@ describe("OpenConnector settings", () => {
       {},
       f.factory,
     );
-    expect(await worker.resolve("open-connector")).toBe(f.adapter);
+    const adapter = await worker.resolve("open-connector");
+    expect(await worker.resolve("open-connector")).toBe(adapter);
+    await adapter!.catalog(context);
+    expect(f.adapter.catalog).toHaveBeenLastCalledWith(context);
     expect(f.factory).toHaveBeenLastCalledWith(config);
   });
   it.each([

@@ -36,6 +36,8 @@ export interface PreparedMemoryProviderConnection {
 export interface ConfiguredMemoryProvider {
   provider: SemanticMemoryProvider;
   defaultScope: DurableMemoryScope;
+  /** Nonsecret identity invalidates approvals after reconnect or configuration changes. */
+  configurationRevision: string;
 }
 
 export interface MemoryProviderResolver {
@@ -177,6 +179,7 @@ export class SpaceMemoryProviderResolver implements MemoryProviderResolver {
     return {
       provider: createMemoryProvider(config.provider, settings, credentials),
       defaultScope: config.defaultMemoryScope === "shared" ? "shared" : "isolated",
+      configurationRevision: `${config.id}:${config.updatedAt.toISOString()}`,
     };
   }
 }

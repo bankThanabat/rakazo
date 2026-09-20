@@ -21,6 +21,9 @@ describe("toolRequiresApproval", () => {
     expect(toolRequiresApproval("secret_request", false)).toBe(true);
     expect(toolRequiresApproval("forget_secret", false)).toBe(true);
     expect(toolRequiresApproval("forget_memory", false)).toBe(true);
+    expect(toolRequiresExplicitApproval("forget_memory")).toBe(true);
+    expect(toolRequiresApproval("memory_semantic_undo", false)).toBe(true);
+    expect(toolRequiresExplicitApproval("memory_semantic_undo")).toBe(true);
     expect(toolRequiresApproval("list_secrets", false)).toBe(false);
     expect(toolRequiresApproval("delete_bot", false)).toBe(true);
     expect(toolRequiresApproval("archive_bot", false)).toBe(true);
@@ -29,9 +32,13 @@ describe("toolRequiresApproval", () => {
     expect(toolRequiresExplicitApproval("create_space")).toBe(true);
     expect(toolRequiresExplicitApproval("customer_connect")).toBe(true);
     expect(toolRequiresExplicitApproval("customer_configure")).toBe(true);
+    expect(toolRequiresExplicitApproval("customer_initialize")).toBe(true);
+    expect(toolRequiresExplicitApproval("customer_learning_configure")).toBe(true);
+    expect(toolRequiresExplicitApproval("customer_purchase_review")).toBe(true);
     for (const name of ["customer_website", "customer_channel", "customer_delete"])
       expect(toolRequiresExplicitApproval(name)).toBe(true);
-    expect(toolRequiresApproval("customer_instructions", false)).toBe(false);
+    expect(toolRequiresApproval("customer_instructions", false)).toBe(true);
+    expect(toolRequiresApproval("customer_notifications", false)).toBe(true);
     expect(toolRequiresExplicitApproval("archive_bot")).toBe(false);
   });
 

@@ -2,7 +2,7 @@ name: openconnector
 
 services:
   connector:
-    image: rakazo-openconnector:${OPENCONNECTOR_REVISION:?Set the deployed source commit}
+    image: rakazo-openconnector:${OPENCONNECTOR_REVISION:?Set the deployed source commit or locked tree ID}
     build:
       context: ./source
       dockerfile: docker/Dockerfile

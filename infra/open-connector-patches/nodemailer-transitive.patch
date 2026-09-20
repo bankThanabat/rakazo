@@ -1,0 +1,49 @@
+diff --git a/package-lock.json b/package-lock.json
+index 8c6c1782..3159a973 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -6344,15 +6344,6 @@
+         "socks": "2.8.9"
+       }
+     },
+-    "node_modules/imapflow/node_modules/nodemailer": {
+-      "version": "9.0.3",
+-      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-9.0.3.tgz",
+-      "integrity": "sha512-n+YP+NKwR5zRWa60k3GiQ6Q3B4KXCoAw40dAKeCtYn020iNN74aWK2liXIC3ZEATeGql7we3tE3t8QwhY0eskw==",
+-      "license": "MIT-0",
+-      "engines": {
+-        "node": ">=6.0.0"
+-      }
+-    },
+     "node_modules/immer": {
+       "version": "11.1.11",
+       "resolved": "https://registry.npmjs.org/immer/-/immer-11.1.11.tgz",
+@@ -6885,15 +6876,6 @@
+         "libqp": "2.1.1"
+       }
+     },
+-    "node_modules/mailparser/node_modules/nodemailer": {
+-      "version": "9.0.6",
+-      "resolved": "https://registry.npmjs.org/nodemailer/-/nodemailer-9.0.6.tgz",
+-      "integrity": "sha512-IQUGFdhdGwI9+AWX+FpUt4DLmvFaOjTMEoneTIWX/RXxuy1TdenPwWrvFMSfLkPKl+HQEXWuSAxEMMbPYXtBmg==",
+-      "license": "MIT-0",
+-      "engines": {
+-        "node": ">=6.0.0"
+-      }
+-    },
+     "node_modules/markdown-table": {
+       "version": "3.0.4",
+       "resolved": "https://registry.npmjs.org/markdown-table/-/markdown-table-3.0.4.tgz",
+diff --git a/package.json b/package.json
+index 65cb07a2..a9ee4028 100644
+--- a/package.json
++++ b/package.json
+@@ -81,5 +81,8 @@
+     "esbuild@0.28.1": true,
+     "sharp@0.34.5": true,
+     "workerd@1.20260828.1": true
++  },
++  "overrides": {
++    "nodemailer": "$nodemailer"
+   }
+ }

@@ -43,7 +43,11 @@ describe("Supermemory request URLs", () => {
     "http://fake:credential@localhost:6767",
     "file:///fake-memory",
   ])("rejects ambiguous base URLs before every transport call: %s", async (baseUrl) => {
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ results: [] }));
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async () =>
+        Response.json({ results: [], memories: [{ id: "fact-1", memory: "fact" }] }),
+      );
     vi.stubGlobal("fetch", fetchMock);
     for (const { request } of operations) {
       expect(await request({ ...config, baseUrl })).toMatchObject({ ok: false });
@@ -54,7 +58,11 @@ describe("Supermemory request URLs", () => {
   it.each(["", "/", "/memory", "/memory/"])(
     "preserves the base prefix and provider route for every method: %s",
     async (prefix) => {
-      const fetchMock = vi.fn().mockImplementation(async () => Response.json({ results: [] }));
+      const fetchMock = vi
+        .fn()
+        .mockImplementation(async () =>
+          Response.json({ results: [], memories: [{ id: "fact-1", memory: "fact" }] }),
+        );
       vi.stubGlobal("fetch", fetchMock);
       for (const { request, method, path } of operations) {
         expect(await request({ ...config, baseUrl: `http://[::1]:6767${prefix}` })).toMatchObject({
@@ -241,60 +249,163 @@ describe("searchSupermemoryContainers", () => {
 });
 
 describe("saveSupermemoryMemory", () => {
-  it("posts the content and container tag on success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await saveSupermemoryMemory(
-      "User prefers British English",
-      "rakazo:bot-123",
-      config,
+  it("preserves the submitted content and returns confirmed memory-entry identity", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json(
+        {
+          documentId: "document-1",
+          memories: [{ id: "entry-1", memory: "  Use metric units.  " }],
+        },
+        { status: 201 },
+      ),
     );
-
-    expect(result).toEqual({ ok: true });
-    const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("http://localhost:6767/v4/memories");
-    expect(init.redirect).toBe("error");
-    expect(JSON.parse(init.body)).toEqual({
-      containerTag: "rakazo:bot-123",
-      memories: [{ content: "User prefers British English", isStatic: false }],
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await saveSupermemoryMemory("  Use metric units.  ", "rakazo:bot-1", config)).toEqual({
+      ok: true,
+      value: [
+        {
+          version: 1,
+          id: "entry-1",
+          entity: "rakazo:bot-1",
+          content: "  Use metric units.  ",
+          created: true,
+        },
+      ],
     });
-    vi.unstubAllGlobals();
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({
+      containerTag: "rakazo:bot-1",
+      memories: [{ content: "  Use metric units.  ", isStatic: false }],
+    });
   });
 
-  it("caps oversized content at the API limit", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+  it.each(["", "   ", "x".repeat(MAX_MEMORY_CONTENT_CHARS + 1)])(
+    "rejects invalid content without silently truncating or writing",
+    async (content) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      expect(await saveSupermemoryMemory(content, "rakazo:bot-1", config)).toMatchObject({
+        ok: false,
+        receipts: [],
+        uncertainEntities: [],
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([401, 500])("records unconfirmed HTTP %i saves as uncertain", async (status) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status }));
     vi.stubGlobal("fetch", fetchMock);
-
-    await saveSupermemoryMemory(
-      `prefix ${"x".repeat(MAX_MEMORY_CONTENT_CHARS)}`,
-      "rakazo:bot-123",
-      config,
-    );
-
-    const body = JSON.parse(fetchMock.mock.calls[0]![1].body);
-    expect(body.memories[0].content).toHaveLength(MAX_MEMORY_CONTENT_CHARS);
-    vi.unstubAllGlobals();
+    expect(await saveSupermemoryMemory("fact", "rakazo:bot-1", config)).toMatchObject({
+      ok: false,
+      receipts: [],
+      uncertainEntities: ["rakazo:bot-1"],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("reports a non-OK response instead of throwing", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
-    const result = await saveSupermemoryMemory("fact", "rakazo:bot-123", config);
-    expect(result).toEqual({ ok: false, error: expect.stringContaining("401") });
-    vi.unstubAllGlobals();
+  it.each([
+    {},
+    { documentId: "not-a-memory-id" },
+    { memories: [] },
+    { memories: [{ id: "", memory: "fact" }] },
+  ])("never invents a receipt for a malformed acknowledgement: %j", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(body)));
+    expect(await saveSupermemoryMemory("fact", "rakazo:bot-1", config)).toMatchObject({
+      ok: false,
+      receipts: [],
+      uncertainEntities: ["rakazo:bot-1"],
+    });
+  });
+
+  it("preserves provider-confirmed text rather than claiming the submitted text was stored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ memories: [{ id: "entry-1", memory: "Provider normalized text" }] }),
+        ),
+    );
+    expect(await saveSupermemoryMemory("Original text", "rakazo:bot-1", config)).toMatchObject({
+      ok: true,
+      value: [{ content: "Provider normalized text", created: null }],
+    });
+  });
+
+  it("does not dispatch an already cancelled save", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(
+      await saveSupermemoryMemory("fact", "rakazo:bot-1", config, AbortSignal.abort()),
+    ).toMatchObject({ ok: false, uncertainEntities: [] });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lost response uncertain without retrying", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("lost response"));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await saveSupermemoryMemory("fact", "rakazo:bot-1", config)).toMatchObject({
+      ok: false,
+      uncertainEntities: ["rakazo:bot-1"],
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("caps acknowledgement bodies and retains uncertainty after dispatch", async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ "content-length": String(MAX_SUPERMEMORY_RESPONSE_BYTES + 1) }),
+        body: { cancel },
+      }),
+    );
+    expect(await saveSupermemoryMemory("fact", "rakazo:bot-1", config)).toMatchObject({
+      ok: false,
+      uncertainEntities: ["rakazo:bot-1"],
+    });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 
 describe("saveSupermemoryMemoryToContainers", () => {
-  it("writes shared memories to both the workspace and bot containers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+  it("preserves a shared receipt when the sibling write fails", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const { containerTag } = JSON.parse(init.body);
+      if (containerTag === "rakazo:bot-1") throw new Error("lost response");
+      return Response.json({ memories: [{ id: "shared-entry", memory: "fact" }] });
+    });
     vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      saveSupermemoryMemoryToContainers("fact", ["rakazo:workspace:ws-1", "rakazo:bot-1"], config),
-    ).resolves.toEqual({ ok: true });
+    expect(
+      await saveSupermemoryMemoryToContainers(
+        "fact",
+        ["rakazo:workspace:ws-1", "rakazo:bot-1"],
+        config,
+      ),
+    ).toMatchObject({
+      ok: false,
+      receipts: [
+        { id: "shared-entry", entity: "rakazo:workspace:ws-1", content: "fact", created: null },
+      ],
+      uncertainEntities: ["rakazo:bot-1"],
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    vi.unstubAllGlobals();
+  });
+
+  it("retains separate successful identities and dispatches each destination only once", async () => {
+    const fetchMock = vi.fn().mockImplementation(async (_url, init) => {
+      const { containerTag } = JSON.parse(init.body);
+      return Response.json({ memories: [{ id: `${containerTag}:entry`, memory: "fact" }] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await saveSupermemoryMemoryToContainers(
+      "fact",
+      ["rakazo:workspace:ws-1", "rakazo:bot-1", "rakazo:bot-1"],
+      config,
+    );
+    expect(result.ok && result.value).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

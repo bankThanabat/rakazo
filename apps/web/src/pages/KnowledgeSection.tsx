@@ -13,6 +13,10 @@ import { useEffect, useRef, useState } from "react";
 import { downloadArtifactBytes } from "../lib/artifact-open";
 import { rpc } from "../lib/rpc";
 import { KnowledgeDocuments } from "./KnowledgeDocuments";
+import { LearningDocuments } from "./LearningDocuments";
+import { LearningUpdates } from "./LearningUpdates";
+import { PrivateHistory } from "./PrivateHistory";
+import { SemanticMemoryHistory } from "./SemanticMemoryHistory";
 
 const fieldClass = "mt-2 w-full font-mono text-[13px] leading-relaxed";
 
@@ -36,6 +40,9 @@ export function KnowledgeSection({
     <section className="mt-6" data-testid="bot-knowledge">
       <Tabs defaultValue="memory">
         <TabsList aria-label={t`Knowledge`}>
+          <TabsTrigger value="learning">
+            <Trans>Learning</Trans>
+          </TabsTrigger>
           <TabsTrigger value="documents">
             <Trans>Documents</Trans>
           </TabsTrigger>
@@ -46,6 +53,10 @@ export function KnowledgeSection({
             <Trans>Skills</Trans>
           </TabsTrigger>
         </TabsList>
+        <TabsContent value="learning">
+          <LearningUpdates key={`updates:${botId}`} botId={botId} />
+          <LearningDocuments key={botId} botId={botId} />
+        </TabsContent>
         <TabsContent value="documents">
           <KnowledgeDocuments key={botId} botId={botId} />
         </TabsContent>
@@ -56,6 +67,7 @@ export function KnowledgeSection({
             exportFilename="memory.md"
             testId="bot-knowledge-memory"
           />
+          <SemanticMemoryHistory key={`semantic:${botId}`} botId={botId} />
         </TabsContent>
         <TabsContent value="skills">
           <AgentSkills onSkillsChange={onSkillsChange} />
@@ -65,12 +77,12 @@ export function KnowledgeSection({
   );
 }
 
-/** The space's shared memory documents, mounted in the Memory settings overlay. */
+/** The current user's memory across bots, mounted in Memory settings. */
 export function SpaceMemorySection() {
   return (
     <div className="mt-6" data-testid="space-memory-documents">
       <div className="mb-2 text-[12.5px] uppercase tracking-[0.08em] text-muted-foreground">
-        <Trans>Shared documents</Trans>
+        <Trans>Your memory</Trans>
       </div>
       <MemoryDocumentList
         load={() => rpc.memory.list({ scope: "user" })}
@@ -95,6 +107,7 @@ function MemoryDocumentList({
   const [docs, setDocs] = useState<MemoryDocument[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [draftRevision, setDraftRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -124,6 +137,7 @@ function MemoryDocumentList({
   function openDoc(doc: MemoryDocument) {
     setOpenId(doc.id);
     setDraft(doc.content);
+    setDraftRevision(doc.revision);
     setError(null);
   }
 
@@ -132,7 +146,11 @@ function MemoryDocumentList({
     setBusy(true);
     setError(null);
     try {
-      const updated = await rpc.memory.update({ documentId: doc.id, content: draft });
+      const updated = await rpc.memory.update({
+        documentId: doc.id,
+        content: draft,
+        expectedRevision: draftRevision,
+      });
       setDocs((current) => current.map((entry) => (entry.id === updated.id ? updated : entry)));
       setOpenId(null);
     } catch {
@@ -219,6 +237,16 @@ function MemoryDocumentList({
                   <Trans>Cancel</Trans>
                 </Button>
               </div>
+              <PrivateHistory
+                target={{ kind: "memory", id: doc.id }}
+                onBusyChange={setBusy}
+                disabled={busy || draft !== doc.content}
+                onApplied={async () => {
+                  const fresh = await loadRef.current();
+                  setDocs(fresh);
+                  setOpenId(null);
+                }}
+              />
             </div>
           ) : null}
         </div>
@@ -318,7 +346,11 @@ function AgentSkills({
       if (creating) {
         await rpc.agentSkills.create({ content: draft });
       } else if (open) {
-        await rpc.agentSkills.update({ skillId: open.id, content: draft });
+        await rpc.agentSkills.update({
+          skillId: open.id,
+          content: draft,
+          expectedRevision: open.revision,
+        });
       }
       setOpen(null);
       setCreating(false);
@@ -345,7 +377,7 @@ function AgentSkills({
     setBusy(true);
     setError(null);
     try {
-      await rpc.agentSkills.remove({ skillId });
+      await rpc.agentSkills.remove({ skillId, expectedRevision: skill.revision });
       if (open?.id === skillId) {
         setOpen(null);
         setConfirmingDelete(false);
@@ -458,6 +490,19 @@ function AgentSkills({
               </Button>
             ) : null}
           </div>
+          {open && (
+            <PrivateHistory
+              key={open.id}
+              target={{ kind: "skill", id: open.id }}
+              onBusyChange={setBusy}
+              disabled={busy || draft !== open.content}
+              onApplied={async () => {
+                await refresh();
+                setOpen(null);
+                setConfirmingDelete(false);
+              }}
+            />
+          )}
         </div>
       ) : (
         <Button
@@ -476,6 +521,93 @@ function AgentSkills({
         >
           <Trans>New skill</Trans>
         </Button>
+      )}
+      {!editorOpen && <RemovedSkills onApplied={refresh} />}
+    </div>
+  );
+}
+
+function RemovedSkills({ onApplied }: { onApplied: () => Promise<void> }) {
+  const { t } = useLingui();
+  const [open, setOpen] = useState(false);
+  const [list, setList] = useState<Awaited<ReturnType<typeof rpc.agentSkills.listHistory>>>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current++;
+    },
+    [],
+  );
+  async function load(more = false) {
+    const current = generation.current;
+    setBusy(true);
+    setError("");
+    try {
+      const next = await rpc.agentSkills.listHistory({
+        removedOnly: true,
+        cursor: more ? (list?.nextCursor ?? undefined) : undefined,
+      });
+      if (current === generation.current)
+        setList(more ? { ...next, items: [...list!.items, ...next.items] } : next);
+    } catch {
+      if (current === generation.current) setError(t`Could not load removed skills`);
+    } finally {
+      if (current === generation.current) setBusy(false);
+    }
+  }
+  return (
+    <div className="mt-2 px-2.5">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        disabled={busy}
+        aria-expanded={open}
+        onClick={() => {
+          setOpen(!open);
+          if (!open) void load();
+        }}
+      >
+        <Trans>Removed skills</Trans>
+      </Button>
+      {open && (
+        <section aria-label={t`Removed skills`} className="space-y-3">
+          {error && (
+            <p role="alert" className="text-destructive">
+              {error}
+            </p>
+          )}
+          {busy && <Skeleton className="h-10" />}
+          {list?.items.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              <Trans>No removed skills</Trans>
+            </p>
+          )}
+          {error && (
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => void load()}>
+              <Trans>Retry</Trans>
+            </Button>
+          )}
+          {list?.items.map((skill) => (
+            <div key={skill.id} className="border-t border-border pt-3">
+              <p className="break-words text-sm">{skill.name}</p>
+              <PrivateHistory
+                target={{ kind: "skill", id: skill.id }}
+                onApplied={async () => {
+                  await onApplied();
+                  await load();
+                }}
+              />
+            </div>
+          ))}
+          {list?.nextCursor && (
+            <Button type="button" variant="ghost" disabled={busy} onClick={() => void load(true)}>
+              <Trans>More removed skills</Trans>
+            </Button>
+          )}
+        </section>
       )}
     </div>
   );

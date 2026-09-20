@@ -216,7 +216,7 @@ describe("destroyBot", () => {
     const deleteArtifacts = vi.fn().mockResolvedValue({ count: 1 });
     const transaction = vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
       callback({
-        $queryRaw: vi.fn().mockResolvedValue([]),
+        $queryRaw: vi.fn().mockResolvedValue([{ id: "bot-1" }]),
         chatGroup: {
           findMany: vi.fn().mockResolvedValue([]),
           deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
@@ -230,6 +230,7 @@ describe("destroyBot", () => {
       }),
     );
     const prisma = {
+      botDeletion: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       bot: {
         findUnique: vi.fn(),
       },
@@ -277,6 +278,11 @@ describe("destroyBot", () => {
         spaceId: "workspace-1",
         name: "Researcher",
         deletedByUserId: "user-1",
+        userId: "user-1",
+        artifactKeys: ["stored-artifact"],
+        homeKey: undefined,
+        computerKind: undefined,
+        providerRef: undefined,
         memoriesPreserved: true,
       },
     });
@@ -372,6 +378,7 @@ describe("destroyBot", () => {
       }),
     );
     const prisma = {
+      botDeletion: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       computer: { findUnique: vi.fn().mockResolvedValue(null) },
       run: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -452,6 +459,7 @@ describe("destroyBot", () => {
   it("surfaces transaction failures instead of reporting deletion success", async () => {
     const transaction = vi.fn().mockRejectedValue(new Error("delete failed"));
     const prisma = {
+      botDeletion: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
       bot: {
         findUnique: vi.fn(),
       },

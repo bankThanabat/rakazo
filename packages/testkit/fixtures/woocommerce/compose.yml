@@ -1,0 +1,50 @@
+# Disposable synthetic store. The driver supplies a unique Compose project name.
+services:
+  database:
+    image: mariadb@sha256:70cc072b29b4a89ae07abb2d4da2c64678a7f2dfe092751bb51c87d67dc1338b
+    environment:
+      MARIADB_DATABASE: fixture
+      MARIADB_USER: fixture
+      MARIADB_PASSWORD: disposable-fixture-password
+      MARIADB_ROOT_PASSWORD: disposable-fixture-root-password
+    healthcheck:
+      test: [CMD, healthcheck.sh, --connect, --innodb_initialized]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - database:/var/lib/mysql
+  wordpress:
+    image: wordpress@sha256:edeeae67330a6c739b030e7eeaaaf6d60e8f17533a4f6217d20f89c04061952c
+    depends_on:
+      database:
+        condition: service_healthy
+    environment: &wordpress-environment
+      WORDPRESS_DB_HOST: database
+      WORDPRESS_DB_NAME: fixture
+      WORDPRESS_DB_USER: fixture
+      WORDPRESS_DB_PASSWORD: disposable-fixture-password
+      WORDPRESS_CONFIG_EXTRA: |
+        define('DISABLE_WP_CRON', true);
+        define('WP_HTTP_BLOCK_EXTERNAL', true);
+        define('AUTOMATIC_UPDATER_DISABLED', true);
+    volumes: &wordpress-volumes
+      - wordpress:/var/www/html
+      - ./isolation.php:/var/www/html/wp-content/mu-plugins/fixture-isolation.php:ro
+      - ./seed.php:/fixture/seed.php:ro
+      - ./request.php:/fixture/request.php:ro
+      - ${WOO_FIXTURE_PLUGIN:?driver supplies the verified plugin archive}:/fixture/woocommerce.zip:ro
+  cli:
+    image: wordpress@sha256:46b3add1dbd834018a9c22bb05a2fa9303f6139d8ac7337dc97cf9424072cd77
+    profiles: [cli]
+    user: "33:33"
+    environment:
+      <<: *wordpress-environment
+      HOME: /tmp
+    volumes: *wordpress-volumes
+volumes:
+  database:
+  wordpress:
+networks:
+  default:
+    internal: true

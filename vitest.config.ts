@@ -12,6 +12,7 @@ export default defineConfig({
       "apps/desktop/src/**/*.test.ts",
       "apps/web/src/**/*.test.{ts,tsx}",
       "apps/mobile/lib/**/*.test.ts",
+      "apps/mobile/components/**/*.test.tsx",
       "apps/api/src/**/*.test.ts",
       "apps/www/src/**/*.test.ts",
     ],

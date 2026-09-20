@@ -8,12 +8,15 @@ import type {
 } from "@rakazo/adapter-kit";
 import { messagingDeliverJob } from "@rakazo/adapter-kit";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
+import { createLearningHistory } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
+import type { AccountDeletionService } from "./account-deletion.js";
 import type { CloudAgentConnection } from "./cloud-agent-factory.js";
 import { pollCloudAgent } from "./cloud-agent-poll.js";
 import { expireComputerControl } from "./computer-control.js";
 import { scheduleComputerSleep, sleepComputerIfIdle } from "./computer-idle.js";
 import { performComputerUpdate } from "./computer-update.js";
+import { processContinuedLearning } from "./continued-learning.js";
 import type { CustomerConversationService } from "./customer-conversations.js";
 import type { createRunExecutor } from "./executor.js";
 import { compactHistory } from "./history-compaction.js";
@@ -24,6 +27,7 @@ import type { EncryptedSecretStore } from "./secrets.js";
 import { expireTaughtSkillTeaching } from "./teaching-session.js";
 
 export function createBackgroundJobHandlers(deps: {
+  accountDeletions?: AccountDeletionService;
   knowledge?: KnowledgeService;
   customers?: CustomerConversationService;
   executor: ReturnType<typeof createRunExecutor>;
@@ -56,6 +60,23 @@ export function createBackgroundJobHandlers(deps: {
   };
 
   return {
+    "account.delete": async ({ userId }) => {
+      if (!deps.accountDeletions) throw new Error("Account deletion service unavailable");
+      await deps.accountDeletions.process(userId);
+    },
+    "learning.import": async ({ historyId }) => {
+      await createLearningHistory(deps.prisma).process(historyId);
+    },
+    "learning.refresh": async ({ feedId }) => {
+      if (!deps.customers) throw new Error("Customer learning service unavailable");
+      await deps.customers.refreshLearning(feedId);
+    },
+    "learning.process": async ({ taskId }) => {
+      await processContinuedLearning(
+        { prisma: deps.prisma, runtime: deps.runtime, resolveModel: deps.executor.resolveModel },
+        taskId,
+      );
+    },
     "knowledge.process": async ({ revisionId }) => {
       await deps.knowledge?.process(revisionId);
     },

@@ -21,5 +21,8 @@ design
 PRODUCT_PLAN.md
 playwright-report
 test-results
+test-report
+agent-transcripts
+.audit
 verify-report
 *.log

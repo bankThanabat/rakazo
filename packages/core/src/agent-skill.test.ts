@@ -289,3 +289,30 @@ describe("skill prompt helpers", () => {
     expect(line).toContain("Prefer matching skills");
   });
 });
+
+describe("skill execution budget", () => {
+  const recipe = (name: string, length: number) => ({
+    name,
+    description: "Large recipe",
+    source: "user" as const,
+    readOnly: false,
+    content: "x".repeat(length),
+  });
+  it("rejects oversized forced and cumulative routine instructions without truncation", () => {
+    expect(() => expandSkillReferencesInPrompt("/Large", [recipe("Large", 24000)])).toThrow(
+      "execution limit",
+    );
+    expect(() =>
+      expandSkillReferencesInPrompt("Use @First and @Second", [
+        recipe("First", 13000),
+        recipe("Second", 13000),
+      ]),
+    ).toThrow("execution limit");
+    expect(
+      expandSkillReferencesInPrompt("Use @First and @Second", [
+        recipe("First", 10000),
+        recipe("Second", 10000),
+      ]).match(/x/g),
+    ).toHaveLength(20000);
+  });
+});

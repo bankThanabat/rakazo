@@ -1,3 +1,4 @@
+export * from "./account-deletion.js";
 export * from "./agent-connections.js";
 export * from "./agent-environment.js";
 export * from "./ai-consent.js";
@@ -108,6 +109,7 @@ export * from "./scratchpad-tools.js";
 export * from "./scripted-runtime.js";
 export * from "./scripted-voice.js";
 export * from "./secrets.js";
+export * from "./semantic-history-purge.js";
 export * from "./sendblue-emulator.js";
 export { SerenityMemoryProvider } from "./serenity-memory-provider.js";
 export * from "./skill-tools.js";

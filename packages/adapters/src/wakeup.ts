@@ -65,7 +65,6 @@ export class GraphileJobWorkerHost implements JobWorkerHost {
     private readonly options: {
       concurrency?: number;
       pollInterval?: number;
-      noHandleSignals?: boolean;
       /** Test seam: delay between 53300 restart attempts. */
       sleep?: (ms: number) => Promise<void>;
     } = {},
@@ -116,7 +115,10 @@ export class GraphileJobWorkerHost implements JobWorkerHost {
       pgPool: this.pgPool,
       concurrency: this.options.concurrency ?? 4,
       pollInterval: this.options.pollInterval ?? 500,
-      noHandleSignals: this.options.noHandleSignals,
+      // The application drains jobs, then closes connectors and shared resources.
+      // Graphile's signal handler re-signals the process after draining, which
+      // would kill it before that remaining application cleanup completes.
+      noHandleSignals: true,
       taskList,
     });
     if (this.stopping) {

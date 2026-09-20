@@ -319,6 +319,7 @@ export class OpenConnectorAccounts {
       },
       provider,
       context,
+      { recoverToken: true },
     );
     return null;
   }
@@ -387,6 +388,7 @@ export class OpenConnectorAccounts {
       },
       await this.http.provider(account.service, context),
       context,
+      { recoverToken: Boolean(attemptId) },
     );
     if (attemptId) {
       if (previousAccountId && previousAccountId !== account.id)
@@ -400,7 +402,7 @@ export class OpenConnectorAccounts {
     grant: OpenConnectorGrant,
     provider: OpenConnectorProvider,
     context: AdapterContext,
-    persist = true,
+    options: { persist?: boolean; recoverToken?: boolean } = {},
   ) {
     const actions = provider.actions
       .filter(
@@ -422,15 +424,25 @@ export class OpenConnectorAccounts {
     };
     if (grant.tokenId) {
       if (
+        options.recoverToken ||
         JSON.stringify(actions) !== JSON.stringify(grant.actions) ||
         grant.policyAccountId !== grant.accountId
-      )
-        await this.http.request(
-          `/api/runtime-tokens/${encodeURIComponent(grant.tokenId)}`,
-          context,
-          { method: "PUT", body: JSON.stringify(policy) },
-        );
-    } else {
+      ) {
+        try {
+          await this.http.request(
+            `/api/runtime-tokens/${encodeURIComponent(grant.tokenId)}`,
+            context,
+            { method: "PUT", body: JSON.stringify(policy) },
+          );
+        } catch (error) {
+          // Only fresh account authorization may replace a revoked runtime token.
+          // Ordinary polling and execution must keep revoked access unavailable.
+          if (!options.recoverToken || !(error instanceof OpenConnectorNotFound)) throw error;
+          grant = { ...grant, token: undefined, tokenId: undefined };
+        }
+      }
+    }
+    if (!grant.tokenId) {
       const created = z.object({ token: z.string(), record: z.object({ id: z.string() }) }).parse(
         await this.http.request("/api/runtime-tokens", context, {
           method: "POST",
@@ -451,7 +463,7 @@ export class OpenConnectorAccounts {
       }
     }
     // Execution may refresh a remote policy, but must never overwrite lifecycle state.
-    if (persist)
+    if (options.persist !== false)
       await this.save(ref, { ...grant, actions, policyAccountId: grant.accountId }, context);
     return { ...grant, actions, policyAccountId: grant.accountId };
   }

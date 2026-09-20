@@ -17,6 +17,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAvatarStyle } from "../components/avatar-style";
 import { BotAvatar } from "../components/bot-avatar";
+import { PrivateKnowledgeHistory } from "../components/private-history";
+import { AccountExportSizeError, exportAccount } from "../lib/account-export";
 import type { MobileBot, MobileMe } from "../lib/api";
 import {
   currentApiBase,
@@ -61,6 +63,7 @@ export default function Account() {
   const [localeSaving, setLocaleSaving] = useState(false);
   const [localeError, setLocaleError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [exportPending, setExportPending] = useState(false);
   const [avatarPending, setAvatarPending] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<LiveNotificationSettings>(
@@ -82,6 +85,22 @@ export default function Account() {
   const versionInfo = getAppVersionInfo();
   const updateLabel = formatUpdateLabel(versionInfo.update, t);
   const versionAccessibility = [versionInfo.nativeLabel, updateLabel].filter(Boolean).join(". ");
+
+  async function handleExport() {
+    if (exportPending) return;
+    setExportPending(true);
+    try {
+      await exportAccount();
+    } catch (error) {
+      Alert.alert(
+        error instanceof AccountExportSizeError
+          ? t("This export is too large. Ask your server administrator for help.")
+          : t("Couldn't export your data. Try again."),
+      );
+    } finally {
+      setExportPending(false);
+    }
+  }
 
   useEffect(() => {
     void rpc<MobileMe>("me")
@@ -250,6 +269,14 @@ export default function Account() {
           {me?.email ? <Text style={styles.email}>{me.email}</Text> : null}
         </View>
         {focus !== "usage" ? usageBlock : null}
+        <PrivateKnowledgeHistory key={selectedSpaceId() ?? "none"} />
+
+        <Button
+          color={mobileTokens().primary}
+          title={exportPending ? t("Preparing export…") : t("Export data")}
+          disabled={exportPending}
+          onPress={() => void handleExport()}
+        />
 
         <Pressable
           accessibilityRole="button"

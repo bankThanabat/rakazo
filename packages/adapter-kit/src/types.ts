@@ -16,6 +16,8 @@ export interface AdapterContext {
   connectedConnections?: ConnectedConnector[];
   /** When present, restrict connector actions to these server-authorized connection/action pairs. */
   actionAccess?: Record<string, string[]>;
+  /** In-process server authorization fence for a connector read that can wait. Never serialized. */
+  assertConnectorReadAccess?: () => Promise<void>;
   /** @deprecated Prefer connectedConnections so providers with the same app slug cannot collide. */
   connectedProviders?: string[];
 }
@@ -178,6 +180,8 @@ export interface SandboxCapabilities {
   persistentHome: boolean;
   /** Distinct graphical screens for concurrent Team bots on one computer. */
   multiScreen?: boolean;
+  /** Destroy targets an immutable allocation ID. A delayed replay cannot affect a later allocation. */
+  replaySafeDestroy?: boolean;
 }
 
 export interface ConnectorTool {
@@ -203,13 +207,15 @@ export interface ConnectorCall {
   args: Record<string, unknown>;
   connectionId?: string;
   executionId: string;
+  /** Execution must use the credential snapshot for this provider account or fail before dispatch. */
+  expectedAccountId?: string;
   route?: ConnectorRoute;
 }
 
 export type ConnectorEvent =
   | { type: "log"; message: string }
   | { type: "result"; data: unknown }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string; dispatch?: "not_started" };
 
 export interface ConnectorCapabilities {
   discover: boolean;
@@ -248,6 +254,10 @@ export interface MemorySearchResult {
 }
 
 export interface MemoryCommitRequest {
+  expectedRevision?: number;
+  reason?: string;
+  restoredFrom?: number;
+  undoneRevision?: number;
   scope: "bot" | "user";
   botId?: string;
   path: string;
@@ -297,8 +307,13 @@ export interface SemanticMemoryResult {
 
 export interface SemanticMemoryForgetRequest {
   id: string;
+  /** Trusted caller scope, never supplied by the model. */
+  botId: string;
+  scope: DurableMemoryScope;
+  /** Complete recalled fact reviewed for removal; stale content must fail closed. */
+  expectedContent: string;
   reason?: string;
-  /** Entity/namespace from a prior recall citation, when the backend scopes deletes. */
+  /** Prior recall citation; adapters must validate it against the caller's scope. */
   entity?: string;
 }
 
@@ -322,16 +337,47 @@ export interface SemanticMemorySaveRequest {
   source: { kind: "durable" } | { kind: "history"; generation: number };
 }
 
+/** Provider-confirmed identity. Unknown content or creation history must never be invented. */
+export type SemanticMemoryWriteReceipt = {
+  /** Version 1 only marks creation for a provider response that establishes a new fact.
+   * Unversioned legacy `created` flags cannot authorize undo. */
+  version?: 1;
+  id: string;
+  entity: string;
+  content: string | null;
+  created: boolean | null;
+  providerStatus?: string;
+};
+
+export type SemanticMemorySaveResponse =
+  | { ok: true; value: SemanticMemoryWriteReceipt[] }
+  | {
+      ok: false;
+      error: string;
+      /** Keep successful acknowledgements even when another namespace failed. */
+      receipts: SemanticMemoryWriteReceipt[];
+      /** These destinations may have changed; the same effect must not be replayed. */
+      uncertainEntities: string[];
+    };
+
+/** Recreate one confirmed removed fact in its original durable destination. */
+export interface SemanticMemoryRestoreRequest extends SemanticMemoryForgetRequest {
+  entity: string;
+}
+
 export interface SemanticMemoryPurgeHistoryRequest {
   botId: string;
   generations: number[];
 }
 
-export type SemanticMemoryForgetResponse = SemanticMemoryResponse<{
-  id: string;
-  expired: boolean;
-  reason: string | null;
-}>;
+export type SemanticMemoryForgetResponse =
+  | { ok: true; value: { id: string; expired: boolean; reason: string | null; entity?: string } }
+  | {
+      ok: false;
+      error: string;
+      /** Dispatch may have changed the provider. Persist uncertainty; never replay this effect. */
+      uncertain?: true;
+    };
 
 export interface AgentInputImage {
   name: string;
@@ -491,6 +537,10 @@ export interface VoiceTranscribeRequest {
 }
 
 export interface BackgroundJobPayloads {
+  "account.delete": { userId: string };
+  "learning.import": { historyId: string };
+  "learning.refresh": { feedId: string };
+  "learning.process": { taskId: string };
   "knowledge.process": { revisionId: string };
   "customer.process": { conversationId?: string };
   "customer.poll": { channelId: string };

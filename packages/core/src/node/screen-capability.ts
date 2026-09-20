@@ -5,6 +5,10 @@ export const SCREEN_TARGET_ENDPOINT = "/api/internal/screen-target";
 export const SCREEN_RECHECK_MS = 1_000;
 
 export interface ScreenCapabilityScope {
+  spaceId: string;
+  userId: string;
+  sessionId: string;
+  membershipId: string;
   botId: string;
   computerId: string;
   botGeneration: number;
@@ -104,6 +108,14 @@ export function openScreenCapability(
     const scope = payload.scope as ScreenCapabilityScope;
     if (
       !scope ||
+      typeof scope.spaceId !== "string" ||
+      !scope.spaceId ||
+      typeof scope.userId !== "string" ||
+      !scope.userId ||
+      typeof scope.sessionId !== "string" ||
+      !scope.sessionId ||
+      typeof scope.membershipId !== "string" ||
+      !scope.membershipId ||
       typeof scope.botId !== "string" ||
       typeof scope.computerId !== "string" ||
       !Number.isSafeInteger(scope.botGeneration) ||

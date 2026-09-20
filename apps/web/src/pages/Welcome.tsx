@@ -9,15 +9,17 @@ export function WelcomePage() {
       <div className="app-drag flex gap-2 px-5 py-[18px]">
         <WindowChrome />
       </div>
-      <div className="flex flex-1 flex-col items-center justify-center gap-11 pb-[90px]">
-        <div className="flex items-center gap-[26px]">
-          <div className="flex h-[88px] w-[88px] items-center justify-center gap-[13px] rounded-full bg-accent">
+      <div className="flex flex-1 flex-col items-center justify-center gap-11 px-6 pb-[90px]">
+        <div className="flex items-center gap-4 sm:gap-[26px]">
+          <div className="flex h-16 w-16 shrink-0 items-center justify-center gap-[13px] rounded-full bg-accent sm:h-[88px] sm:w-[88px]">
             <span className="h-6 w-[11px] rounded-full bg-card" />
             <span className="h-6 w-[11px] rounded-full bg-card" />
           </div>
-          <div className="text-[76px] leading-none tracking-[-0.03em] text-foreground">Rakazo</div>
+          <h1 className="text-[44px] leading-none tracking-[-0.03em] text-foreground sm:text-[76px]">
+            Deskazo
+          </h1>
         </div>
-        <p className="max-w-[600px] text-center text-[27px] leading-[1.4] text-foreground/75">
+        <p className="max-w-[600px] text-center text-xl leading-[1.4] text-foreground/75 sm:text-[27px]">
           <Trans>
             Your team of always-on agents
             <br />

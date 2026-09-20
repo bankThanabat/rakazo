@@ -2,11 +2,53 @@
   {
     "name": "OpenRAG",
     "path": "apps/openrag",
-    "revision": "5cf69da52cac77e3040a6b8343d479bca9471a18"
+    "revision": "5cf69da52cac77e3040a6b8343d479bca9471a18",
+    "patches": [
+      {
+        "path": "infra/openrag-patches/hidden-knowledge-filter.patch",
+        "sha256": "96ef726119ee80d768a69f0c868005168a5d0ef1cc0065222074a6ce765b8078"
+      }
+    ],
+    "tree": "11e08dad2bfd1d24ae8890819fc7195cad0d4e18"
   },
   {
     "name": "OpenConnector",
     "path": "infra/open-connector",
-    "revision": "493def090c95a92ee312b95594c489c9856a16af"
+    "revision": "9e11b04c46df3cefad0bed1d4f2765e24d2ef126",
+    "patches": [
+      {
+        "path": "infra/open-connector-patches/woocommerce-order-payment.patch",
+        "sha256": "d6d55b9d26118e14cd8843e2d9e8ba0acba96565d5aaebdf0d6a8b62c91fd885"
+      },
+      {
+        "path": "infra/open-connector-patches/woocommerce-store-api.patch",
+        "sha256": "0184da149e07dd0c132f1618261440964b3df4d7d9abbb27c31b15c7af92fc46"
+      },
+      {
+        "path": "infra/open-connector-patches/instagram-comment-replies.patch",
+        "sha256": "b2c9e3afe07ef7e8a09453d664952e57cad8a672ec0152cb6e96676fef1d7d35"
+      },
+      {
+        "path": "infra/open-connector-patches/account-bound-actions.patch",
+        "sha256": "bc66381af840f7a979bb8f68b61690713b113ef82dc7e06d35f1c9ebb14a931d"
+      },
+      {
+        "path": "infra/open-connector-patches/nodemailer-transitive.patch",
+        "sha256": "151b0901832612f7929f9989502198db199daf801f109177bfaa34f8c32be057"
+      },
+      {
+        "path": "infra/open-connector-patches/instagram-message-history.patch",
+        "sha256": "8c9144813cdefbfdf8c55884839589ef1695a5994dd1046997b74798e67fc328"
+      },
+      {
+        "path": "infra/open-connector-patches/sequential-typecheck.patch",
+        "sha256": "62ef12ab8b4307ade0eaaa8930028bf31403cac81b1f926ba23d32c305bf1dd2"
+      },
+      {
+        "path": "infra/open-connector-patches/native-build-stage.patch",
+        "sha256": "47bc0164db4ff53eb2a8f5a4f871a8c209d7f9ce485071ccedb2b74ed3039d3f"
+      }
+    ],
+    "tree": "093e342d1ce5daa5f3dc86344a74089a8b5ef5ef"
   }
 ]

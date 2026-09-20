@@ -21,6 +21,7 @@ import {
   isRunTerminalEvent,
   isSecretAskBlock,
   latestAnswerableAskMessageId,
+  learningApprovalReview,
   mentionChipKey,
   projectMessageReactions,
   resolveComposerSendPlan,
@@ -59,7 +60,11 @@ import { useReducedMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AppConnectCard } from "../components/AppConnectCard";
 import { AskActions } from "../components/AskActions";
+import { ApprovalDetail } from "../components/approval-detail";
 import { BotAvatar } from "../components/bot-avatar";
+import { ChoiceCard } from "../components/ChoiceCard";
+import { LearningApprovalDetail } from "../components/learning-approval-detail";
+import { LearningUpdates } from "../components/learning-updates";
 import {
   MarkdownArtifactPreview,
   type MarkdownArtifactPreviewTarget,
@@ -2300,6 +2305,8 @@ const MessageBubble = memo(function MessageBubble({
     (block): block is Extract<MessageBlock, { kind: "app_connect" }> =>
       block.kind === "app_connect",
   );
+  const choice = message.blocks.find((block) => block.kind === "choice");
+  if (choice?.kind === "choice") return <ChoiceCard botId={cardBotId} block={choice} />;
   const ask = message.blocks.find(
     (block): block is Extract<MessageBlock, { kind: "ask" }> =>
       block.kind === "ask" && !isApprovalAskBlock(block) && !block.actions?.length,
@@ -2590,6 +2597,7 @@ const MessageBubble = memo(function MessageBubble({
     (block) => block.kind === "ask" && Boolean(block.actions?.length),
   );
   if (askBlock?.kind === "ask" && askBlock.actions?.length) {
+    const learningReview = learningApprovalReview(askBlock);
     return (
       <View style={{ gap: 8, width: "100%" }}>
         <View
@@ -2603,7 +2611,7 @@ const MessageBubble = memo(function MessageBubble({
             paddingVertical: 14,
           }}
         >
-          {askBlock.text ? (
+          {!learningReview && askBlock.text ? (
             <Text
               {...actionProps}
               style={{ color: tokens.foreground, fontSize: 15.5, lineHeight: 23 }}
@@ -2611,19 +2619,20 @@ const MessageBubble = memo(function MessageBubble({
               {askBlock.text}
             </Text>
           ) : null}
-          {askBlock.detail ? (
-            <Text
-              {...(askBlock.text ? {} : actionProps)}
-              style={{
-                color: tokens.mutedForeground,
-                marginTop: askBlock.text ? 8 : 0,
-                fontSize: 12.5,
-                fontFamily: "Menlo",
-                lineHeight: 20,
-              }}
-            >
-              {askBlock.detail}
-            </Text>
+          {learningReview && askBlock.detail ? (
+            <LearningApprovalDetail
+              key={askBlock.approvalEffectId}
+              review={learningReview}
+              detail={askBlock.detail}
+              textProps={actionProps}
+            />
+          ) : askBlock.detail ? (
+            <View style={{ marginTop: askBlock.text ? 8 : 0 }}>
+              <ApprovalDetail
+                detail={askBlock.detail}
+                textProps={askBlock.text ? undefined : actionProps}
+              />
+            </View>
           ) : null}
           {askBlock.status === "answered" ? (
             <Text
@@ -2682,6 +2691,22 @@ const MessageBubble = memo(function MessageBubble({
       return block.kind === "text" && block.text ? [block.text] : [];
     })
     .join("\n");
+  const learningUpdates = message.blocks.filter((block) => block.kind === "learning_updates");
+  if (learningUpdates.length && message.role !== "user")
+    return (
+      <View style={{ width: "100%", gap: 12 }}>
+        {caption ? (
+          <Text style={{ color: tokens.foreground, fontSize: 16, lineHeight: 24 }}>{caption}</Text>
+        ) : null}
+        {learningUpdates.map((block, index) => (
+          <LearningUpdates
+            key={`${block.botId}:${index}`}
+            botId={block.botId}
+            ids={block.taskIds}
+          />
+        ))}
+      </View>
+    );
   if (attachments.length > 0) {
     const speaker =
       message.role === "bot" ? (memberName(members, message.botId) ?? botName) : undefined;

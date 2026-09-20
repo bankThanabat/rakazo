@@ -347,13 +347,16 @@ export function resolveInstallKind(input: {
 /** Exact host commands from docs/self-host.md for Compose on a published release tag. */
 export const COMPOSE_PULL_UPGRADE_COMMANDS = [
   "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml pull api worker web",
+  "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web",
   "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never api worker web",
 ] as const;
 
 /** Exact host commands from docs/self-host.md for Compose on the default `local` tag. */
 export const COMPOSE_LOCAL_BUILD_UPGRADE_COMMANDS = [
   "git pull",
-  "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never --build api worker web",
+  "GIT_SHA=$(git rev-parse HEAD) docker compose --env-file .env -f infra/compose/docker-compose.prod.yml build api worker web",
+  "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml stop api worker web",
+  "docker compose --env-file .env -f infra/compose/docker-compose.prod.yml up -d --wait --pull never api worker web",
 ] as const;
 
 /** @deprecated Prefer {@link COMPOSE_PULL_UPGRADE_COMMANDS}; kept for call-site clarity in tests. */
@@ -362,6 +365,7 @@ export const COMPOSE_MANUAL_UPGRADE_COMMANDS = COMPOSE_PULL_UPGRADE_COMMANDS;
 /** Exact host commands from docs/self-host.md for source / `pnpm dev` installs. */
 export const SOURCE_MANUAL_UPGRADE_COMMANDS = [
   "git pull",
+  "# Stop the API and worker processes",
   "pnpm --filter @rakazo/db migrate",
   "# Restart the API and worker processes",
 ] as const;
@@ -454,6 +458,31 @@ export function composeUpArgv(
   args.push(options.build === true ? "--build" : "--no-build");
   args.push(...(options.services ?? targetServices(target)));
   return { command: "docker", args };
+}
+
+export function composeStopArgv(target: ComposeTarget): ComposeInvocation {
+  return { command: "docker", args: [...composeBase(target), "stop", ...targetServices(target)] };
+}
+
+/** Read deployment state with the API image and its credentials, without starting the app. */
+export function composeApiProbeArgv(target: ComposeTarget, script: string): ComposeInvocation {
+  return {
+    command: "docker",
+    args: [
+      ...composeBase(target),
+      "run",
+      "--rm",
+      "--no-deps",
+      "--pull",
+      "never",
+      "--entrypoint",
+      "node",
+      "api",
+      "--input-type=module",
+      "--eval",
+      script,
+    ],
+  };
 }
 
 export function composePsArgv(target: ComposeTarget): ComposeInvocation {
@@ -574,10 +603,9 @@ export interface ComposeUpdatePlanInput {
  * Ordered work for one Compose update.
  *
  * Migrations are absent on purpose. The `api` service runs `prisma migrate deploy` as the first
- * thing in its own start command, so a recreate already orders them correctly: Compose stops the
- * old container, the new one migrates with the new code, then serves. Running migrations from here
- * would instead apply the new schema while the old process is still answering requests, which is
- * the window this ordering exists to close.
+ * thing in its own start command. Stop every target first: Compose can otherwise leave an
+ * unchanged worker running while the API migrates. Prepare images before stopping services so a
+ * failed download or build does not interrupt the running deployment.
  */
 export function composeUpdatePlan(input: ComposeUpdatePlanInput): ComposeUpdateStep[] {
   const steps: ComposeUpdateStep[] = [];
@@ -612,20 +640,26 @@ export function composeUpdatePlan(input: ComposeUpdatePlanInput): ComposeUpdateS
         args: ["merge", "--ff-only", `${remote}/${branch}`],
       },
     );
-    const up = composeUpArgv(input.target, { build: true });
     steps.push({
-      id: "recreate",
-      label: "Build the new images and recreate the services",
-      command: up.command,
-      args: up.args,
+      id: "build",
+      label: "Build the new images",
+      command: "docker",
+      args: [...composeBase(input.target), "build", ...targetServices(input.target)],
     });
-    return steps;
+  } else {
+    const pull = composePullArgv(input.target);
+    steps.push({
+      id: "pull",
+      label: "Download the new images",
+      command: pull.command,
+      args: pull.args,
+    });
   }
 
-  const pull = composePullArgv(input.target);
+  const stop = composeStopArgv(input.target);
   const up = composeUpArgv(input.target);
   steps.push(
-    { id: "pull", label: "Download the new images", command: pull.command, args: pull.args },
+    { id: "stop", label: "Stop services before migrating", command: stop.command, args: stop.args },
     { id: "recreate", label: "Recreate the services", command: up.command, args: up.args },
   );
   return steps;

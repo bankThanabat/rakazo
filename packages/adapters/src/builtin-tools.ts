@@ -6,7 +6,14 @@ import {
   SecretHttpRequest,
 } from "@rakazo/contracts";
 import { z } from "zod";
+import { documentApprovalReplayTool } from "./approval-effect.js";
 import { customerTools } from "./customer-tools.js";
+import {
+  memoryAuditTools,
+  SemanticMemoryForgetInput,
+  SemanticMemorySaveInput,
+} from "./memory-tools.js";
+import { skillTools } from "./skill-tools.js";
 
 export const DELEGATION_TOOL_NAMES = new Set([
   "run_subagent",
@@ -18,7 +25,9 @@ export const DELEGATION_TOOL_NAMES = new Set([
 ]);
 
 export const builtinAgentTools: ConnectorTool[] = [
+  documentApprovalReplayTool,
   ...customerTools,
+  ...memoryAuditTools,
   {
     name: "computer_observe",
     description:
@@ -373,14 +382,17 @@ export const builtinAgentTools: ConnectorTool[] = [
   },
   {
     name: "remember",
-    description: "Store a durable fact in this bot's explicit memory.",
+    description:
+      "Replace this bot's private Markdown memory document. Read memory_documents and every memory_read chunk first, preserve existing facts, explain the reason, and pass its expectedRevision (zero for a new path). Never put another customer's private details into business guidance. Optional semantic memory uses save_memory instead.",
     inputSchema: {
       type: "object",
       properties: {
-        content: { type: "string" },
+        content: { type: "string", maxLength: 100000 },
+        expectedRevision: { type: "integer", minimum: 0 },
+        reason: { type: "string", minLength: 1, maxLength: 1000 },
         path: { type: "string" },
       },
-      required: ["content"],
+      required: ["content", "expectedRevision"],
     },
   },
   {
@@ -488,13 +500,7 @@ export const builtinAgentTools: ConnectorTool[] = [
     name: "save_memory",
     description:
       "Store a durable fact in this bot's semantic memory (preferences, decisions, recurring context). Use for anything worth recalling in future conversations.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        content: { type: "string" },
-      },
-      required: ["content"],
-    },
+    inputSchema: z.toJSONSchema(SemanticMemorySaveInput),
   },
   {
     name: "recall_memory",
@@ -510,20 +516,8 @@ export const builtinAgentTools: ConnectorTool[] = [
   {
     name: "forget_memory",
     description:
-      "Forget a durable semantic memory by id (from recall citations). Providers without forget support return an error.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "Memory id from a prior recall citation." },
-        entity: {
-          type: "string",
-          description:
-            "Optional entity/namespace from the recall citation when the provider scopes deletes.",
-        },
-        reason: { type: "string", description: "Optional reason recorded with the forget." },
-      },
-      required: ["id"],
-    },
+      "Remove a recalled semantic fact. Include its id and complete unchanged text as expectedContent so the owner can review the removal. The provider rechecks the authorized namespace and content before deleting; missing or changed facts require a fresh recall. Providers without forget support return an error.",
+    inputSchema: z.toJSONSchema(SemanticMemoryForgetInput),
   },
   {
     name: "scratchpad_list",
@@ -646,70 +640,7 @@ export const builtinAgentTools: ConnectorTool[] = [
       },
     },
   },
-  {
-    name: "skill_read",
-    description:
-      "Load a Claude Agent Skill (SKILL.md recipe) by exact name. Call this when a catalog skill matches the user's request, then follow it immediately.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Exact skill name from the catalog." },
-      },
-      required: ["name"],
-    },
-  },
-  {
-    name: "skill_create",
-    description:
-      "Create a reusable Claude Agent Skill (generic how-to SKILL.md) shared across assistants. The Pi runtime already understands this format; we persist and inject them. Use when a multi-step task is worth repeating or the user asks to save a skill. Do not include account names, channels, or inboxes — those belong in a routine.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Short skill name." },
-        description: {
-          type: "string",
-          description: "When to use this skill (shown in the / picker and used for auto-use).",
-        },
-        body: {
-          type: "string",
-          description: "Markdown steps and guidance after the frontmatter.",
-        },
-        content: {
-          type: "string",
-          description:
-            "Optional full SKILL.md (frontmatter + body) instead of name/description/body.",
-        },
-      },
-    },
-  },
-  {
-    name: "skill_update",
-    description:
-      "Update a user-created skill by name or id. Builtin and plugin skills are read-only.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Current exact skill name." },
-        skillId: { type: "string" },
-        newName: { type: "string" },
-        description: { type: "string" },
-        body: { type: "string" },
-        content: { type: "string", description: "Optional full replacement SKILL.md." },
-      },
-    },
-  },
-  {
-    name: "skill_delete",
-    description:
-      "Delete a user-created skill by name or id. Builtin and plugin skills cannot be deleted.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        skillId: { type: "string" },
-      },
-    },
-  },
+  ...skillTools,
   {
     name: "run_subagent",
     description:

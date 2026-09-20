@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { AdapterContext, JobPublisher } from "@rakazo/adapter-kit";
 import {
   createCustomerInbox,
@@ -8,6 +8,7 @@ import {
 } from "@rakazo/db";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { createCustomerConnector } from "./customer-connector.js";
 import { createCustomerConversations } from "./customer-conversations.js";
 import { receiveCustomerRelayBatch, setupCustomerIncoming } from "./customer-relay.js";
 import { IntegrationGateway } from "./integration-gateway.js";
@@ -30,11 +31,26 @@ it.skipIf(!enabled)(
   "isolates customers, provisions once after a lost response, persists offline delivery and ACKs only after the local inbox commit",
   async () => {
     const { prisma } = db;
-    const f = createOpenConnectorFixture((action) =>
-      action === "instagram.get_current_user"
-        ? { user: { userId: "instagram-account" } }
-        : { userId: "line-bot-fixture" },
+    let dmSends = 0;
+    const f = createOpenConnectorFixture(
+      (action, input) =>
+        action === "instagram.reply_to_comment"
+          ? { commentId: "generated-ig-reply", parentCommentId: "parent" }
+          : action === "instagram.send_message"
+            ? {
+                messageId: `generated-ig-dm-${++dmSends}`,
+                recipientId: (input as { recipientId: string }).recipientId,
+              }
+            : action === "instagram.get_current_user"
+              ? { user: { userId: "instagram-account" } }
+              : action === "instagram.list_conversations"
+                ? { conversations: [], paging: { hasNextPage: false } }
+                : { userId: "line-bot-fixture" },
+      prisma,
     );
+    const historyBucket = createHash("sha256")
+      .update(JSON.stringify(["instagram", "instagram-account", "conversation-reads"]))
+      .digest("hex");
     f.providers[0] = {
       ...f.providers[0]!,
       service: "line",
@@ -43,6 +59,7 @@ it.skipIf(!enabled)(
           ...sampleAction,
           id: "line.get_bot_info",
           service: "line",
+          readOnly: true,
           inputSchema: { type: "object", properties: {}, additionalProperties: false },
         },
         { ...sampleAction, id: "line.send_push_text", service: "line" },
@@ -53,7 +70,33 @@ it.skipIf(!enabled)(
       service: "instagram",
       actions: [
         { ...f.providers[0]!.actions[0]!, id: "instagram.get_current_user", service: "instagram" },
-        { ...sampleAction, id: "instagram.send_message", service: "instagram" },
+        {
+          ...f.providers[0]!.actions[0]!,
+          id: "instagram.list_conversations",
+          service: "instagram",
+        },
+        {
+          ...sampleAction,
+          id: "instagram.send_message",
+          service: "instagram",
+          inputSchema: {
+            type: "object",
+            properties: { recipientId: { type: "string" }, text: { type: "string" } },
+            required: ["recipientId", "text"],
+            additionalProperties: false,
+          },
+        },
+        {
+          ...sampleAction,
+          id: "instagram.reply_to_comment",
+          service: "instagram",
+          inputSchema: {
+            type: "object",
+            properties: { commentId: { type: "string" }, message: { type: "string" } },
+            required: ["commentId", "message"],
+            additionalProperties: false,
+          },
+        },
       ],
     });
     const settings = new IntegrationProviderSettings(prisma, f.secrets, "fixture", {
@@ -197,6 +240,12 @@ it.skipIf(!enabled)(
         actionAccess: { "local-account": ["line.get_bot_info"] },
       };
       const discovery = await client.discoverTools(scopedContext);
+      expect(await client.listActions("line", scopedContext)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "line.get_bot_info", readOnly: true }),
+          expect.objectContaining({ name: "line.send_push_text", readOnly: false }),
+        ]),
+      );
       expect(JSON.stringify(discovery)).toContain("line.get_bot_info");
       expect(JSON.stringify(discovery)).not.toContain("line.send_push_text");
       const call = {
@@ -211,6 +260,7 @@ it.skipIf(!enabled)(
       };
       const resolved = await client.resolveCall(call, scopedContext);
       expect(resolved?.tool.inputSchema).toMatchObject({ type: "object" });
+      expect(resolved?.tool.readOnly).toBe(true);
       scopedContext.actionAccess = {};
       const events = [];
       for await (const event of client.execute(resolved!.call, scopedContext)) events.push(event);
@@ -258,7 +308,7 @@ it.skipIf(!enabled)(
           type: "message",
           timestamp: Date.now() + 1000,
           source: { type: "user", userId: "fixture-customer" },
-          message: { type: "text", text: webhookEventId },
+          message: { id: `message-${webhookEventId}`, type: "text", text: webhookEventId },
         })),
       });
       await expect(gateway.receive(route.id, "wrong", raw)).rejects.toThrow();
@@ -375,6 +425,159 @@ it.skipIf(!enabled)(
           status: "connected",
         },
       });
+      const historyReader = createCustomerConnector({ prisma, integrations: localSettings });
+      expect(
+        await historyReader.execute(
+          local,
+          igAccount.id,
+          "instagram.list_conversations",
+          {},
+          "history-through-gateway",
+          "staff",
+          "read",
+          ig.state,
+          signal,
+          "instagram-account",
+        ),
+      ).toEqual({ conversations: [], paging: { hasNextPage: false } });
+      expect(await prisma.connectorRateLimit.count({ where: { key: historyBucket } })).toBe(1);
+      // The hosted receipt survives a lost execute response. The local staff tool recovers
+      // that evidence via the receipt command without invoking the provider action again.
+      const recoveryOps: string[] = [];
+      const recoveryClient = new IntegrationGatewayClient(
+        { endpoint: "https://gateway.example.test", apiKey: aliceKey.token },
+        async (_url, init) => {
+          const request = JSON.parse(String(init?.body));
+          recoveryOps.push(request.op);
+          const data = await command(aliceKey.token, request);
+          if (request.op === "execute") throw new Error("Lost Instagram response");
+          return Response.json({ data });
+        },
+      );
+      const recoverySettings = new IntegrationProviderSettings(prisma, f.secrets, "local-fixture", {
+        "open-connector": recoveryClient,
+      });
+      const recovery = createCustomerConnector({ prisma, integrations: recoverySettings });
+      await expect(
+        recovery.execute(
+          local,
+          igAccount.id,
+          "instagram.reply_to_comment",
+          { commentId: "parent", message: "Synthetic reply" },
+          "lost-ig-send",
+        ),
+      ).rejects.toThrow("Lost Instagram response");
+      const sends = await recovery.commentWrites(local, { connectionId: igAccount.id });
+      expect(sends.items).toMatchObject([{ status: "uncertain" }]);
+      await expect(recovery.commentWrites(bob, { connectionId: igAccount.id })).rejects.toThrow();
+      const localReceipt = await prisma.instagramSend.findUniqueOrThrow({
+        where: { id: sends.items[0]!.id },
+      });
+      const receiptRequest = {
+        op: "receipt",
+        query: {
+          connectionId: igAccount.id,
+          action: "instagram.reply_to_comment",
+          executionKey: localReceipt.executionKey,
+          requestHash: localReceipt.requestHash,
+        },
+        connections: [
+          {
+            id: igAccount.id,
+            providerRef: ig.state,
+            connectorId: "open-connector",
+            externalId: "instagram",
+            displayName: "Instagram",
+          },
+        ],
+      };
+      await expect(command(bobKey.token, receiptRequest)).rejects.toThrow();
+      await expect(
+        command(aliceKey.token, { ...receiptRequest, actionAccess: {} }),
+      ).rejects.toThrow();
+      expect(
+        await recovery.reconcileCommentWrite(local, {
+          connectionId: igAccount.id,
+          id: sends.items[0]!.id,
+        }),
+      ).toEqual({
+        status: "confirmed",
+        data: { commentId: "generated-ig-reply", parentCommentId: "parent" },
+      });
+      expect(recoveryOps.filter((op) => op === "execute")).toHaveLength(1);
+      expect(recoveryOps).toContain("receipt");
+      expect(
+        (await recovery.commentWrites(local, { connectionId: igAccount.id })).items,
+      ).toMatchObject([{ status: "confirmed" }]);
+      await expect(
+        recovery.execute(
+          local,
+          igAccount.id,
+          "instagram.send_message",
+          { recipientId: "instagram-customer", text: "Synthetic DM" },
+          "lost-ig-dm",
+        ),
+      ).rejects.toThrow("Lost Instagram response");
+      const dmReceipt = (
+        await recovery.commentWrites(local, { connectionId: igAccount.id })
+      ).items.find((item) => item.action === "instagram.send_message")!;
+      expect(dmReceipt).toMatchObject({ status: "uncertain", externalId: null });
+      expect(
+        await recovery.reconcileCommentWrite(local, {
+          connectionId: igAccount.id,
+          id: dmReceipt.id,
+        }),
+      ).toEqual({
+        status: "confirmed",
+        data: { messageId: "generated-ig-dm-1", recipientId: "instagram-customer" },
+      });
+      expect(
+        await recovery.execute(
+          local,
+          igAccount.id,
+          "instagram.send_message",
+          { recipientId: "instagram-customer", text: "Synthetic DM" },
+          "lost-ig-dm",
+        ),
+      ).toEqual({ messageId: "generated-ig-dm-1", recipientId: "instagram-customer" });
+      expect(dmSends).toBe(1);
+      // Switch credentials only when the bound HTTP action reaches the connector, after
+      // both hosted and local receipts have recorded the expected account.
+      const fixtureFetch = f.fetcher.getMockImplementation()!;
+      const originalSends = f.sent.length;
+      const originalReceipts = await prisma.instagramSend.count();
+      f.fetcher.mockImplementation(async (url, init) => {
+        if (String(url).includes("/for-account/")) {
+          const alias = new Headers(init?.headers).get("x-oo-connector-alias")!;
+          f.accounts.get(alias)!.providerAccountId = "changed-account";
+        }
+        return fixtureFetch(url, init);
+      });
+      const guardedClient = new IntegrationGatewayClient(
+        { endpoint: "https://gateway.example.test", apiKey: aliceKey.token },
+        async (_url, init) =>
+          Response.json({ data: await command(aliceKey.token, JSON.parse(String(init?.body))) }),
+      );
+      const guarded = createCustomerConnector({
+        prisma,
+        integrations: new IntegrationProviderSettings(prisma, f.secrets, "guarded-local", {
+          "open-connector": guardedClient,
+        }),
+      });
+      await expect(
+        guarded.execute(
+          local,
+          igAccount.id,
+          "instagram.reply_to_comment",
+          { commentId: "parent", message: "Synthetic rejected reply" },
+          "account-swap-send",
+        ),
+      ).rejects.toThrow("Connector action failed");
+      expect(f.sent).toHaveLength(originalSends);
+      expect(await prisma.instagramSend.count()).toBe(originalReceipts);
+      f.fetcher.mockImplementation(fixtureFetch);
+      for (const account of f.accounts.values())
+        if (account.service === "instagram") account.providerAccountId = "instagram-account";
       const igChannel = await setupCustomerIncoming(deps, local, {
         connectionId: igAccount.id,
         botId: bot.id,
@@ -419,6 +622,34 @@ it.skipIf(!enabled)(
           where: { conversation: { channelId: igChannel.id } },
         }),
       ).toBe(1);
+      const igConversation = await prisma.customerConversation.findFirstOrThrow({
+        where: { channelId: igChannel.id },
+      });
+      await createCustomerInbox(prisma).reply(local, {
+        id: igConversation.id,
+        body: "Staff DM reply",
+        nonce: randomUUID(),
+      });
+      await customerService.process(igConversation.id);
+      expect(
+        await prisma.customerMessage.count({
+          where: {
+            conversationId: igConversation.id,
+            role: "staff",
+            status: "sent",
+          },
+        }),
+      ).toBe(1);
+      expect(
+        await prisma.instagramSend.findMany({
+          where: {
+            spaceId: local.spaceId,
+            action: "instagram.send_message",
+            externalId: "generated-ig-dm-2",
+          },
+        }),
+      ).toMatchObject([{ targetId: "instagram-customer", accountHash: expect.any(String) }]);
+      expect(dmSends).toBe(2);
       expect(
         await prisma.secret.count({
           where: { id: { startsWith: `customer-webhook:${igChannel.id}:` } },
@@ -463,6 +694,7 @@ it.skipIf(!enabled)(
       await expect(gateway.receive(route.id, deliveryToken, raw)).rejects.toThrow();
     } finally {
       vi.unstubAllGlobals();
+      await prisma.connectorRateLimit.deleteMany({ where: { key: historyBucket } });
       await prisma.integrationProviderConfig.deleteMany({
         where: { id: { in: ["integration-gateway", "incoming-webhook:instagram"] } },
       });

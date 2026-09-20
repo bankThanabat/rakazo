@@ -497,6 +497,40 @@ describe("createRunExecutor", () => {
     expect(tools).toContain("web_fetch");
   });
 
+  it.each([
+    { groupId: "group", trigger: "user", messagingChannelRun: false },
+    { groupId: null, trigger: "messaging", messagingChannelRun: true },
+    { groupId: null, trigger: "webhook", messagingChannelRun: false },
+  ])(
+    "keeps private memory audit tools out of shared or externally triggered runs: %o",
+    (options) => {
+      const names = selectBuiltinToolsForRun({
+        ...options,
+        graphicalToolsAllowed: false,
+        semanticMemoryEnabled: false,
+      }).map((tool) => tool.name);
+      expect(names.some((name) => name.startsWith("memory_"))).toBe(false);
+      expect(names.some((name) => name.startsWith("skill_"))).toBe(false);
+      expect(names).not.toContain("customer_learning_tasks");
+      expect(names).not.toContain("customer_learning_decide");
+    },
+  );
+
+  it.each([
+    { groupId: "group", trigger: "user", messagingChannelRun: false },
+    { groupId: null, trigger: "routine", messagingChannelRun: false },
+    { groupId: null, trigger: "webhook", messagingChannelRun: false },
+    { groupId: null, trigger: "messaging", messagingChannelRun: true },
+  ])("hides semantic deletion outside private owner requests: %o", (options) => {
+    const tools = selectBuiltinToolsForRun({
+      ...options,
+      graphicalToolsAllowed: false,
+      semanticMemoryEnabled: true,
+    }).map((tool) => tool.name);
+    expect(tools).not.toContain("forget_memory");
+    expect(tools).not.toContain("memory_semantic_undo");
+  });
+
   it("isolates routine runs from every thread-history source", () => {
     const threadContext = {
       messages: [{ role: "user", content: "Create this routine" }],
@@ -720,7 +754,7 @@ describe("createRunExecutor", () => {
     );
   });
 
-  it("expands @skill mentions in the routine prompt at fire time", async () => {
+  it("keeps skill references in queued routines for current-version resolution at execution", async () => {
     const scheduledAt = new Date(Date.now() - 1_000);
     const enqueue = vi.fn(async () => undefined);
     let createdPrompt = "";
@@ -782,9 +816,8 @@ description: Prepare standup notes
 
     await executor.wakeRoutine("routine-1", scheduledAt.toISOString());
 
-    expect(createdPrompt).toContain("Use skill: Daily standup");
-    expect(createdPrompt).toContain("Summarize wins");
-    expect(createdPrompt).not.toMatch(/@Daily standup/);
+    expect(createdPrompt).toBe("Run @Daily standup, then email me");
+    expect(prisma.agentSkill.findMany).not.toHaveBeenCalled();
   });
 
   it("still continues the run when routine.fired append fails", async () => {
@@ -1228,6 +1261,11 @@ description: Prepare standup notes
       taughtSkill: { findMany: vi.fn(async () => []) },
       agentSecret: { findMany: vi.fn(async () => []) },
       agentSkill: { findMany: vi.fn(async () => []) },
+      $transaction: async function <T>(work: (tx: unknown) => Promise<T>): Promise<T> {
+        return work(this);
+      },
+      $queryRaw: vi.fn(async () => [{ id: "owner" }]),
+      accountDeletion: { count: vi.fn(async () => 0) },
       scratchpadItem: { findMany: vi.fn(async () => []) },
     } as unknown as PrismaClient;
     const executor = createRunExecutor({

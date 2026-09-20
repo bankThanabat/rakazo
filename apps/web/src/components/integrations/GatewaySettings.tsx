@@ -40,7 +40,7 @@ export function GatewaySettings() {
             ["endpoint", t`Convoy URL`, "url"],
             ["apiKey", t`Project API key`, "password"],
             ["projectId", t`Project ID`, "text"],
-            ["callbackOrigin", t`Public Rakazo API origin`, "url"],
+            ["callbackOrigin", t`Public Deskazo API origin`, "url"],
           ] as const
         ).map(([key, label, type]) => (
           <label key={key} htmlFor={`${fieldId}-${key}`} className="block">

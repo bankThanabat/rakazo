@@ -1,17 +1,28 @@
 import type {
   AdapterContext,
   DurableMemoryScope,
+  SemanticMemoryForgetRequest,
+  SemanticMemoryForgetResponse,
   SemanticMemoryProvider,
   SemanticMemoryRecallRequest,
   SemanticMemoryResponse,
+  SemanticMemoryRestoreRequest,
   SemanticMemoryResult,
   SemanticMemorySaveRequest,
+  SemanticMemorySaveResponse,
 } from "@rakazo/adapter-kit";
 import {
+  validateMemoryPurgeScope,
+  validateMemoryRestoreScope,
+  validateMemorySaveScope,
+} from "./memory-save-result.js";
+import type { SupermemoryConnectionConfig } from "./supermemory-client.js";
+import {
   deleteSupermemoryContainer,
+  forgetSupermemoryMemory,
   parseSupermemoryBaseUrl,
   probeSupermemory,
-  type SupermemoryConnectionConfig,
+  restoreSupermemoryMemory,
   saveSupermemoryMemoryToContainers,
   searchSupermemoryContainers,
 } from "./supermemory-client.js";
@@ -138,6 +149,7 @@ export class SupermemoryMemoryProvider implements SemanticMemoryProvider {
           value: result.results.slice(0, request.limit).map((item) => ({
             memory: item.memory,
             score: item.similarity,
+            ...(item.id ? { id: item.id, entity: item.entity } : {}),
             ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
           })),
         }
@@ -147,7 +159,9 @@ export class SupermemoryMemoryProvider implements SemanticMemoryProvider {
   async save(
     request: SemanticMemorySaveRequest,
     context: AdapterContext,
-  ): Promise<SemanticMemoryResponse> {
+  ): Promise<SemanticMemorySaveResponse> {
+    const invalid = validateMemorySaveScope(request, context);
+    if (invalid) return invalid;
     const tags =
       request.source.kind === "history"
         ? [historyContainerTag(request.botId, request.source.generation)]
@@ -158,13 +172,52 @@ export class SupermemoryMemoryProvider implements SemanticMemoryProvider {
       this.connection,
       context.signal,
     );
-    return result.ok ? { ok: true, value: undefined } : result;
+    return result;
+  }
+
+  async forget(
+    request: SemanticMemoryForgetRequest,
+    context: AdapterContext,
+  ): Promise<SemanticMemoryForgetResponse> {
+    if (
+      !context.botId ||
+      request.botId !== context.botId ||
+      !["isolated", "shared"].includes(request.scope) ||
+      !request.id ||
+      !request.expectedContent?.trim()
+    ) {
+      return { ok: false, error: "A scoped recall and complete fact content are required." };
+    }
+    const tags = durableContainerTags(request.scope, request.botId, context.spaceId);
+    if (request.entity !== undefined && !tags.includes(request.entity)) {
+      return { ok: false, error: "The recalled fact is outside this bot's memory scope." };
+    }
+    return forgetSupermemoryMemory(
+      { ...request, containerTags: request.entity ? [request.entity] : tags },
+      this.connection,
+      context.signal,
+    );
+  }
+
+  async restore(
+    request: SemanticMemoryRestoreRequest,
+    context: AdapterContext,
+  ): Promise<SemanticMemorySaveResponse> {
+    const invalid = validateMemoryRestoreScope(
+      request,
+      context,
+      durableContainerTags(request.scope, request.botId, context.spaceId),
+    );
+    if (invalid) return invalid;
+    return restoreSupermemoryMemory(request, this.connection, context.signal);
   }
 
   async purgeHistory(
     request: { botId: string; generations: number[] },
     context: AdapterContext,
   ): Promise<SemanticMemoryResponse> {
+    const invalid = validateMemoryPurgeScope(request, context);
+    if (invalid) return invalid;
     const results = await Promise.all(
       [...new Set(request.generations)].map((generation) =>
         deleteSupermemoryContainer(

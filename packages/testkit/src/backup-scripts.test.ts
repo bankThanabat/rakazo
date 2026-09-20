@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -101,18 +102,16 @@ fi
 `,
   );
   chmodSync(tar, 0o755);
-  const checksum = path.join(bin, "sha256sum");
+  const python = path.join(bin, "python3");
   write(
-    checksum,
+    python,
     `#!/usr/bin/env -S node --
 const fs = require("node:fs");
-const crypto = require("node:crypto");
-for (const file of process.argv.slice(2)) {
-  console.log(crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") + "  " + file);
-}
+fs.appendFileSync(process.env.COMMAND_LOG, JSON.stringify(["python3", ...process.argv.slice(2)]) + "\\n");
+if (process.env.FAIL_SNAPSHOT === "1") process.exit(1);
 `,
   );
-  chmodSync(checksum, 0o755);
+  chmodSync(python, 0o755);
   // No inherited deployment settings, credentials, or executable search paths.
   const env = {
     PATH: [bin, path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter),
@@ -258,16 +257,22 @@ describe("production backup deployment and archive behavior", () => {
       custom ? { RAKAZO_DEPLOY_DIR: deployment } : {},
     );
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Verified Rakazo backup");
-    for (const command of f.commands().filter((args) => args[0] === "compose")) {
-      expect(command.slice(0, 5)).toEqual([
-        "compose",
+    expect(result.stdout).toContain("Verified Deskazo backup");
+    expect(f.commands()).toEqual([
+      [
+        "python3",
+        path.join(deployment, "scripts/deployment-backup.py"),
+        "backup",
+        "--project",
+        "rakazo",
+        "--compose",
+        path.join(deployment, "infra/compose/docker-compose.prod.yml"),
         "--env-file",
         path.join(deployment, ".env"),
-        "-f",
-        path.join(deployment, "infra/compose/docker-compose.prod.yml"),
-      ]);
-    }
+        "--output",
+        expect.stringMatching(/snapshots\/\d{8}T\d{6}Z$/),
+      ],
+    ]);
   });
 
   it("provides optional systemd configuration for installed copies", () => {
@@ -276,6 +281,7 @@ describe("production backup deployment and archive behavior", () => {
       "utf8",
     );
     expect(service).toContain("EnvironmentFile=-/etc/rakazo/backup.env");
+    expect(service).toContain("ReadWritePaths=/var/backups -/srv/rakazo");
   });
 
   it("rejects relative deployment paths before any backup commands", () => {
@@ -287,26 +293,35 @@ describe("production backup deployment and archive behavior", () => {
     expect(existsSync(f.snapshots)).toBe(false);
   });
 
-  it("preserves host archiving and the live-file warning allowance from PR #618", () => {
+  it("forwards the exact custom project name", () => {
     const f = fixture();
-    const result = f.run("infra/compose/backup-prod.sh", [], { CHANGED_TAR: "1" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("file changed as we read it");
-    expect(result.stdout).toContain("Verified Rakazo backup");
-    const snapshot = result.stdout.trim().split("written to ")[1];
-    expect(contents(path.join(snapshot, "appdata.tgz"))).toContain("home.txt");
-    expect(existsSync(path.join(snapshot, "SHA256SUMS"))).toBe(true);
-    expect(f.commands().some((args) => args[0] === "inspect")).toBe(true);
-    expect(f.commands().some((args) => args.includes("tar"))).toBe(false);
+    expect(
+      f.run("infra/compose/backup-prod.sh", [], { COMPOSE_PROJECT_NAME: "example-stack" }).status,
+    ).toBe(0);
+    expect(f.commands()[0]).toEqual(expect.arrayContaining(["--project", "example-stack"]));
   });
 
-  it.each([{ FAIL_TAR: "2" }, { FAIL_DUMP: "1" }, { FAIL_VERIFY: "1" }])(
-    "does not report a verified snapshot after failure: %j",
-    (failure) => {
-      const f = fixture();
-      const result = f.run("infra/compose/backup-prod.sh", [], failure);
-      expect(result.status).not.toBe(0);
-      expect(result.stdout).not.toContain("Verified Rakazo backup");
-    },
-  );
+  it("does not report success or rotate snapshots after the shared command fails", () => {
+    const f = fixture();
+    const retained = path.join(f.snapshots, "20200101T000000Z", "manifest.json");
+    write(retained, "example backup");
+    utimesSync(path.dirname(retained), 0, 0);
+    const result = f.run("infra/compose/backup-prod.sh", [], { FAIL_SNAPSHOT: "1" });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain("Verified Deskazo backup");
+    expect(existsSync(retained)).toBe(true);
+  });
+
+  it("rotates only old timestamp directories after a successful snapshot", () => {
+    const f = fixture();
+    const oldSnapshot = path.join(f.snapshots, "20200101T000000Z", "manifest.json");
+    const operatorNotes = path.join(f.snapshots, "notes", "instructions.txt");
+    for (const file of [oldSnapshot, operatorNotes]) {
+      write(file, "example");
+      utimesSync(path.dirname(file), 0, 0);
+    }
+    expect(f.run("infra/compose/backup-prod.sh").status).toBe(0);
+    expect(existsSync(oldSnapshot)).toBe(false);
+    expect(existsSync(operatorNotes)).toBe(true);
+  });
 });

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
 import { ORPCError, onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
 import type {
@@ -21,6 +20,7 @@ import {
   applyMessagingOutboundStatus,
   ChatSdkMessagingSurface,
   ComposioConnector,
+  createAccountDeletionService,
   createBackgroundJobHandlers,
   createCloudAgentConnection,
   createConnectorStack,
@@ -35,7 +35,6 @@ import {
   createRunSandbox,
   createRunSecretWriter,
   createWebProvider,
-  destroyBot,
   EmailEmulator,
   EncryptedSecretStore,
   ExpoPushProvider,
@@ -59,11 +58,9 @@ import {
   PostgresRealtimeFanout,
   pipedreamConfigFromEnv,
   piSessionsRoot,
-  pushTokenPath,
   receiveCustomerRelayBatch,
   reconcileCloudAgents,
   reconcileComputerUpdates,
-  removePiUserSessions,
   ScriptedAgentRuntime,
   SmtpEmailProvider,
   SpaceMemoryProviderResolver,
@@ -92,6 +89,7 @@ import { requestLogging } from "@rakazo/logging/hono";
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { mountAccountExport } from "./account-export.js";
 import { mountCustomerHttp } from "./customer-http.js";
 import { mountCustomerWebsite } from "./customer-website.js";
 import type { AppEnv } from "./env.js";
@@ -121,6 +119,7 @@ import { mountWebhookHttpRoutes } from "./webhook.js";
 
 export interface AppHandles {
   app: Hono;
+  customers: ReturnType<typeof createCustomerConversations>;
   prisma: PrismaClient;
   jobs: JobPublisher;
   sandbox: SandboxProvider;
@@ -333,32 +332,7 @@ export async function createApp(
       "http://localhost:19006",
       "http://127.0.0.1:19006",
     ],
-    beforeDeleteUser: async (userId) => {
-      await integrationGateway.removeUserAccounts(userId);
-      const bots = await prisma.bot.findMany({
-        where: { userId },
-        select: { id: true, userId: true, spaceId: true, name: true, archivedAt: true },
-      });
-      await Promise.all(
-        bots.map((bot) =>
-          destroyBot(
-            { prisma, sandbox, home, jobs, artifacts, dataDir: env.dataDir },
-            bot,
-            {
-              operationId: `account-delete:${userId}`,
-              traceId: `account-delete:${userId}`,
-              spaceId: bot.spaceId,
-              userId,
-              botId: bot.id,
-              signal: new AbortController().signal,
-            },
-            { deleteMemories: true },
-          ),
-        ),
-      );
-      await removePiUserSessions(env.dataDir, userId);
-      await rm(pushTokenPath(env.dataDir, userId), { force: true }).catch(() => undefined);
-    },
+    onDeletionRequested: (userId) => accountDeletions.enqueue(userId),
   });
   // One provider instance so emulator launches and polls share the same Map.
   const cloudAgent = createCloudAgentConnection({
@@ -368,6 +342,24 @@ export async function createApp(
   });
   const shutdown = new AbortController();
   const knowledge = createKnowledge({ prisma, artifacts, secrets, jobs });
+  const integrationGateway = new IntegrationGateway({
+    prisma,
+    secrets,
+    integrations: integrationSettings,
+  });
+  const accountDeletions = createAccountDeletionService({
+    reconcileCustomerPublications: (userId) => customers.reconcilePublications(userId),
+    cloudAgent,
+    connectors: stack.connector,
+    prisma,
+    sandbox,
+    home,
+    jobs,
+    artifacts,
+    dataDir: env.dataDir,
+    integrations: integrationGateway,
+    knowledge,
+  });
   const customers = createCustomerConversations({
     knowledge,
     webOrigin: env.webOrigin,
@@ -420,6 +412,7 @@ export async function createApp(
   });
 
   const jobHandlers = createBackgroundJobHandlers({
+    accountDeletions,
     knowledge,
     customers,
     executor,
@@ -447,15 +440,11 @@ export async function createApp(
         reconcileComputerUpdates: () => reconcileComputerUpdates({ prisma, jobs }),
         reconcileCustomers: customers.reconcile,
         reconcileKnowledge: knowledge.reconcile,
+        reconcileAccountDeletions: accountDeletions.reconcile,
       })
     : undefined;
   reconciler?.start();
 
-  const integrationGateway = new IntegrationGateway({
-    prisma,
-    secrets,
-    integrations: integrationSettings,
-  });
   const router = createRouter({
     knowledge,
     cloudAgent,
@@ -507,7 +496,7 @@ export async function createApp(
   const app = new Hono();
   app.use("*", requestLogging(logger));
   // Visitor capabilities have per-channel origins and never use employee cookies.
-  mountCustomerWebsite(app, { prisma, jobs, webOrigin: env.webOrigin });
+  mountCustomerWebsite(app, { prisma, jobs, webOrigin: env.webOrigin, purchases: customers });
   app.use(
     "*",
     cors({
@@ -540,9 +529,23 @@ export async function createApp(
     if (blockedAuthPaths.some((blocked) => path.startsWith(blocked))) {
       return c.json({ error: "Not available in version 1" }, 404);
     }
-    return auth.handler(c.req.raw);
+    const response = await auth.handler(c.req.raw);
+    if (path === "/delete-user" && response.ok) {
+      return new Response(
+        JSON.stringify({ success: true, message: "Account deletion requested" }),
+        {
+          status: 202,
+          headers: response.headers,
+        },
+      );
+    }
+    return response;
   });
   mountLocalSettings(app, { token: env.desktopStackToken, prisma, rpc });
+  mountAccountExport(app, { prisma, artifacts }, async (c) => {
+    const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
+    return session?.user.id ?? null;
+  });
   mountIntegrationGateway(app, integrationGateway, env.webOrigin);
   let relayBusy = false;
   let lastConnectorMaintenance = 0;
@@ -595,7 +598,7 @@ export async function createApp(
     }
     const { matched, response } = await rpc.handle(c.req.raw, {
       prefix: "/rpc",
-      context: { actor, signal: c.req.raw.signal },
+      context: { actor, sessionId: session?.session.id, signal: c.req.raw.signal },
     });
     if (matched) return c.newResponse(response.body, response);
     await next();
@@ -898,6 +901,7 @@ export async function createApp(
   return {
     app,
     prisma,
+    customers,
     jobs,
     sandbox,
     connector,

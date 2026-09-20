@@ -1,7 +1,11 @@
 import { Trans, useLingui } from "@lingui/react/macro";
+import type { CustomerPurchaseReview } from "@rakazo/contracts";
+import { CustomerPurchaseReview as CustomerPurchaseReviewSchema } from "@rakazo/contracts";
 import { Button, Textarea } from "@rakazo/ui-web";
 import { MessageCircle, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+
+import { ShopperPurchaseReview } from "./ShopperPurchaseReview";
 
 type Transcript = {
   owner: string;
@@ -19,6 +23,9 @@ export function SupportWidget() {
   const [open, setOpen] = useState(false);
   const [token, setToken] = useState("");
   const [data, setData] = useState<Transcript>();
+  const [reviews, setReviews] = useState<CustomerPurchaseReview[]>([]);
+  const [reviewError, setReviewError] = useState(false);
+  const reviewRequest = useRef(0);
   const [earlier, setEarlier] = useState<Transcript>();
   const [body, setBody] = useState("");
   const [error, setError] = useState(false);
@@ -41,6 +48,38 @@ export function SupportWidget() {
     if (response.status === 401) setExpired(true);
     if (!response.ok) throw new Error("Support unavailable");
     return response.json();
+  }
+  async function loadReviews(active = () => true) {
+    const version = ++reviewRequest.current;
+    const next = await request("purchases");
+    const reviews = CustomerPurchaseReviewSchema.array().parse(next.reviews);
+    if (active() && version === reviewRequest.current) setReviews(reviews);
+  }
+  async function decideReview(
+    review: CustomerPurchaseReview,
+    decision: "confirmed" | "changes_requested",
+  ) {
+    if (busy) return;
+    setBusy(true);
+    ++reviewRequest.current;
+    try {
+      const result = await request("purchases/decision", {
+        purchaseId: review.purchaseId,
+        reviewId: review.id,
+        decision,
+      });
+      ++reviewRequest.current;
+      const updated = result.review ? CustomerPurchaseReviewSchema.parse(result.review) : null;
+      setReviews((previous) =>
+        previous.flatMap((item) => (item.id === review.id ? (updated ? [updated] : []) : [item])),
+      );
+      setReviewError(false);
+    } catch {
+      setReviewError(true);
+      await loadReviews().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
   }
   async function loadTranscript(active = () => true) {
     const lastSeen = latest.current ? (latest.current.messages.at(-1)?.seq ?? 0) : undefined;
@@ -93,7 +132,7 @@ export function SupportWidget() {
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
-        await loadTranscript(() => active);
+        await Promise.all([loadTranscript(() => active), loadReviews(() => active)]);
         if (active) {
           setError(false);
         }
@@ -205,6 +244,19 @@ export function SupportWidget() {
             {message.body}
           </div>
         ))}
+        {reviews.map((review) => (
+          <ShopperPurchaseReview
+            key={review.id}
+            review={review}
+            busy={busy || expired || error}
+            onDecide={(decision) => void decideReview(review, decision)}
+          />
+        ))}
+        {reviewError && (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            <Trans>Could not save your decision. Check the current details and try again.</Trans>
+          </p>
+        )}
         <div ref={bottom} />
       </div>
       {data?.needsHuman ? (
@@ -244,6 +296,9 @@ export function SupportWidget() {
                 latest.current = undefined;
                 setData(undefined);
                 setEarlier(undefined);
+                setReviews([]);
+                setReviewError(false);
+                ++reviewRequest.current;
                 setToken("");
                 attempt.current = undefined;
                 parentMessage("support-reset");

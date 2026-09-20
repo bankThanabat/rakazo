@@ -1,0 +1,87 @@
+diff --git a/src/services/knowledge_filter_service.py b/src/services/knowledge_filter_service.py
+index 91cc5334..399087a2 100644
+--- a/src/services/knowledge_filter_service.py
++++ b/src/services/knowledge_filter_service.py
+@@ -1,6 +1,8 @@
+ from datetime import UTC
+ from typing import Any
+ 
++from opensearchpy.exceptions import NotFoundError
++
+ KNOWLEDGE_FILTERS_INDEX_NAME = "knowledge_filters"
+ 
+ 
+@@ -181,6 +183,10 @@ class KnowledgeFilterService:
+             else:
+                 return {"success": False, "error": "Knowledge filter not found"}
+ 
++        except NotFoundError as error:
++            if isinstance(error.info, dict) and error.info.get("found") is False:
++                return {"success": False, "error": "Knowledge filter not found"}
++            return {"success": False, "error": "Knowledge filter lookup failed"}
+         except Exception as e:
+             return {"success": False, "error": str(e)}
+ 
+diff --git a/tests/unit/test_knowledge_filter_not_found.py b/tests/unit/test_knowledge_filter_not_found.py
+new file mode 100644
+index 00000000..69ba13e0
+--- /dev/null
++++ b/tests/unit/test_knowledge_filter_not_found.py
+@@ -0,0 +1,57 @@
++"""Offline regression: a DLS-hidden filter has the same response as a missing one."""
++
++import json
++import sys
++from types import SimpleNamespace
++import unittest
++from unittest.mock import AsyncMock
++
++from opensearchpy.exceptions import AuthenticationException, NotFoundError
++
++from api.knowledge_filter import get_knowledge_filter
++from services.knowledge_filter_service import KnowledgeFilterService
++
++
++class KnowledgeFilterNotFoundTests(unittest.IsolatedAsyncioTestCase):
++    async def response(self, result=None, error=None):
++        client = SimpleNamespace(get=AsyncMock(return_value=result, side_effect=error))
++        manager = SimpleNamespace(get_user_opensearch_client=lambda user, token: client)
++        service = KnowledgeFilterService(manager)
++        response = await get_knowledge_filter(
++            "synthetic-filter", service, manager,
++            SimpleNamespace(user_id="synthetic-user", jwt_token="synthetic-token"),
++        )
++        client.get.assert_awaited_once_with(index="knowledge_filters", id="synthetic-filter")
++        return response.status_code, json.loads(response.body)
++
++    async def test_hidden_and_missing_filters_have_identical_safe_responses(self):
++        missing = await self.response(result={"found": False})
++        hidden = await self.response(error=NotFoundError(404, "document_missing", {
++            "_index": "synthetic-internal-index", "_id": "synthetic-private-id", "found": False,
++        }))
++        self.assertEqual(missing, (404, {"success": False, "error": "Knowledge filter not found"}))
++        self.assertEqual(hidden, missing)
++
++    async def test_visible_filter_is_returned(self):
++        document = {"id": "synthetic-filter", "name": "Synthetic policy"}
++        self.assertEqual(await self.response(result={"found": True, "_source": document}),
++                         (200, {"success": True, "filter": document}))
++
++    async def test_missing_index_and_unknown_404_fail_safely(self):
++        for info in [{"error": {"type": "index_not_found_exception", "reason": "synthetic-private-index"}},
++                     None, {"found": "false"}]:
++            with self.subTest(info=info):
++                self.assertEqual(await self.response(error=NotFoundError(404, "synthetic-internal-error", info)),
++                                 (500, {"success": False, "error": "Knowledge filter lookup failed"}))
++
++    async def test_rejected_credentials_remain_authentication_errors(self):
++        status, _ = await self.response(error=AuthenticationException(401, "rejected"))
++        self.assertEqual(status, 401)
++
++    async def test_other_failures_are_not_misreported_as_missing(self):
++        status, _ = await self.response(error=RuntimeError("synthetic transport failure"))
++        self.assertEqual(status, 500)
++
++
++if __name__ == "__main__":
++    unittest.main(testRunner=unittest.TextTestRunner(stream=sys.stdout))

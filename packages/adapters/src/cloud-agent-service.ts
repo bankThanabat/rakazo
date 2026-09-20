@@ -6,6 +6,7 @@ import {
   type CloudAgent,
   createThreadMessageInTransaction,
   type PrismaClient,
+  requirePrivateOwner,
   type ThreadEvents,
 } from "@rakazo/db";
 import { getLogger } from "@rakazo/logging";
@@ -39,6 +40,7 @@ export async function executeCloudAgentTool(
   if (name === "cloud_agent_launch") {
     const request = cloudAgentLaunchSchema.parse(args);
     const result = await deps.prisma.$transaction(async (tx) => {
+      await requirePrivateOwner(tx, context, context.botId);
       // Serialize with clearThread before creating either the intent or its card.
       await tx.thread.update({
         where: { id: run.threadId, userId: context.userId, spaceId: context.spaceId },
@@ -95,46 +97,56 @@ export async function executeCloudAgentTool(
     if (result.seq !== undefined)
       await deps.events.notify(run.threadId, result.seq).catch(() => undefined);
   } else {
-    const owned = await deps.prisma.cloudAgent.findFirst({
-      where: {
-        id: String(args.id).trim(),
-        providerKey: connection.key,
-        spaceId: context.spaceId,
-        userId: context.userId,
-      },
-    });
-    if (!owned) return { error: "Unknown cloud agent." };
-    agent = owned;
-    if (name === "cloud_agent_reply") {
-      if (
-        agent.status === "running" ||
-        agent.followup ||
-        agent.cancelRequested ||
-        !agent.remoteId
-      ) {
-        return { error: "Wait for the current cloud agent operation to finish." };
-      }
-      const { id: _id, ...followup } = cloudAgentReplySchema.parse(args);
-      const updated = await deps.prisma.cloudAgent.updateMany({
-        where: { id: agent.id, version: agent.version },
-        data: {
-          followup,
-          followupDispatching: false,
-          status: "running",
-          generation: { increment: 1 },
-          version: { increment: 1 },
-          nextPollAt: new Date(),
-          errorCount: 0,
+    const result = await deps.prisma.$transaction(async (tx) => {
+      const owned = await tx.cloudAgent.findFirst({
+        where: {
+          id: String(args.id).trim(),
+          providerKey: connection.key,
+          spaceId: context.spaceId,
+          userId: context.userId,
         },
       });
-      if (!updated.count) return { error: "Cloud agent changed; check its status and try again." };
-    } else if (name === "cloud_agent_cancel") {
-      await deps.prisma.cloudAgent.update({
-        where: { id: agent.id },
-        data: { cancelRequested: true, version: { increment: 1 }, nextPollAt: new Date() },
-      });
-    }
-    agent = await deps.prisma.cloudAgent.findUniqueOrThrow({ where: { id: agent.id } });
+      if (!owned) return { error: "Unknown cloud agent." };
+      await requirePrivateOwner(
+        tx,
+        context,
+        name === "cloud_agent_reply" ? context.botId : undefined,
+      );
+      const agent = owned;
+      if (name === "cloud_agent_reply") {
+        if (
+          agent.status === "running" ||
+          agent.followup ||
+          agent.cancelRequested ||
+          !agent.remoteId
+        ) {
+          return { error: "Wait for the current cloud agent operation to finish." };
+        }
+        const { id: _id, ...followup } = cloudAgentReplySchema.parse(args);
+        const updated = await tx.cloudAgent.updateMany({
+          where: { id: agent.id, version: agent.version },
+          data: {
+            followup,
+            followupDispatching: false,
+            status: "running",
+            generation: { increment: 1 },
+            version: { increment: 1 },
+            nextPollAt: new Date(),
+            errorCount: 0,
+          },
+        });
+        if (!updated.count)
+          return { error: "Cloud agent changed; check its status and try again." };
+      } else if (name === "cloud_agent_cancel") {
+        await tx.cloudAgent.update({
+          where: { id: agent.id },
+          data: { cancelRequested: true, version: { increment: 1 }, nextPollAt: new Date() },
+        });
+      }
+      return tx.cloudAgent.findUniqueOrThrow({ where: { id: agent.id } });
+    });
+    if ("error" in result) return result;
+    agent = result;
   }
   if (agent.nextPollAt) await enqueueCloudAgent(deps, agent.id);
   const { kind: _kind, agentId, ...snapshot } = cloudAgentBlock(agent);
@@ -160,6 +172,22 @@ export async function enqueueCloudAgent(
 export async function reconcileCloudAgents(
   deps: Pick<CloudAgentDeps, "prisma" | "jobs" | "cloudAgent">,
 ) {
+  // Old account deletion could leave records without their owner. Keep remote
+  // recovery identities until terminal; a missing membership alone is not erasure.
+  await deps.prisma.$executeRaw`
+    DELETE FROM cloud_agents WHERE id IN (
+      SELECT c.id FROM cloud_agents c
+      WHERE NOT EXISTS (SELECT 1 FROM "user" u WHERE u.id = c."userId")
+        AND (c."leaseExpiresAt" IS NULL OR c."leaseExpiresAt" <= CURRENT_TIMESTAMP)
+        AND NOT c."followupDispatching"
+        AND (
+          (c."remoteId" IS NULL AND NOT c."launchDispatched")
+          OR (c.status IN ('finished', 'failed', 'cancelled')
+              AND (c.followup IS NULL OR c.followup = 'null'::jsonb))
+        )
+      ORDER BY c.id LIMIT 100 FOR UPDATE OF c SKIP LOCKED
+    )
+  `;
   if (!deps.cloudAgent) return;
   const due = await deps.prisma.cloudAgent.findMany({
     where: {

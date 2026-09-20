@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      upload_artifacts:
+        description: Retain screenshots and reports using artifact storage
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +29,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
 
@@ -39,7 +44,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
         env:
@@ -58,7 +63,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
         env:
@@ -68,7 +73,7 @@ jobs:
       - name: Electron smoke
         run: xvfb-run --auto-servernum pnpm --filter @rakazo/desktop exec playwright test --config e2e/playwright.config.ts
       - name: Upload desktop setup screenshots
-        if: always()
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_artifacts)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-e2e-screenshots
@@ -86,7 +91,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm db:generate
         env:
@@ -104,7 +109,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-          cache: pip
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pip' || '' }}
           cache-dependency-path: infra/langflow/requirements-test.txt
       - run: python -m pip install -r infra/langflow/requirements-test.txt
       - run: python -m unittest discover -s infra/langflow/tests -v
@@ -112,7 +117,7 @@ jobs:
   test-integration:
     name: Postgres journeys
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -121,7 +126,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event_name != 'workflow_dispatch' && 'pnpm' || '' }}
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:integration
 
@@ -129,7 +134,7 @@ jobs:
     name: Web E2E
     uses: ./.github/workflows/playwright.yml
     with:
-      upload_artifacts: true
+      upload_artifacts: ${{ github.event_name != 'workflow_dispatch' || inputs.upload_artifacts }}
 
   publish-mobile-update:
     name: Publish compatible mobile update

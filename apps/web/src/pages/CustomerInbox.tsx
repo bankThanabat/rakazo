@@ -2,6 +2,7 @@ import { t } from "@lingui/core/macro";
 import { Trans } from "@lingui/react/macro";
 import { usePolling } from "@rakazo/chat-ui/async-state";
 import { useCustomerActions } from "@rakazo/chat-ui/customer-actions";
+import { customerDeliveryUnconfirmed } from "@rakazo/core";
 import { Button, cn, ProfileAvatar, Textarea } from "@rakazo/ui-web";
 import { Menu } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -128,7 +129,12 @@ export function CustomerThread({
   const polling = usePolling(() => rpc.customers.snapshot({ id: id! }), id, 1500);
   const snapshot = polling.data;
   const [before, setBefore] = useState<number>();
+  const [acknowledging, setAcknowledging] = useState(false);
   const [caseError, setCaseError] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const [guidance, setGuidance] = useState("");
+  const [steerBusy, setSteerBusy] = useState(false);
+  const [steerNotice, setSteerNotice] = useState("");
   const history = usePolling(
     () => rpc.customers.snapshot({ id: id!, before }),
     before && id ? `${id}:${before}` : null,
@@ -137,6 +143,9 @@ export function CustomerThread({
   useEffect(() => {
     setBefore(undefined);
     setCaseError(false);
+    setSteering(false);
+    setGuidance("");
+    setSteerNotice("");
   }, [id]);
   useEffect(() => {
     pinned.current = true;
@@ -147,6 +156,7 @@ export function CustomerThread({
     state?: "open" | "resolved";
     assigneeId?: string | null;
     read?: boolean;
+    acknowledge?: true;
   }) {
     if (!id) return;
     try {
@@ -207,6 +217,39 @@ export function CustomerThread({
       </div>
       {current && (
         <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-2">
+          {current.conversation.canReply &&
+            current.conversation.needsHuman &&
+            current.conversation.state === "open" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={acknowledging || Boolean(current.conversation.acknowledgedAt)}
+                onClick={async () => {
+                  setAcknowledging(true);
+                  try {
+                    await updateCase({ acknowledge: true });
+                  } finally {
+                    setAcknowledging(false);
+                  }
+                }}
+              >
+                {current.conversation.acknowledgedAt ? (
+                  <Trans>Acknowledged</Trans>
+                ) : (
+                  <Trans>Acknowledge</Trans>
+                )}
+              </Button>
+            )}
+          {current.conversation.canReply && (
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-expanded={steering}
+              onClick={() => setSteering(!steering)}
+            >
+              <Trans>Guide agent</Trans>
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -271,6 +314,67 @@ export function CustomerThread({
           <Trans>Could not update case</Trans>
         </p>
       )}
+      {current?.notificationIssue && (
+        <p role="status" className="px-4 py-2 text-sm text-destructive">
+          {current.notificationIssue === "uncertain" ? (
+            <Trans>Staff notification delivery is unconfirmed.</Trans>
+          ) : (
+            <Trans>Could not notify staff.</Trans>
+          )}
+        </p>
+      )}
+      {steering && current && (
+        <form
+          className="space-y-2 border-b border-border p-4"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!id || steerBusy || !guidance.trim()) return;
+            setSteerBusy(true);
+            setCaseError(false);
+            try {
+              const result = await rpc.customers.steer({
+                id,
+                guidance,
+                nonce: crypto.randomUUID(),
+              });
+              setGuidance("");
+              setSteerNotice(
+                result.inFlight
+                  ? t`Guidance saved. An earlier action may already have been sent.`
+                  : t`Guidance applied before the next reply.`,
+              );
+              polling.refresh();
+            } catch {
+              setCaseError(true);
+            } finally {
+              setSteerBusy(false);
+            }
+          }}
+        >
+          <label htmlFor={`guidance-${id}`} className="block space-y-2 text-sm">
+            <span>
+              <Trans>Private guidance</Trans>
+            </span>
+            <Textarea
+              id={`guidance-${id}`}
+              value={guidance}
+              onChange={(event) => setGuidance(event.target.value)}
+              maxLength={4000}
+              rows={3}
+              placeholder={t`Tell the agent how to handle this conversation…`}
+              disabled={steerBusy}
+            />
+          </label>
+          <Button type="submit" disabled={steerBusy || !guidance.trim()}>
+            <Trans>Apply guidance</Trans>
+          </Button>
+        </form>
+      )}
+      {steerNotice && (
+        <p role="status" className="px-4 py-2 text-sm text-muted-foreground">
+          {steerNotice}
+        </p>
+      )}
       <div
         ref={scroll}
         onScroll={(event) => {
@@ -311,7 +415,11 @@ export function CustomerThread({
             ) : null}
             {message.status === "failed" ? (
               <p className="mt-1 text-xs text-destructive">
-                <Trans>Reply failed</Trans>
+                {customerDeliveryUnconfirmed(message) ? (
+                  <Trans>Delivery unconfirmed</Trans>
+                ) : (
+                  <Trans>Reply failed</Trans>
+                )}
                 {message.sentParts > 0 ? ` · ${message.sentParts} ${t`parts sent`}` : ""}
               </p>
             ) : null}
@@ -342,6 +450,18 @@ export function CustomerThread({
                   <pre className="whitespace-pre-wrap break-words text-xs">{action.outcome}</pre>
                 )}
               </div>
+            ))}
+          </details>
+        )}
+        {!!current?.guidance?.length && (
+          <details className="text-sm text-muted-foreground">
+            <summary>
+              <Trans>Private guidance history</Trans>
+            </summary>
+            {current.guidance.map((item) => (
+              <p key={item.id} className="whitespace-pre-wrap py-2">
+                {item.content}
+              </p>
             ))}
           </details>
         )}

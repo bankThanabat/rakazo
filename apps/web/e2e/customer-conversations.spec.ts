@@ -16,6 +16,7 @@ test("connected customer conversation supports takeover, reply, and resume", asy
     owner: "bot",
     canReply: true,
     needsHuman: false,
+    handoffReason: null as string | null,
     preview: "Is the promotion available?",
     updatedAt: "2026-09-13T00:00:00.000Z",
   };
@@ -27,6 +28,8 @@ test("connected customer conversation supports takeover, reply, and resume", asy
       body: conversation.preview,
       mediaUrl: null,
       status: "received",
+      errorCode: null as string | null,
+      sentParts: 0,
       createdAt: conversation.updatedAt,
     },
   ];
@@ -75,6 +78,8 @@ test("connected customer conversation supports takeover, reply, and resume", asy
       body: input.body,
       mediaUrl: null,
       status: "sent",
+      errorCode: null,
+      sentParts: 1,
       createdAt: conversation.updatedAt,
     });
     await route.fulfill({ json: { json: { ok: true } } });
@@ -102,4 +107,25 @@ test("connected customer conversation supports takeover, reply, and resume", asy
   await page.getByRole("button", { name: "Resume AI", exact: true }).click();
   await expect(composer).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Take over", exact: true })).toBeVisible();
+  conversation.owner = "staff";
+  conversation.needsHuman = true;
+  conversation.handoffReason =
+    "Delivery or execution failed. Check the action outcome before retrying.";
+  messages.push({
+    id: "unconfirmed",
+    seq: 203,
+    role: "staff",
+    body: "Your order is ready for dispatch.",
+    mediaUrl: null,
+    status: "failed",
+    errorCode: "execution_uncertain",
+    sentParts: 0,
+    createdAt: conversation.updatedAt,
+  });
+  await expect(page.getByText("Delivery unconfirmed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Reply failed", { exact: true })).toHaveCount(0);
+  await captureScreenshot(page, testInfo, "customer-delivery-unconfirmed");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByText("Delivery unconfirmed", { exact: true })).toBeVisible();
+  await captureScreenshot(page, testInfo, "customer-delivery-unconfirmed-mobile");
 });

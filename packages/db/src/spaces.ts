@@ -246,6 +246,9 @@ export async function lockSpaceForContentCreation(
   await tx.$queryRaw(Prisma.sql`
     SELECT pg_advisory_xact_lock(hashtextextended(${input.spaceId}, 0))::text AS "lock"
   `);
+  await tx.$queryRaw`SELECT id FROM "user" WHERE id = ${input.userId} FOR SHARE`;
+  if (await tx.accountDeletion.count({ where: { userId: input.userId } }))
+    throw new IsolationError("Account deletion requested");
   const membership = await tx.spaceMember.findUnique({
     where: { spaceId_userId: { spaceId: input.spaceId, userId: input.userId } },
     select: {

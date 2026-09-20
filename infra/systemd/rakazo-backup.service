@@ -1,5 +1,5 @@
 [Unit]
-Description=Create and verify a Rakazo production backup
+Description=Create and verify a Deskazo production backup
 Requires=docker.service
 After=docker.service
 
@@ -12,4 +12,4 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/backups
+ReadWritePaths=/var/backups -/srv/rakazo

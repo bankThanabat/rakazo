@@ -1,5 +1,7 @@
 services:
   connector:
+    image: rakazo-openconnector:${OPENCONNECTOR_SOURCE_ID:?Prepare the locked connector source}
+    pull_policy: never
     networks:
       default: {}
       support:

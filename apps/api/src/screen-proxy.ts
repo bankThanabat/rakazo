@@ -39,6 +39,22 @@ export function mountScreenTarget(app: Hono, prisma: PrismaClient, secret: strin
     const bot = await prisma.bot.findFirst({
       where: {
         id: scope.botId,
+        spaceId: scope.spaceId,
+        userId: scope.userId,
+        space: {
+          memberships: {
+            some: {
+              id: scope.membershipId,
+              userId: scope.userId,
+              member: {
+                user: {
+                  deletion: null,
+                  sessions: { some: { id: scope.sessionId, expiresAt: { gt: new Date() } } },
+                },
+              },
+            },
+          },
+        },
         computerId: scope.computerId,
         archivedAt: null,
         screenGeneration: scope.botGeneration,

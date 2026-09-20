@@ -402,9 +402,10 @@ export async function rememberSerenity(
     network?: SerenityNetworkDependencies;
   } = {},
 ): Promise<SerenityResult<SerenityRememberResult>> {
-  const trimmedFact = fact.trim().slice(0, MAX_SERENITY_FACT_CHARS);
+  const trimmedFact = fact;
   const trimmedProvenance = provenance.trim().slice(0, MAX_SERENITY_PROVENANCE_CHARS);
-  if (!trimmedFact) return { ok: false, error: "fact is required" };
+  if (!trimmedFact.trim() || trimmedFact.length > MAX_SERENITY_FACT_CHARS)
+    return { ok: false, error: "fact must contain 1 to 10000 characters" };
   if (!trimmedProvenance) return { ok: false, error: "provenance is required" };
   try {
     const payload = await withSerenityClient(
@@ -435,7 +436,14 @@ export async function rememberSerenity(
       return { ok: false, error: "Serenity remember returned an unexpected payload" };
     }
     const row = payload as { id?: unknown; status?: unknown; status_text?: unknown };
-    if (typeof row.id !== "string" || typeof row.status !== "string") {
+    if (
+      typeof row.id !== "string" ||
+      !row.id.trim() ||
+      row.id.length > 500 ||
+      typeof row.status !== "string" ||
+      !row.status.trim() ||
+      row.status.length > 500
+    ) {
       return { ok: false, error: "Serenity remember returned an unexpected payload" };
     }
     return {

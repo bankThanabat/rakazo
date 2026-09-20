@@ -160,6 +160,7 @@ import {
   shouldNotifyBrowser,
 } from "../lib/browser-notifications";
 import { loadComputerScreen } from "../lib/computer-screen";
+import { customerAlertTarget } from "../lib/customer-alert-link";
 import { desktopBridge } from "../lib/desktop";
 import { scheduleFocusPrompt } from "../lib/focus-prompt";
 import { localTimezone } from "../lib/local-timezone";
@@ -202,6 +203,7 @@ import type { ContextMenuPosition } from "./BotContextMenu";
 import { CustomerSidebar, CustomerThread, useCustomerInbox } from "./CustomerInbox";
 import { CreateGroupForm, GroupSettings, memberName } from "./GroupPanel";
 import { HostComputerPrompt } from "./HostComputerPrompt";
+import { LearningUpdates } from "./LearningUpdates";
 import {
   draftFromRoutine,
   emptyRoutineDraft,
@@ -1032,7 +1034,7 @@ export function ShellPage() {
           markOnce("rk:renderer:bots-response");
           markOnce("rk:renderer:thread-response");
         }
-        if (!applyBotLists) return;
+        if (!applyBotLists || customerAlertTarget(searchParamsRef.current)) return;
         if (
           bootstrap.bots.length === 0 &&
           bootstrap.archivedBots.length === 0 &&
@@ -1430,6 +1432,33 @@ export function ShellPage() {
     },
     [bootstrapMe?.spaceId, navigate],
   );
+  useEffect(() => {
+    const target = customerAlertTarget(searchParams);
+    if (!target || !bootstrapMe?.spaceId) return;
+    if (
+      target.spaceId !== bootstrapMe.spaceId &&
+      spaces.some((space) => space.id === target.spaceId)
+    ) {
+      openSpaceChat(target.spaceId, `/app?${searchParams}`);
+      return;
+    }
+    // An inaccessible case reaches the existing authorized snapshot error state.
+    setInboxTab("customer");
+    customerInbox.setId(target.conversationId);
+    setMobileSidebarOpen(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete("space");
+    next.delete("customer");
+    setSearchParams(next, { replace: true });
+  }, [
+    bootstrapMe?.spaceId,
+    spaces,
+    openSpaceChat,
+    searchParams,
+    setSearchParams,
+    customerInbox.setId,
+  ]);
+
   const flushBotOrder = useCallback(async () => {
     if (savingBotOrderRef.current) return;
     savingBotOrderRef.current = true;
@@ -3178,7 +3207,7 @@ export function ShellPage() {
       <main
         aria-hidden={mobileSidebarOpen || undefined}
         inert={mobileSidebarOpen}
-        className="flex min-w-0 flex-1 flex-col bg-background"
+        className="isolate flex min-w-0 flex-1 flex-col bg-background"
       >
         {inboxTab === "customer" ? (
           <CustomerThread
@@ -5881,6 +5910,12 @@ const MessageView = memo(function MessageView({
             </div>
           );
         }
+        if (block.kind === "learning_updates")
+          return (
+            <div key={i} className="w-full min-w-0 max-w-2xl">
+              <LearningUpdates botId={block.botId} ids={block.taskIds} />
+            </div>
+          );
         if (block.kind === "card") {
           return (
             <div key={i} className="flex justify-start">
