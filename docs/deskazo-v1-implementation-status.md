@@ -4233,7 +4233,8 @@ only in E2E mode. A subprocess regression blocks generated-client imports to
 represent a clean checkout without removing files used by running applications.
 It reproduced the original module-loading failure and now reaches argument
 validation. The focused regression, testkit typecheck and lint pass. Hosted rerun
-acceptance remains pending; the regression alone does not prove the full journeys.
+acceptance was pending at this checkpoint; the result below verifies the complete
+offline integration and browser runs.
 
 Manual CI defaults now disable artifact retention and dependency/browser cache
 writes. The completed first run confirms both upload steps skipped, no artifacts
@@ -4241,3 +4242,24 @@ retained, and deployment/mobile publication skipped. PR and main-branch behavior
 is unchanged. This checkpoint is available on the implementation branch; no PR,
 merge or production deployment was created. The seven live-provider journeys and
 ChatGPT authorization remain open.
+
+### Hosted CI passes after the startup repair (2026-09-20)
+
+[The hosted run for `1908f8a0`](https://github.com/bankThanabat/rakazo/actions/runs/35506441380)
+completed successfully. All seven validation jobs passed: lint, typecheck,
+production builds with Linux Electron smoke, unit tests, Langflow, PostgreSQL
+journeys and web E2E. The integration run completed 58 suites with 1,066 passing
+assertions. All 160 product browser tests and both homepage tests passed. This
+verifies generation and migration before fixture loading on a clean runner.
+
+Both artifact upload steps were skipped and the run retained zero artifacts.
+Deployment and mobile publication were also skipped. The manual run therefore
+does not provide retained CI screenshots or a published release. Logs and the
+final run receipt are retained locally under
+`test-report/deskazo-v1/checks/ci-bootstrap/`.
+
+These checks use synthetic accounts and offline provider substitutes. They do
+not complete the seven real-provider acceptance journeys, opt-in provider checks,
+physical-device or signed-upgrade acceptance. ChatGPT authorization and a dedicated
+LINE recipient for authorized test messages remain pending. This status update
+was written after the tested commit and changes documentation only.
