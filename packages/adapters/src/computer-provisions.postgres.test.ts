@@ -19,6 +19,7 @@ import { beginComputerProvision, reconcileComputerProvisions } from "./computer-
 import { DockerSandboxProvider } from "./docker-sandbox.js";
 import { FakeSandboxProvider } from "./fake-sandbox.js";
 import { LocalAgentHomeStore } from "./home.js";
+import { NoneSandboxProvider } from "./none-sandbox.js";
 import { InMemoryJobQueue } from "./wakeup.js";
 
 const enabled = process.env.VERIFY_DATABASE === "1" && Boolean(process.env.DATABASE_URL);
@@ -88,6 +89,23 @@ describe.skipIf(!enabled)("durable computer provisioning", () => {
     traceId: "fixture",
     signal: new AbortController().signal,
   });
+  it("does not leave uncertain provisioning when computers are disabled", async () => {
+    deps.sandbox = new NoneSandboxProvider();
+    await expect(provisionComputer(deps, computerId, context())).rejects.toThrow(
+      "Computers unavailable",
+    );
+    expect(await db.prisma.computerProvision.count({ where: { computerId } })).toBe(0);
+    expect((await db.prisma.computer.findUniqueOrThrow({ where: { id: computerId } })).state).toBe(
+      "error",
+    );
+
+    deps.sandbox = new FakeSandboxProvider();
+    await provisionComputer(deps, computerId, context());
+    expect((await db.prisma.computer.findUniqueOrThrow({ where: { id: computerId } })).state).toBe(
+      "running",
+    );
+  });
+
   async function claim() {
     const computer = await db.prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
     return beginComputerProvision(db.prisma, computer, context(), {

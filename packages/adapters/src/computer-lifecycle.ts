@@ -27,6 +27,7 @@ import {
   restoreComputerWorkspace,
 } from "./computer-workspace.js";
 import { resolveAgentHomePath } from "./home.js";
+import { NoSandboxError } from "./none-sandbox.js";
 
 type ComputerUpdateProgress = (
   stage: Exclude<ComputerUpdate["stage"], "preparing">,
@@ -361,7 +362,9 @@ export async function provisionComputer(
         : undefined;
     try {
       await receipt.finish(
-        dispatched && !(error instanceof ComputerProviderMismatchError),
+        dispatched &&
+          !(error instanceof ComputerProviderMismatchError) &&
+          !(error instanceof NoSandboxError),
         provisioned,
         Boolean(rollbackError),
       );
@@ -594,7 +597,7 @@ function isUniqueConstraintError(error: unknown) {
 export type ComputerReplaceMode = "recover" | "reset" | "update";
 
 export function computerSupportsUpdate(kind: string): boolean {
-  return kind !== "desktop";
+  return kind !== "desktop" && kind !== "none";
 }
 
 export async function replaceComputer(

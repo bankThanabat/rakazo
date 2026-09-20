@@ -337,8 +337,10 @@ replies remain the free fallback; the native CSV validation gate remains open.
 See [the account-specific export evidence](research/deskazo-line-history-import.md#selected-account-export-availability).
 An owned Docker WooCommerce store is connected in the persistent local verification
 workspace. A real merchant store configuration and permission to message a dedicated
-test recipient remain pending. The selected ChatGPT subscription connection awaits
-confirmation of its final access grant in Firefox; local models are no longer a
+test recipient remain pending. The selected ChatGPT subscription is now connected
+in Firefox. A private staff run using GPT-5.6 Luna completed with one verified reply;
+the local Docker computer provider is configured and running. This connection check
+does not establish the seven merchant acceptance journeys. Local models are no longer a
 prerequisite. Earlier local-model evidence below remains historical. The user requires free options or a free
 tier and explicit approval before new charges. The approved connector rollout
 does not authorize real customer sends or merchant writes. Do not enable unattended customer sales or claim
@@ -4263,3 +4265,34 @@ not complete the seven real-provider acceptance journeys, opt-in provider checks
 physical-device or signed-upgrade acceptance. ChatGPT authorization and a dedicated
 LINE recipient for authorized test messages remain pending. This status update
 was written after the tested commit and changes documentation only.
+
+### ChatGPT connection and disabled-computer recovery (2026-09-20)
+
+Firefox now shows the subscription connected with GPT-5.6 Luna active. A private
+synthetic staff message completed through `openai-codex` and produced exactly one
+persisted reply, also visible after a browser reload. LINE continues to use Chrome;
+all other browser work uses Firefox. No customer message or merchant write was sent.
+
+This check exposed two disabled-computer failures. The thread response rejected
+`kind: none`, preventing the conversation from loading. The shared status contract
+now accepts that disabled state and hides screen and update controls. Separately,
+the disabled provider's local rejection left an uncertain provisioning record.
+Its typed error now clears that record because no allocation was dispatched;
+unknown provider outcomes retain their existing protection against duplicate allocation.
+
+The status regression failed before the fix. Afterward, 98 focused unit tests and
+24 PostgreSQL provisioning tests passed. The provisioning regression verifies both
+receipt cleanup and a later successful provider change. Contracts, adapters, API,
+web and mobile typechecks passed. The running thread endpoint returned success after
+the repair. The earlier hosted CI result predates these changes.
+
+The local verification deployment now has a Docker supervisor and a computer image
+built from this worktree. Its ports are published only on loopback. Recovering the
+original run required removing two exact fixture receipts whose requests had been
+rejected before allocation: the disabled provider and an initially invalid host
+supervisor network setting. This was a bounded local repair, not a general migration
+for uncertain external outcomes. The corrected setup completed the original run.
+
+Evidence is retained locally under `test-report/deskazo-v1/checks/firefox-model/`.
+The model-access blocker is cleared. Authorized LINE test recipients, merchant
+workflow configuration, and the remaining real-provider journeys are still open.

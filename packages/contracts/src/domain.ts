@@ -774,7 +774,7 @@ export type ComputerUpdate = z.infer<typeof ComputerUpdateSchema>;
 export const ComputerStatusSchema = z.object({
   botId: Id,
   mode: ComputerModeSchema,
-  kind: SandboxKind,
+  kind: SandboxKind.or(z.literal("none")),
   state: z.enum(["stopped", "booting", "running", "suspended", "error"]),
   controlHolder: z.enum(["bot", "user", "none"]),
   controlBotId: Id.nullable(),

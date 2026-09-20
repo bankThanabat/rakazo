@@ -14,6 +14,9 @@ import type {
 export const NO_SANDBOX_MESSAGE =
   "Computers unavailable. Set SANDBOX_PROVIDER=docker with SANDBOX_SUPERVISOR_TOKEN, or use e2b, daytona, or box with its API key.";
 
+/** The disabled provider cannot dispatch a request or allocate a computer. */
+export class NoSandboxError extends Error {}
+
 /** Boots the API without a computer host. Provision and runtime calls fail closed. */
 export class NoneSandboxProvider implements SandboxProvider {
   constructor(private readonly message = NO_SANDBOX_MESSAGE) {}
@@ -35,7 +38,7 @@ export class NoneSandboxProvider implements SandboxProvider {
   }
 
   private fail(): never {
-    throw new Error(this.message);
+    throw new NoSandboxError(this.message);
   }
 
   async provision(
