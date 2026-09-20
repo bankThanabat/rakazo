@@ -4367,6 +4367,8 @@ No new candidate image or deployment was produced. Further build work requires
 freeing local Docker memory without interrupting unrelated work. Receipts are
 under `test-report/deskazo-v1/checks/currency-rollout/`. Hosted identity success is
 not customer-channel or merchant acceptance; those gates remain open.
+The later public CI candidate and hosted rollout checkpoint below resolves this
+build-memory hold without changing the local guard.
 
 Firefox became available later in the same check. Its current conversation shows
 the completed subscription-model answer with the test SKU, `฿125.00`, `THB` and
@@ -4450,3 +4452,41 @@ establish merchant onboarding without assistance, live LINE or Instagram deliver
 public-comment privacy, checkout, payment or the remaining V1 acceptance journeys.
 A final staff-agent inspection and private sample also confirmed the allowed read,
 disabled writes and channels, and the restored current product facts.
+
+### Public CI candidate and hosted connector rollout (2026-09-20)
+
+The manual image workflow now accepts `connector_candidate=true` to run only a
+connector candidate job on a standard public Linux runner. It fetches the exact
+upstream commit, verifies all eight locked patches, retains the existing memory
+and CPU limits, and publishes the tested AMD64 image under a unique candidate tag.
+Registry login follows verification. The job uploads no Actions artifacts or
+remote build caches and does not move release tags or deploy services.
+
+[Run 35514581331](https://github.com/bankThanabat/rakazo/actions/runs/35514581331)
+passed 253 tests across 11 suites, resource probes and the isolated runtime check.
+All five unrelated jobs were skipped. The published image was retrieved through
+existing Docker access, and its exported configuration digest matched the CI
+image exactly. This verifies that artifact, not a reproducible future build from
+the mutable base-image and runner selectors.
+
+The first native-host check rejected the archive before loading because Docker
+exported a schema-2 image manifest and the verifier admitted only OCI manifests.
+The verifier now accepts those two single-image formats while preserving archive,
+manifest, configuration and platform checks. A new regression reproduced the
+rejection; all 11 verifier tests now pass, including wrong-configuration and
+manifest-list refusal. The successful native rerun verified all 25 required
+actions with no network, a read-only root and a 768-MiB memory limit. It removed
+its temporary container and left the existing service unchanged.
+
+The approved rollout then retained private data and image backups, replaced only
+the connector image, and pinned the verified image after health and routing
+checks passed. All four configured LINE/Instagram identity reads returned success,
+connection counts and the data volume were preserved, and six unrelated services
+were unchanged. The hosted catalog now includes `woocommerce.get_store_product`.
+No paid resource was created and no customer message or merchant write was sent.
+Private evidence is under `test-report/deskazo-v1/checks/connector-ci-build/`.
+
+This clears the hosted currency rollout hold. Actual merchant store setup,
+authorized LINE test recipients, customer delivery, payment and the other real
+V1 acceptance journeys remain open. Browser work continues to use Chrome for
+LINE and Firefox for other services.

@@ -84,12 +84,13 @@ class VerificationSafety(unittest.TestCase):
                 verifier.verify(self.args, {})
         self.assertFalse(any("load" in call for call in self.calls))
 
-    def oci_manifest(self, config_digest=None):
+    def image_manifest(self, config_digest=None,
+                       media_type="application/vnd.oci.image.manifest.v1+json"):
         value = json.dumps({"schemaVersion": 2, "config": {
             "digest": config_digest or self.digest}, "layers": []}).encode()
         digest = "sha256:" + hashlib.sha256(value).hexdigest()
         index = json.dumps({"manifests": [{"digest": digest,
-            "mediaType": "application/vnd.oci.image.manifest.v1+json"}]}).encode()
+            "mediaType": media_type}]}).encode()
         with tarfile.open(self.archive, "a") as bundle:
             for name, content in [("index.json", index), ("blobs/sha256/" + digest[7:], value)]:
                 member = tarfile.TarInfo(name)
@@ -99,7 +100,13 @@ class VerificationSafety(unittest.TestCase):
         return digest
 
     def test_verified_manifest_id_reaches_runtime_creation(self):
-        digest = self.oci_manifest()
+        self.assert_manifest_reaches_runtime(self.image_manifest())
+
+    def test_docker_v2_manifest_id_reaches_runtime_creation(self):
+        self.assert_manifest_reaches_runtime(self.image_manifest(
+            media_type="application/vnd.docker.distribution.manifest.v2+json"))
+
+    def assert_manifest_reaches_runtime(self, digest):
         def command(*args, **kwargs):
             output = self.command(*args, **kwargs)
             if args[1] == "create":
@@ -111,7 +118,19 @@ class VerificationSafety(unittest.TestCase):
                 verifier.verify(self.args, {})
 
     def test_manifest_for_another_config_never_loads(self):
-        self.oci_manifest("sha256:" + "0" * 64)
+        self.image_manifest("sha256:" + "0" * 64)
+        self.assert_manifest_never_loads()
+
+    def test_docker_v2_manifest_for_another_config_never_loads(self):
+        self.image_manifest("sha256:" + "0" * 64,
+                            "application/vnd.docker.distribution.manifest.v2+json")
+        self.assert_manifest_never_loads()
+
+    def test_manifest_list_never_loads(self):
+        self.image_manifest(media_type="application/vnd.docker.distribution.manifest.list.v2+json")
+        self.assert_manifest_never_loads()
+
+    def assert_manifest_never_loads(self):
         with patch.object(verifier, "command", side_effect=self.command), patch.object(verifier.subprocess, "run", return_value=argparse.Namespace(returncode=1)):
             with self.assertRaisesRegex(RuntimeError, "manifest"):
                 verifier.verify(self.args, {})

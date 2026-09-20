@@ -74,7 +74,9 @@ def verify(args, report):
                 raise RuntimeError("Archive must contain one image manifest")
             descriptor = descriptors[0]
             manifest_digest = descriptor["digest"]
-            if descriptor["mediaType"] != "application/vnd.oci.image.manifest.v1+json":
+            if descriptor["mediaType"] not in (
+                    "application/vnd.oci.image.manifest.v1+json",
+                    "application/vnd.docker.distribution.manifest.v2+json"):
                 raise RuntimeError("Unsupported image manifest representation")
             payload = bundle.extractfile("blobs/sha256/" + manifest_digest.removeprefix("sha256:")).read()
             if ("sha256:" + hashlib.sha256(payload).hexdigest() != manifest_digest
@@ -103,7 +105,7 @@ def verify(args, report):
     try:
         command("docker", "image", "load", "--input", str(archive), timeout=300)
         image = inspect("image", args.image)
-        # Docker reports either the configuration digest or the OCI manifest digest.
+        # Docker reports either the configuration digest or the image manifest digest.
         # The archived manifest is hashed and must bind that same configuration.
         if image["Id"] not in identities or image["Architecture"] != architecture or image["Os"] != "linux":
             raise RuntimeError("Loaded image does not match the verified configuration")
