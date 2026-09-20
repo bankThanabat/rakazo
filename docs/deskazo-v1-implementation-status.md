@@ -4372,3 +4372,37 @@ Firefox became available later in the same check. Its current conversation shows
 the completed subscription-model answer with the test SKU, `฿125.00`, `THB` and
 availability. Private accessibility and screenshot evidence clears the earlier
 Firefox-rendering hold. It does not change the build-memory or merchant gates.
+
+### Subscription customer practice and selective voice undo (2026-09-20)
+
+Firefox staff chat drafted and saved one shared Thai voice document from two
+approved synthetic examples. Review caught an unrelated promotional phrase and
+missing standalone examples before approval. A later formatting-only revision
+replaced literal newline escapes without changing the rules. The examples remain
+labelled undated and synthetic; they establish no historical coverage.
+
+The private lab now uses its existing self-hosted reply runtime with the connected
+ChatGPT subscription. Operator configuration required developer setup, so this is
+not yet proof of merchant onboarding without assistance. When the Mac locked,
+preparation approval continued through the normal authenticated application API
+after verifying the exact pending effect. No customer channel or business action
+was enabled.
+
+Three direct checks exercised the real customer processor, self-hosted runtime
+and live subscription bridge using `openai-codex` and `gpt-5.6-luna`. Each returned
+one actual Thai reply with the approved examples in its context, no action and
+no remaining temporary channel. The baseline greeting succeeded. An approved
+greeting-only voice correction then produced its exact requested opening.
+Selective undo created revision four, restored revision two's content exactly,
+and preserved revisions one through three. The final runtime context and reply
+both omitted the removed opening. Customer instructions and permissions stayed
+unchanged across undo.
+
+Private receipts and a repeatable evidence verifier are under
+`test-report/deskazo-v1/checks/voice-onboarding/`. This verifies the positive
+greeting case and restoration, not product-question or follow-up exclusions,
+real-channel delivery, automatic learning or the complete merchant journey.
+The lab's service key and callback configuration must be retired with the lab;
+the existing local login shortcut must remain restricted to loopback access.
+LINE recipient authorization, hosted currency rollout memory, merchant setup
+and the other V1 acceptance gates remain open.
