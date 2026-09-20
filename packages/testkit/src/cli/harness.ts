@@ -1,16 +1,10 @@
 import { execSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { EncryptedSecretStore } from "@rakazo/adapters";
 import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 import { PostgreSqlContainer } from "@testcontainers/postgresql";
 import type { createApp } from "../../../../apps/api/src/app.ts";
-import { learningReviewFixture } from "../fixtures/learning-review.js";
-import { semanticHistoryFixture } from "../fixtures/semantic-history.js";
-import { socialLearningFixture } from "../fixtures/social-learning.js";
 import { runProcess } from "./process.js";
-import { semanticApprovalFixture } from "./semantic-approval.js";
-import { semanticDirectFixture } from "./semantic-direct.js";
 
 loadRootEnv();
 
@@ -203,10 +197,30 @@ async function main() {
       return;
     }
 
+    // Fixtures import database adapters too; generation must precede their module loading.
     const [
-      { ComposioEmulator, EmailEmulator, PipedreamConnector, ThirdPartyConnectorEmulator },
+      {
+        ComposioEmulator,
+        EmailEmulator,
+        EncryptedSecretStore,
+        PipedreamConnector,
+        ThirdPartyConnectorEmulator,
+      },
       { createApp },
-    ] = await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
+      { learningReviewFixture },
+      { semanticHistoryFixture },
+      { socialLearningFixture },
+      { semanticApprovalFixture },
+      { semanticDirectFixture },
+    ] = await Promise.all([
+      import("@rakazo/adapters"),
+      import("../../../../apps/api/src/app.ts"),
+      import("../fixtures/learning-review.js"),
+      import("../fixtures/semantic-history.js"),
+      import("../fixtures/social-learning.js"),
+      import("./semantic-approval.js"),
+      import("./semantic-direct.js"),
+    ]);
     const { serve } = await import("@hono/node-server");
     const thirdParties = new ThirdPartyConnectorEmulator();
     const pipedream = new PipedreamConnector(

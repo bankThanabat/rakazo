@@ -325,7 +325,7 @@ journeys or the detailed requirements elsewhere in the specification.
 | History and learning sources | Normalized CSV/JSON mapping, confirmed timezone offsets, fixed windows, pagination, resume and deduplication are implemented. Both Instagram connections passed bounded conversation/message reads through the deployed connector. Media lists were empty, leaving comments/replies unexercised. Native LINE CSV validation and complete history coverage remain open. Customer text and account authorship do not establish staff authorship. |
 | Memory, skills and privacy | Semantic-provider audit, bounded full-proposal review, large histories, undo/restoration, source permissions and native controls have local coverage. Live provider reconciliation, deletion/retention behavior and model generalization still require acceptance. |
 | Account and data ownership | Large exports, cloud-agent cleanup, durable sandbox cleanup, membership revocation, stream/screen revocation and password recovery have local coverage. Hosted load, real external-provider erasure and full-product backup/restore acceptance remain open. |
-| Clients | Web journeys, unsigned iOS simulator checks and four Android emulator journeys pass. Product display-name and installation-identity checks are complete locally. Physical-device behavior, signed upgrades and remote Electron/screenshot CI remain unverified. |
+| Clients | Web journeys, unsigned iOS simulator checks and four Android emulator journeys pass. Product display-name and installation-identity checks are complete locally. Hosted Linux Electron smoke now passes; its manual run retained no screenshots. Physical-device behavior, signed upgrades and hosted native macOS screenshot checks remain unverified. |
 | Release operations | Failed-migration recovery, startup recovery, coordinated update shutdown and installed Linux backup timer/restoration have disposable-environment coverage. The persistent timer also catches a missed event after its disposable scheduler restarts without repeating it on another restart. Published-version compatibility, full host/Docker reboot, live provider reconnection and large deployments remain unverified. |
 | Hosted connector | The approved locked image is deployed with the four Instagram history actions and eleven WooCommerce cart/checkout actions. All four configured LINE/Instagram connections pass account-bound identity reads and reject a mismatched account before dispatch. Catalog entries and identity reads do not establish receive/send, history, checkout or payment acceptance. |
 
@@ -4219,3 +4219,25 @@ The stop is graceful and happens before the event. Multiple missed daily interva
 production randomized delay and interruption during an active backup are not
 exercised. The optional verifier uses a privileged container with the Docker socket;
 its generated projects and synthetic data define the test's scope.
+
+### First hosted CI checkpoint and clean-checkout startup (2026-09-20)
+
+The first hosted run passed root lint, typecheck, unit tests, production builds,
+the Linux Electron smoke suite and Langflow checks. Integration and web E2E both
+failed before tests started: top-level harness imports loaded the Prisma client
+before the harness could generate it. Local runs already had that generated file,
+so they did not expose the startup ordering error.
+
+The harness now loads database-dependent E2E fixtures after Prisma generation and
+only in E2E mode. A subprocess regression blocks generated-client imports to
+represent a clean checkout without removing files used by running applications.
+It reproduced the original module-loading failure and now reaches argument
+validation. The focused regression, testkit typecheck and lint pass. Hosted rerun
+acceptance remains pending; the regression alone does not prove the full journeys.
+
+Manual CI defaults now disable artifact retention and dependency/browser cache
+writes. The completed first run confirms both upload steps skipped, no artifacts
+retained, and deployment/mobile publication skipped. PR and main-branch behavior
+is unchanged. This checkpoint is available on the implementation branch; no PR,
+merge or production deployment was created. The seven live-provider journeys and
+ChatGPT authorization remain open.
