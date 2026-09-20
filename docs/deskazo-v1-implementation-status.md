@@ -4348,3 +4348,27 @@ The receipt records nine tool calls, including two connector executions; it does
 not capture their action arguments. The Mac was locked during this checkpoint,
 so Firefox verification remains pending. This does not complete customer-channel
 delivery or merchant acceptance.
+
+### Currency rollout preflight held for build memory (2026-09-20)
+
+The image and rollout catalog checks now require `woocommerce.get_store_product`,
+so an older catalog cannot pass the updated candidate gate. The hosted preflight
+confirms that the current service remains healthy, all four LINE/Instagram identity
+reads succeed, and the new WooCommerce action is absent from that deployed image.
+
+The local AMD64 build stopped at its four-GiB available-memory guard before
+compilation. Temporarily pausing the six owned, idle verification services still
+left available memory below that threshold. All six were restarted; the other
+four running containers retained their original start times. The local API and
+both databases recovered, and the local connector's product read still returned
+THB. The memory limit was not lowered and no build ran on the hosted service.
+
+No new candidate image or deployment was produced. Further build work requires
+freeing local Docker memory without interrupting unrelated work. Receipts are
+under `test-report/deskazo-v1/checks/currency-rollout/`. Hosted identity success is
+not customer-channel or merchant acceptance; those gates remain open.
+
+Firefox became available later in the same check. Its current conversation shows
+the completed subscription-model answer with the test SKU, `฿125.00`, `THB` and
+availability. Private accessibility and screenshot evidence clears the earlier
+Firefox-rendering hold. It does not change the build-memory or merchant gates.

@@ -37,6 +37,7 @@ export const actionChecks = {
   ],
   woocommerce: [
     "get_product",
+    "get_store_product",
     "get_order",
     "create_cart",
     "get_cart",

@@ -39,6 +39,11 @@ describe("hosted acceptance preflight", () => {
       (provider: { service: string }) => provider.service === "woocommerce",
     )!;
     expect(woo).toMatchObject({ catalogPresent: false, actions: 0, configuredConnections: 0 });
+    expect(woo.actionChecks).toContainEqual({
+      id: "woocommerce.get_store_product",
+      catalogPresent: false,
+      locallyExecutable: false,
+    });
     expect(
       woo.actionChecks.every(
         (action: { catalogPresent: boolean; locallyExecutable: boolean }) =>
