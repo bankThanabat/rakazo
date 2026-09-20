@@ -25,6 +25,11 @@ on:
       - "scripts/verify-product-recovery.py"
       - "scripts/verify-upgrade-ordering.py"
   workflow_dispatch:
+    inputs:
+      connector_candidate:
+        description: Build, verify and publish only the locked AMD64 connector candidate
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -38,9 +43,79 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  connector-candidate:
+    name: Verified connector candidate
+    if: github.event_name == 'workflow_dispatch' && inputs.connector_candidate && !github.event.repository.private
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Fetch the locked public connector source
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; import assert from "node:assert/strict"; const source = JSON.parse(readFileSync("infra/compose/customer-sources.json", "utf8")).find(s => s.name === "OpenConnector"); assert.equal(source.path, "infra/open-connector"); assert.match(source.revision, /^[a-f0-9]{40}$/); console.log(source.revision)')"
+          git init infra/open-connector
+          git -C infra/open-connector fetch --depth=1 https://github.com/bankThanabat/open-connector.git "$revision"
+          git -C infra/open-connector checkout --detach FETCH_HEAD
+          test "$(git -C infra/open-connector rev-parse HEAD)" = "$revision"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          version: v0.35.0
+          cache-binary: false
+      - name: Verify locked source, AMD64 tests and runtime before publication
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/verify-customer-connector.mjs --platform=linux/amd64 --retain-runtime | tee "$RUNNER_TEMP/connector-verification.log"
+          tail -n 1 "$RUNNER_TEMP/connector-verification.log" > "$RUNNER_TEMP/connector-verification.json"
+          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/connector-verification.json`, 'utf8'));
+          const source = JSON.parse(readFileSync('infra/compose/customer-sources.json', 'utf8')).find(s => s.name === 'OpenConnector');
+          assert.equal(report.status, 'passed');
+          assert.equal(report.platform, 'linux/amd64');
+          assert.equal(report.tree, source.tree);
+          assert.equal(report.providerNetwork, 'disabled');
+          assert.match(report.builtImageId, /^sha256:[a-f0-9]{64}$/);
+          assert.ok(report.retainedRuntime);
+          const image = `ghcr.io/${process.env.GITHUB_REPOSITORY.toLowerCase()}/openconnector:candidate-${process.env.GITHUB_SHA}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`;
+          console.log(`image=${image}`);
+          console.log(`image_id=${report.builtImageId}`);
+          NODE
+      - name: Log in to GHCR after verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the verified candidate without moving release tags
+        env:
+          IMAGE: ${{ steps.candidate.outputs.image }}
+          IMAGE_ID: ${{ steps.candidate.outputs.image_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker tag "$IMAGE_ID" "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{.Id}}')" = "$IMAGE_ID"
+          docker push "$IMAGE"
+          digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          printf 'Verified AMD64 candidate: `%s@%s`\n\nImage ID: `%s`\n\nNo deployment was performed.\n' "${IMAGE%:*}" "$digest" "$IMAGE_ID" >> "$GITHUB_STEP_SUMMARY"
+
   scheduled-backup:
     name: Linux scheduled backup and restore
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.connector_candidate)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -130,7 +205,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.name }} ${{ matrix.arch }}
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.connector_candidate
     # Each architecture builds natively on its own runner and pushes by digest only.
     # No QEMU: GitHub hosts native arm64 runners, and emulated arm64 took hours for the
     # desktop-sized computer image. See docs/self-host.md (Published images and tags).
@@ -208,7 +283,7 @@ jobs:
 
   publish:
     name: Publish ${{ matrix.name }} image
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.connector_candidate
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
