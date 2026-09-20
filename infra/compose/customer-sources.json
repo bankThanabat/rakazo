@@ -22,7 +22,7 @@
       },
       {
         "path": "infra/open-connector-patches/woocommerce-store-api.patch",
-        "sha256": "0184da149e07dd0c132f1618261440964b3df4d7d9abbb27c31b15c7af92fc46"
+        "sha256": "7c28724ccd26d023a21a31b13b7b89193e5b877a6dec5d273dbde83e2ff2e72d"
       },
       {
         "path": "infra/open-connector-patches/instagram-comment-replies.patch",
@@ -49,6 +49,6 @@
         "sha256": "47bc0164db4ff53eb2a8f5a4f871a8c209d7f9ce485071ccedb2b74ed3039d3f"
       }
     ],
-    "tree": "093e342d1ce5daa5f3dc86344a74089a8b5ef5ef"
+    "tree": "f044e7762a521ad765c8dd6cd8376eebd0db5548"
   }
 ]

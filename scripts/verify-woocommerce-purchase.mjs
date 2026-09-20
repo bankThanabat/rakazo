@@ -209,6 +209,18 @@ try {
     "Current product price and stock",
     product.price === "125.00" && product.stockQuantity === 10,
   );
+  const { product: storefront } = await handlers.get_store_product(
+    { productId: seed.productId },
+    context,
+  );
+  check(
+    "Public product price includes provider currency and minor units",
+    storefront.sku === product.sku &&
+      storefront.prices.price === "12500" &&
+      storefront.prices.currency_code === "THB" &&
+      storefront.prices.currency_minor_unit === 2 &&
+      storefront.is_in_stock === true,
+  );
   const input = {
     customerId: seed.customerId,
     lineItems: [{ productId: seed.productId, quantity: 1 }],

@@ -59,6 +59,13 @@ describe("OpenConnector action effects", () => {
     ).toBe(false);
   });
 
+  it("recognizes the audited public product read without overriding provider metadata", () => {
+    const action = { service: "woocommerce", id: "woocommerce.get_store_product" };
+    expect(openConnectorReadOnly(action)).toBe(true);
+    expect(openConnectorReadOnly({ ...action, readOnly: false })).toBe(false);
+    expect(openConnectorReadOnly({ ...action, service: "sample" })).toBe(false);
+  });
+
   it("honors explicit provider metadata, including withdrawal of a read-only classification", () => {
     expect(openConnectorReadOnly({ service: "sample", id: "sample.lookup", readOnly: true })).toBe(
       true,

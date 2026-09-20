@@ -152,6 +152,7 @@ try {
             accessToken: "fake-token",
             accountId: "owned-account",
             apiBaseUrl: "https://store.example.test/wp-json/wc/v3",
+            storeUrl: "https://store.example.test",
             consumerKey: "fake-key",
             consumerSecret: "fake-secret",
             fetcher,

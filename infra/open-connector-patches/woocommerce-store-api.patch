@@ -1,5 +1,5 @@
 diff --git a/src/providers/woocommerce/actions.ts b/src/providers/woocommerce/actions.ts
-index 23d8955d..075be4cc 100644
+index 23d8955d..0ca9d717 100644
 --- a/src/providers/woocommerce/actions.ts
 +++ b/src/providers/woocommerce/actions.ts
 @@ -3,6 +3,7 @@ import type { JsonSchema } from "../../core/types.ts";
@@ -20,14 +20,32 @@ index 23d8955d..075be4cc 100644
    paymentUrl: nullableString("The provider's payment URL for this order. Share only with its customer."),
    needsPayment: s.nullableBoolean(
      "Whether WooCommerce currently requests payment. False alone does not prove payment.",
-@@ -294,6 +298,7 @@ const paginationOutput = {
+@@ -294,9 +298,10 @@ const paginationOutput = {
  };
  
  export const woocommerceActions: ProviderActionDefinition[] = [
 +  ...woocommerceStoreActions,
    action(
      "list_products",
-     "List WooCommerce products with common catalog filters and pagination metadata.",
+-    "List WooCommerce products with common catalog filters and pagination metadata.",
++    "List WooCommerce products with common catalog filters and pagination metadata. For published storefront prices with currency, use get_store_product with the returned ID.",
+     listInput({
+       search: s.string("Limit results to products matching this search term."),
+       status: productStatusSchema,
+@@ -308,7 +313,12 @@ export const woocommerceActions: ProviderActionDefinition[] = [
+     }),
+     listOutput("products", productSchema),
+   ),
+-  action("get_product", "Fetch one WooCommerce product by product ID.", idInput("productId"), productSchema),
++  action(
++    "get_product",
++    "Fetch one WooCommerce product by product ID. Currency is absent from this admin response; use get_store_product for published storefront prices and currency.",
++    idInput("productId"),
++    productSchema,
++  ),
+   action(
+     "create_product",
+     "Create a WooCommerce product with catalog, price, stock, image, and attribute fields.",
 diff --git a/src/providers/woocommerce/order-payment.test.ts b/src/providers/woocommerce/order-payment.test.ts
 index d79813c5..a337b36e 100644
 --- a/src/providers/woocommerce/order-payment.test.ts
@@ -86,10 +104,10 @@ index 180b248a..2b70f7c4 100644
      paymentMethod: nullableText(input.payment_method),
 diff --git a/src/providers/woocommerce/store-actions.ts b/src/providers/woocommerce/store-actions.ts
 new file mode 100644
-index 00000000..e586c2d4
+index 00000000..670f1027
 --- /dev/null
 +++ b/src/providers/woocommerce/store-actions.ts
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,179 @@
 +import type { ProviderActionDefinition } from "../../core/provider-definition.ts";
 +import type { JsonSchema } from "../../core/types.ts";
 +
@@ -162,6 +180,20 @@ index 00000000..e586c2d4
 +}
 +
 +export const woocommerceStoreActions: ProviderActionDefinition[] = [
++  defineProviderAction("woocommerce", {
++    name: "get_store_product",
++    description:
++      "Read a published product's current public storefront price, currency, sale price/range and availability by product ID. No cart is created. Prices use integer-string minor units with prices.currency_minor_unit and prices.currency_code; this is the default storefront context, not a shopper-specific checkout quote. Find the ID by SKU with list_products.",
++    inputSchema: s.actionInput(
++      { productId: s.positiveInteger("Published product ID.", { maximum: Number.MAX_SAFE_INTEGER }) },
++      ["productId"],
++    ),
++    outputSchema: s.actionOutput({
++      product: s.unknownObject(
++        "Public Store API product, including prices, currency metadata, on_sale and is_in_stock. Preserve missing values; do not infer currency or stock quantity.",
++      ),
++    }),
++  }),
 +  action(
 +    "create_cart",
 +    "Create a new isolated guest cart. Persist its secret capability before further work. Creation is not idempotent; do not automatically repeat an uncertain call.",
@@ -257,10 +289,10 @@ index 00000000..e586c2d4
 +];
 diff --git a/src/providers/woocommerce/store-api.test.ts b/src/providers/woocommerce/store-api.test.ts
 new file mode 100644
-index 00000000..abbcc18e
+index 00000000..dfa811f0
 --- /dev/null
 +++ b/src/providers/woocommerce/store-api.test.ts
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,204 @@
 +import type { Schema } from "@cfworker/json-schema";
 +
 +import { Validator } from "@cfworker/json-schema";
@@ -285,6 +317,51 @@ index 00000000..abbcc18e
 +};
 +
 +describe("WooCommerce Store API boundary", () => {
++  it("reads public product prices and currency without creating a cart or forwarding secrets", async () => {
++    const product = {
++      id: 7,
++      sku: "EXAMPLE-SKU",
++      is_in_stock: true,
++      prices: { price: "12500", currency_code: "THB", currency_minor_unit: 2 },
++    };
++    const fetcher = vi.fn(async (url, init) => {
++      expect(String(url)).toBe("https://store.example.test/shop/wp-json/wc/store/v1/products/7");
++      expect(init).toMatchObject({ method: "GET", redirect: "manual", credentials: "omit" });
++      expect(init?.body).toBeUndefined();
++      const headers = new Headers(init?.headers);
++      for (const name of ["authorization", "cookie", "cart-token"]) expect(headers.get(name)).toBeNull();
++      return Response.json(product);
++    });
++    expect(await call("get_store_product", { productId: 7 }, fetcher)).toEqual({ product });
++    expect(fetcher).toHaveBeenCalledTimes(1);
++  });
++  it.each([0, -1, 1.5, "../cart", undefined, Number.MAX_SAFE_INTEGER + 1])(
++    "rejects invalid public product ID %s before dispatch",
++    async (productId) => {
++      const fetcher = vi.fn();
++      await expect(async () =>
++        woocommerceStoreHandlers.get_store_product({ productId }, { storeUrl: "https://store.example.test", fetcher }),
++      ).rejects.toThrow("productId");
++      expect(fetcher).not.toHaveBeenCalled();
++    },
++  );
++  it.each([302, 404, 429, 500])("keeps failed product reads as errors for HTTP %s", async (status) => {
++    const fetcher = vi.fn(async () =>
++      Response.json(
++        { message: "untrusted-provider-detail" },
++        { status, headers: { location: "https://other.example.test" } },
++      ),
++    );
++    await expect(call("get_store_product", { productId: 7 }, fetcher)).rejects.toThrow(
++      `request failed with status ${status}`,
++    );
++    expect(fetcher).toHaveBeenCalledTimes(1);
++  });
++  it("rejects malformed public product responses", async () => {
++    await expect(call("get_store_product", { productId: 7 }, async () => Response.json([]))).rejects.toThrow(
++      "Invalid WooCommerce",
++    );
++  });
 +  it.each([
 +    ["create_cart", {}, "/cart", undefined],
 +    ["get_cart", { cartToken }, "/cart", undefined],
@@ -422,10 +499,10 @@ index 00000000..abbcc18e
 +});
 diff --git a/src/providers/woocommerce/store-runtime.ts b/src/providers/woocommerce/store-runtime.ts
 new file mode 100644
-index 00000000..5faad68d
+index 00000000..d060dadb
 --- /dev/null
 +++ b/src/providers/woocommerce/store-runtime.ts
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,170 @@
 +import { Buffer } from "node:buffer";
 +import { compactObject, optionalRecord, optionalString } from "../../core/cast.ts";
 +import { readBoundedResponseBytes } from "../../core/request.ts";
@@ -447,6 +524,7 @@ index 00000000..5faad68d
 +  cartToken?: string;
 +  body?: Record<string, unknown>;
 +  checkout?: boolean;
++  product?: boolean;
 +}
 +
 +// Decoding only checks session continuity. WooCommerce, not this decoder, validates signatures.
@@ -488,7 +566,7 @@ index 00000000..5faad68d
 +  }
 +  const bytes = await readBoundedResponseBytes(response, {
 +    maxBytes: 2 * 1024 * 1024,
-+    fieldName: "WooCommerce cart response",
++    fieldName: "WooCommerce Store API response",
 +    createError: providerResponseError,
 +  });
 +  let data: unknown;
@@ -498,6 +576,7 @@ index 00000000..5faad68d
 +    throw providerResponseError("Invalid WooCommerce Store API response");
 +  }
 +  if (!optionalRecord(data)) throw providerResponseError("Invalid WooCommerce Store API response");
++  if (input.product) return { product: data };
 +  const token = response.headers.get("Cart-Token");
 +  if (!token) throw providerResponseError("WooCommerce did not return a cart capability");
 +  const returnedSession = cartSession(token);
@@ -507,6 +586,12 @@ index 00000000..5faad68d
 +}
 +
 +export const woocommerceStoreHandlers = {
++  get_store_product(input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
++    const productId = input.productId;
++    if (typeof productId !== "number" || !Number.isSafeInteger(productId) || productId <= 0)
++      throw providerInputError("productId must be a positive safe integer");
++    return request(context, { path: `/products/${productId}`, product: true });
++  },
 +  create_cart(_input: Record<string, unknown>, context: StoreContext): Promise<unknown> {
 +    return request(context, { path: "/cart" });
 +  },

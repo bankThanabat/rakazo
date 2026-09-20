@@ -16,6 +16,7 @@ export const openConnectorReadActions: Record<string, readonly string[]> = {
   woocommerce: [
     "list_products",
     "get_product",
+    "get_store_product",
     "list_product_variations",
     "get_product_variation",
     "list_orders",

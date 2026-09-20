@@ -4318,3 +4318,33 @@ after an API/worker restart and displayed a new model reply without reloading.
 Local evidence is in `test-report/deskazo-v1/checks/model-product-setup/`.
 This verifies a private product read and local stream recovery, not LINE delivery,
 merchant checkout, worker interruption during a provider write, or V1 completion.
+
+### Storefront currency coverage (2026-09-20)
+
+The WooCommerce connector now exposes `get_store_product`, a fixed read of the
+published product endpoint. It returns provider storefront prices together with
+currency and minor-unit metadata, sale/range data and availability. Existing admin
+catalog descriptions point to this action when currency is needed. It does not
+create a cart or send administrator credentials, cookies or cart capabilities.
+The result represents the default storefront context, not a shopper-specific
+checkout quote. Unavailable products and provider failures remain errors.
+
+Twelve new boundary cases first failed because the action was absent. All 46
+Store API and order/payment tests then passed, along with five action-effect tests
+and 52 offline read-effect checks. A live request through the local connector
+returned the synthetic SKU's current price with THB and two minor-unit decimals.
+The disposable real-WooCommerce verifier passed 41 checks, including this read and
+the existing checkout/recovery cases, and removed its containers and volumes.
+Its payment fixture uses administrative confirmation, not an external payment gateway.
+
+The patch verifier now reproduces and checks the complete release tree and can
+refresh the Store API patch and source lock together. The locked connector tree
+is now `f044e7762a521ad765c8dd6cd8376eebd0db5548`. This updates the local verification
+connector and release sources; the hosted connector remains on its earlier tree.
+Evidence is retained under `test-report/deskazo-v1/checks/product-currency/`.
+The connected subscription model completed a private staff prompt through the
+authenticated application API and returned the product with `THB` and `125.00`.
+The receipt records nine tool calls, including two connector executions; it does
+not capture their action arguments. The Mac was locked during this checkpoint,
+so Firefox verification remains pending. This does not complete customer-channel
+delivery or merchant acceptance.

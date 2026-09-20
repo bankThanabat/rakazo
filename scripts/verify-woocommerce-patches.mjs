@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Verify that the saved patches reproduce the tested provider source; --write refreshes the cart patch.
+// Verify provider source and the complete release tree; --write refreshes the Store API patch and lock.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -61,11 +61,33 @@ try {
     );
     hashes[file] = expected;
   }
+  const lockPath = resolve(root, "infra/compose/customer-sources.json");
+  const lock = JSON.parse(await readFile(lockPath, "utf8"));
+  const connector = lock.find((entry) => entry.name === "OpenConnector");
+  assert.equal(connector.revision, revision);
+  assert.deepEqual(
+    connector.patches.slice(0, 2).map((patch) => resolve(root, patch.path)),
+    patches,
+  );
+  for (const patch of connector.patches) {
+    const path = resolve(root, patch.path);
+    const sha256 = digest(await readFile(path));
+    if (process.argv[3] === "--write" && path === patches[1]) patch.sha256 = sha256;
+    else assert.equal(sha256, patch.sha256, `Locked checksum for ${patch.path}`);
+    if (!patches.includes(path)) await git("apply", path);
+  }
+  await git("add", ".");
+  const tree = (await git("write-tree")).trim();
+  if (process.argv[3] === "--write") {
+    connector.tree = tree;
+    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  } else assert.equal(tree, connector.tree, "Complete connector release tree");
   console.log(
     JSON.stringify(
       {
         status: "passed",
         sourceRevision: revision,
+        tree,
         providerFiles: hashes,
         patchSha256: await Promise.all(patches.map(async (path) => digest(await readFile(path)))),
       },
