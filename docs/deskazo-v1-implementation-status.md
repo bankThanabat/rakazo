@@ -4296,3 +4296,25 @@ for uncertain external outcomes. The corrected setup completed the original run.
 Evidence is retained locally under `test-report/deskazo-v1/checks/firefox-model/`.
 The model-access blocker is cleared. Authorized LINE test recipients, merchant
 workflow configuration, and the remaining real-provider journeys are still open.
+
+### Connected product read and stream recovery (2026-09-20)
+
+The guided product setup was exercised in Firefox with the connected ChatGPT
+subscription and the owned synthetic WooCommerce store. The staff agent found the
+requested SKU and reported a name and price that matched a separate provider read.
+It identified currency as unavailable in its selected catalog response instead of
+inventing it. The public Store API exposed the currency separately; full source
+coverage and merchant onboarding remain unverified.
+
+This exposed a web proxy failure after an API restart. The upstream event stream
+closed, but Vite kept the browser response open, so the conversation stopped updating
+while sidebar polling continued. Both development and preview proxies now close
+the downstream response on upstream errors. The existing client then reconnects.
+A real HTTP regression failed before the fix and passed afterward, including a
+subsequent successful request. Eight focused proxy/subscription tests, web
+typechecking and lint passed. A live Firefox check confirmed automatic reconnection
+after an API/worker restart and displayed a new model reply without reloading.
+
+Local evidence is in `test-report/deskazo-v1/checks/model-product-setup/`.
+This verifies a private product read and local stream recovery, not LINE delivery,
+merchant checkout, worker interruption during a provider write, or V1 completion.
