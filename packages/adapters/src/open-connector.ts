@@ -316,6 +316,8 @@ export class OpenConnector implements ManagedConnectorProvider {
             type: "result",
             data: {
               id: call.args.id,
+              connectionId: connection.id,
+              action: action.id,
               name: entry.tool.name,
               description: action.description,
               inputSchema: action.inputSchema,

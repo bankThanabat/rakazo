@@ -33,6 +33,8 @@ import {
   customerChannelUsesConnector,
   customerReplyParts,
   previewLearningImport,
+  readActionPolicy,
+  sharedActions,
 } from "@rakazo/core";
 import type { CustomerBehavior, CustomerChannel, PrismaClient } from "@rakazo/db";
 import {
@@ -1213,14 +1215,19 @@ export function createCustomerConversations(deps: {
               retentionDays: true,
             },
           }),
-          connections: await prisma.connection.findMany({
-            where: {
-              ...connectionAccessWhere(actor),
-              connectorId: "open-connector",
-              status: "connected",
-            },
-            select: { id: true, provider: true, displayName: true },
-          }),
+          connections: (
+            await prisma.connection.findMany({
+              where: {
+                ...connectionAccessWhere(actor),
+                connectorId: "open-connector",
+                status: "connected",
+              },
+              select: { id: true, provider: true, displayName: true, actionPolicy: true },
+            })
+          ).map(({ actionPolicy, ...connection }) => ({
+            ...connection,
+            customerActions: sharedActions(readActionPolicy(actionPolicy)),
+          })),
           services: await prisma.botSecret.findMany({
             where: { userId: actor.userId, spaceId: actor.spaceId, botId },
             select: { name: true, origin: true, auth: true },

@@ -313,7 +313,7 @@ journeys or the detailed requirements elsewhere in the specification.
 | Acceptance journey | Current evidence | What still needs to happen |
 | --- | --- | --- |
 | 1. New business setup | Guided entry choices, managed preparation, private practice and website activation are implemented. The combined app/Pi/Langflow journey passes with scripted model decisions and seeded knowledge. | Run model-led setup with the selected merchant accounts, authorized history or fallback examples, actual product sources and owner review, without developer intervention. Validate a real LINE OA CSV layout. |
-| 2. Grounded chat and comments | Private practice and website delivery pass through real Langflow. Current-data grants, public/private separation and Instagram send receipts have offline coverage. | Demonstrate current SKU/promotion answers and public-safe comment delivery on the selected store and social accounts. |
+| 2. Grounded chat and comments | Private subscription replies follow actual WooCommerce price changes through an approved read-only workflow. Website delivery passes through real Langflow; public/private separation and Instagram send receipts also have offline coverage. | Demonstrate current SKU/promotion answers and public-safe comment delivery on the selected store and social accounts. |
 | 3. Steering, learning and undo | A controlled live Luna journey exercised correction, voice learning, later application and undo/rejection. Database and client checks cover private memory, skills, review and reversal. | Repeat on real provider conversations with the merchant's conditions, audit evidence and restored subsequent behavior. Broader semantic quality remains model-dependent. |
 | 4. Human attention and takeover | Inbox controls pass on web, iOS and Android. Backend tests cover assignment, reminders, quiet hours, acknowledgement and delivery failures. Two live Jev cases and earlier playground samples exist. | Verify real channel takeover without double replies, linked LINE alert delivery and broader Thai/English Jev cases, including owner-configured criteria. |
 | 5. Purchase and configured records | Owned Docker WooCommerce now passes Deskazo backend checkout with authenticated website confirmation, cross-visitor rejection, lost-response reconciliation and retry blocking. Offline tests cover staff approvals and downstream deduplication. | Select the real pilot store and optional record/invoice destinations; verify actual payment/order facts, mappings, authorization, readback and interrupted-request recovery. No store or Sheets connection is configured on the inspected hosted connector. |
@@ -4406,3 +4406,47 @@ The lab's service key and callback configuration must be retired with the lab;
 the existing local login shortcut must remain restricted to loopback access.
 LINE recipient authorization, hosted currency rollout memory, merchant setup
 and the other V1 acceptance gates remain open.
+
+### Grounded subscription replies and actionable workflow setup (2026-09-20)
+
+A live staff setup attempt exposed an identifier mismatch. The loaded connector
+schema returned an account-bound catalog selection ID, which the model copied
+into a workflow step requiring the provider action ID. Backend validation rejected
+that proposal; the canonical action passed on the same connected account. Loaded
+schemas now expose separate `connectionId` and `action` fields, and customer setup
+guidance names those fields. A new offline regression failed on the missing fields
+before the fix; all 38 connector tests now pass. The subsequent live model proposal
+used the correct action and saved through the normal approval route.
+
+The first customer preview handed off because the store action was still internal.
+Sharing a workflow does not itself grant account-level access. Staff setup inspection
+now reports each accessible connection's effective `customerActions`, using the same
+default and override rules as execution. Invalid stored policy reports no shared
+actions. Guidance directs the owner to the named action's Internal setting and
+explicitly distinguishes policy permission from provider availability. The new
+inspection regression failed before the change; all 137 customer-conversation
+PostgreSQL cases, adapter type checks and changed-file lint now pass.
+
+In the owned synthetic lab, the authenticated owner setting shared only the public
+storefront read. Other action settings remained unchanged. A single approved
+workflow fixes the product input and grants no writes. Three actual customer
+processor/Langflow/subscription runs then followed a store price change from
+125.00 THB to 131.00 THB and back to 125.00 THB. Each returned the requested SKU,
+currency and in-stock information from a completed workflow result, with approved
+Thai voice examples present in runtime context. The fixture price and stock were
+restored, and the tested bot still had no customer channels.
+
+`scripts/verify-customer-grounding.mts` checks this prepared lab without changing
+store data or provider configuration. It records the actual runtime tool ledger
+before private-preview cleanup, verifies the fixed grant and provider result,
+and checks the customer reply. Reports must use a new directory. Private evidence
+is under `test-report/deskazo-v1/checks/customer-grounding/`. The first post-sharing
+answer had correct price and availability but omitted the repeated SKU; its test
+had not explicitly requested that repetition. That result is preserved separately
+from the three passing runs whose question explicitly requested the SKU.
+
+These are real provider and subscription calls with synthetic data. They do not
+establish merchant onboarding without assistance, live LINE or Instagram delivery,
+public-comment privacy, checkout, payment or the remaining V1 acceptance journeys.
+A final staff-agent inspection and private sample also confirmed the allowed read,
+disabled writes and channels, and the restored current product facts.

@@ -52,6 +52,36 @@ async function collect<T>(events: AsyncIterable<T>): Promise<T[]> {
 
 afterEach(() => vi.useRealTimers());
 
+it("loads separate workflow action and connection IDs for an account-bound catalog selection", async () => {
+  const f = fixture();
+  const { state } = await connect(f.adapter);
+  const context = connected(state);
+  const controls = await f.adapter.discoverTools(context);
+  const load = controls.find((tool) => tool.name === "openconnector_load_tool")!;
+  const selectedId = `connection-1:${action.id}`;
+  const events = await collect(
+    f.adapter.execute(
+      { tool: load.name, route: load.route, args: { id: selectedId }, executionId: "load" },
+      context,
+    ),
+  );
+  expect(events).toEqual([
+    {
+      type: "result",
+      data: expect.objectContaining({
+        id: selectedId,
+        connectionId: "connection-1",
+        action: action.id,
+        inputSchema: action.inputSchema,
+      }),
+    },
+  ]);
+  const actions = await f.adapter.listActions("sample", context);
+  expect(actions.some((entry) => entry.name === action.id)).toBe(true);
+  expect(actions.some((entry) => entry.name === selectedId)).toBe(false);
+  expect(f.sent).toHaveLength(0);
+});
+
 it("requires explicit reconnect to replace a revoked runtime token", async () => {
   const f = fixture();
   const { state } = await connect(f.adapter);

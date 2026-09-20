@@ -588,6 +588,36 @@ describe.skipIf(!enabled)(
       expect(serialized).not.toContain(b.credential.id);
       expect(serialized).not.toContain(a.credential.secretId);
     });
+    it("shows effective customer action permissions during setup inspection", async () => {
+      const a = await setup();
+      const inspect = () => service.manage(a.owner, a.owner.botId, "inspect", {});
+      await db.prisma.connection.update({
+        where: { id: a.account.id },
+        data: { actionPolicy: { defaults: { "sample.list": false, "sample.send": false } } },
+      });
+      expect(await inspect()).toMatchObject({
+        connections: [{ id: a.account.id, customerActions: ["sample.list", "sample.send"] }],
+      });
+      await db.prisma.connection.update({
+        where: { id: a.account.id },
+        data: {
+          actionPolicy: {
+            defaults: { "sample.list": false, "sample.send": false },
+            overrides: { "sample.send": true },
+          },
+        },
+      });
+      expect(await inspect()).toMatchObject({
+        connections: [{ id: a.account.id, customerActions: ["sample.list"] }],
+      });
+      await db.prisma.connection.update({
+        where: { id: a.account.id },
+        data: { actionPolicy: { invalid: true, defaults: { "sample.list": "false" } } },
+      });
+      expect(await inspect()).toMatchObject({
+        connections: [{ id: a.account.id, customerActions: [] }],
+      });
+    });
     it("hands off explicit Thai requests without spending a model turn", async () => {
       const a = await setup();
       const c = await receive(a, [{ ...incoming(), body: "ขอคุยกับแอดมินค่ะ" }]);
