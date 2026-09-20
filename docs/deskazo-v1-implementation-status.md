@@ -4530,3 +4530,29 @@ receipts and that exact runner are under `test-report/deskazo-v1/checks/website-
 The Mac remained locked, so this checkpoint proves HTTP/worker delivery rather
 than rendered Firefox behavior. It does not establish LINE/Instagram delivery,
 Jev semantic quality, interrupted merchant writes or complete merchant acceptance.
+
+### Firefox follow-up and full CI (2026-09-20)
+
+Firefox interaction became available after the website checkpoint. The customer
+inbox rendered the retained Thai product replies, staff handoff reply, interrupted
+message failure and resumed reply. Expanded action history showed the completed
+product reads and staff acknowledgements. Opening the conversation cleared its
+unread marker; no message was sent and no channel was re-enabled. The screenshot
+remains in the task, with a written observation under
+`test-report/deskazo-v1/checks/current-head-ci/`. This checks retained history, not
+a fresh visitor journey or merchant acceptance.
+
+The first full CI run at `89b24aab` found a stale workflow test. Its two release-job
+assertions still expected the condition from before connector candidate isolation.
+The same failure reproduced locally. The assertions now require the added
+`!inputs.connector_candidate` guard, preserving pull-request exclusion and leaving
+the production workflow unchanged. All three targeted workflow tests and lint pass.
+
+[The corrected run at `49e696db`](https://github.com/bankThanabat/rakazo/actions/runs/35516880206)
+passed all seven validation jobs: 4,760 unit tests, 1,068 database tests across
+58 files, 160 product browser tests, two homepage browser tests, production builds
+including Electron smoke, type checks, lint and Langflow runtime checks. Final run
+metadata confirms zero retained artifacts and skipped report/mobile publication,
+artifact uploads, browser caches and paid sandbox credential checks. Browser tests
+used the existing fake-sandbox CI configuration. This validates the code checkpoint;
+real merchant, social delivery, payment and release acceptance gates remain open.
